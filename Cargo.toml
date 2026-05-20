@@ -1,0 +1,17 @@
+[package]
+name = "beancount-budget-tool"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.0", features = ["derive"] }
+once_cell = "1.21.3"
+regex = "1.12.2"
+rust_decimal = "1.33"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9.34"
+
+[dev-dependencies]
+rust_decimal_macros = "1.40.0"
