@@ -277,6 +277,49 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn multi_bucket_metadata_splits_into_multiple_flows() {
+        // 货币基金同时归属储蓄与投资两桶，赎回时两桶各计全额扣减
+        let tmp = make_temp_file(
+            "2026-06-20 * \"应急\" \"赎回货币基金\"\n  budget: \"储蓄, 投资\"\n  Assets:Bank:工商银行  5000 CNY\n  Assets:Invest:货币基金  -5000 CNY\n",
+        );
+
+        let mappings = BudgetMappings {
+            defaults: BTreeMap::new(),
+            default_expense_bucket: "生活费".to_string(),
+            bucket_types: BTreeMap::from([
+                ("储蓄".to_string(), BucketKind::Asset),
+                ("投资".to_string(), BucketKind::Asset),
+            ]),
+            asset_bucket_accounts: BTreeMap::from([
+                ("储蓄".to_string(), vec!["Assets:Invest:货币基金".to_string()]),
+                ("投资".to_string(), vec!["Assets:Invest:货币基金".to_string()]),
+            ]),
+        };
+
+        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY").expect("flows");
+        fs::remove_file(tmp).ok();
+
+        assert_eq!(flows.len(), 2);
+
+        let savings = flows.iter().find(|f| f.bucket == "储蓄").expect("储蓄 flow");
+        let invest = flows.iter().find(|f| f.bucket == "投资").expect("投资 flow");
+
+        assert_eq!(savings.kind, BucketKind::Asset);
+        assert_eq!(savings.flow, dec!(-5000));
+        assert_eq!(
+            savings.location_deltas.get("Assets:Invest:货币基金"),
+            Some(&dec!(-5000))
+        );
+
+        assert_eq!(invest.kind, BucketKind::Asset);
+        assert_eq!(invest.flow, dec!(-5000));
+        assert_eq!(
+            invest.location_deltas.get("Assets:Invest:货币基金"),
+            Some(&dec!(-5000))
+        );
+    }
+
     fn make_temp_file(content: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
         let nonce = SystemTime::now()
