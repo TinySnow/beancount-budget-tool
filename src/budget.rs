@@ -2,6 +2,7 @@
 //!
 //! 本模块是预算系统的核心引擎，负责：
 //! - 将已解析的账本交易映射到预算桶（`collect_bucket_tx_flows`）
+//!   - 支持显式 `budget` metadata 的单桶或多桶映射（逗号分隔，如 `budget: "储蓄, 投资"`）
 //! - 资产桶的资金流入识别与位置跟踪（`derive_asset_bucket_flow`）
 //! - 跨桶、跨月的预算汇总（`summarize_buckets`）
 //! - 单桶作用域数据构建（`build_scoped_bucket_data`）
@@ -147,61 +148,70 @@ pub fn collect_bucket_tx_flows(
                 }
             });
 
-        if let Some(bucket_name) = bucket_override {
-            let kind = mappings.bucket_kind(&bucket_name);
-            match kind {
-                BucketKind::Expense => {
-                    let mut flow = Decimal::ZERO;
-                    for posting in &tx.postings {
-                        if !posting.account.starts_with("Expenses:") {
-                            continue;
+        if let Some(override_str) = bucket_override {
+            // 支持逗号分隔的多桶归属：budget: "储蓄, 投资" → 两桶各计全额
+            let bucket_names: Vec<&str> = override_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            for bucket_name in bucket_names {
+                let kind = mappings.bucket_kind(bucket_name);
+                match kind {
+                    BucketKind::Expense => {
+                        let mut flow = Decimal::ZERO;
+                        for posting in &tx.postings {
+                            if !posting.account.starts_with("Expenses:") {
+                                continue;
+                            }
+                            let Some(amount) = posting.amount else {
+                                continue;
+                            };
+                            if !is_target_currency(posting.currency.as_deref(), target_currency)
+                            {
+                                continue;
+                            }
+
+                            // 消费减少预算余额，记负数；退款（负金额）会转为正流入
+                            flow -= amount;
                         }
-                        let Some(amount) = posting.amount else {
+
+                        if !flow.is_zero() {
+                            flows.push(BucketTxFlow {
+                                date: tx.date,
+                                month: month.clone(),
+                                bucket: bucket_name.to_string(),
+                                kind,
+                                flow,
+                                payee: tx.payee.clone(),
+                                narration: tx.narration.clone(),
+                                location_deltas: BTreeMap::new(),
+                            });
+                        }
+                    }
+                    BucketKind::Asset => {
+                        let Some((flow, location_deltas)) = derive_asset_bucket_flow(
+                            &tx,
+                            bucket_name,
+                            target_currency,
+                            mappings,
+                            &mut inferred_asset_accounts,
+                        ) else {
                             continue;
                         };
-                        if !is_target_currency(posting.currency.as_deref(), target_currency) {
-                            continue;
+
+                        if !flow.is_zero() || !location_deltas.is_empty() {
+                            flows.push(BucketTxFlow {
+                                date: tx.date,
+                                month: month.clone(),
+                                bucket: bucket_name.to_string(),
+                                kind,
+                                flow,
+                                payee: tx.payee.clone(),
+                                narration: tx.narration.clone(),
+                                location_deltas,
+                            });
                         }
-
-                        // 消费减少预算余额，记负数；退款（负金额）会转为正流入
-                        flow -= amount;
-                    }
-
-                    if !flow.is_zero() {
-                        flows.push(BucketTxFlow {
-                            date: tx.date,
-                            month: month.clone(),
-                            bucket: bucket_name,
-                            kind,
-                            flow,
-                            payee: tx.payee.clone(),
-                            narration: tx.narration.clone(),
-                            location_deltas: BTreeMap::new(),
-                        });
-                    }
-                }
-                BucketKind::Asset => {
-                    let Some((flow, location_deltas)) = derive_asset_bucket_flow(
-                        &tx,
-                        &bucket_name,
-                        target_currency,
-                        mappings,
-                        &mut inferred_asset_accounts,
-                    ) else {
-                        continue;
-                    };
-
-                    if !flow.is_zero() || !location_deltas.is_empty() {
-                        flows.push(BucketTxFlow {
-                            date: tx.date,
-                            month: month.clone(),
-                            bucket: bucket_name,
-                            kind,
-                            flow,
-                            payee: tx.payee.clone(),
-                            narration: tx.narration.clone(),
-                            location_deltas,
-                        });
                     }
                 }
             }
