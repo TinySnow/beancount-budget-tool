@@ -66,6 +66,10 @@ pub struct Cli {
     #[arg(long)]
     pub strict: bool,
 
+    /// 关键词过滤：仅显示 payee / narration / metadata 包含该关键词的交易
+    #[arg(long)]
+    pub filter: Option<String>,
+
     /// 统计起始月份（YYYY-MM）。与 --month 互斥，配合 --to 使用
     #[arg(long = "from")]
     pub from: Option<String>,

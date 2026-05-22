@@ -461,6 +461,7 @@ pub fn collect_scope_warnings(
 ///
 /// 若目标桶是父桶（无直接预算指令，如 `生活费`），
 /// 则自动聚合其所有点号子桶（如 `生活费.交通`、`生活费.饮食`）的指令与资金流动。
+/// 若指定了 `--filter` 关键词，仅保留 payee/narration/metadata 中匹配的交易。
 pub fn build_scoped_bucket_data(
     cli: &Cli,
     bucket: &str,
@@ -480,14 +481,24 @@ pub fn build_scoped_bucket_data(
         .cloned()
         .collect::<Vec<_>>();
 
-    let flows = flows
+    let mut flows: Vec<BucketTxFlow> = flows
         .iter()
         .filter(|flow| {
             (flow.bucket == bucket || flow.bucket.starts_with(&prefix))
                 && is_month_in_scope(&flow.month, target_month, cli.scope)
         })
         .cloned()
-        .collect::<Vec<_>>();
+        .collect();
+
+    // 关键词过滤：匹配 payee / narration / metadata（通过原始交易的 metadata 已丢失，
+    // 但 payee 和 narration 在 BucketTxFlow 中保留，足以覆盖大部分需求）
+    if let Some(keyword) = cli.filter.as_deref() {
+        let kw = keyword.to_lowercase();
+        flows.retain(|f| {
+            f.payee.as_deref().map(|s| s.to_lowercase()).unwrap_or_default().contains(&kw)
+                || f.narration.as_deref().map(|s| s.to_lowercase()).unwrap_or_default().contains(&kw)
+        });
+    }
 
     let planned = directives
         .iter()

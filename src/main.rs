@@ -452,6 +452,7 @@ mod tests {
             strict: false,
             from: None,
             to: None,
+            filter: None,
         };
         let directives = vec![
             BudgetDirective {
