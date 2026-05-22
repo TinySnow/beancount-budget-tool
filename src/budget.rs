@@ -46,6 +46,8 @@ pub struct BucketTxFlow {
     pub narration: Option<String>,
     /// 资产类桶的位置变化（account -> delta）
     pub location_deltas: BTreeMap<String, Decimal>,
+    /// 原始交易的 metadata 键值对（用于 --filter 关键词搜索）
+    pub metadata: HashMap<String, String>,
 }
 
 impl BucketTxFlow {
@@ -186,6 +188,7 @@ pub fn collect_bucket_tx_flows(
                                 payee: tx.payee.clone(),
                                 narration: tx.narration.clone(),
                                 location_deltas: BTreeMap::new(),
+                                metadata: tx.metadata.clone(),
                             });
                         }
                     }
@@ -210,6 +213,7 @@ pub fn collect_bucket_tx_flows(
                                 payee: tx.payee.clone(),
                                 narration: tx.narration.clone(),
                                 location_deltas,
+                                metadata: tx.metadata.clone(),
                             });
                         }
                     }
@@ -249,6 +253,7 @@ pub fn collect_bucket_tx_flows(
                 payee: tx.payee.clone(),
                 narration: tx.narration.clone(),
                 location_deltas: BTreeMap::new(),
+                metadata: tx.metadata.clone(),
             });
         }
     }
@@ -490,13 +495,13 @@ pub fn build_scoped_bucket_data(
         .cloned()
         .collect();
 
-    // 关键词过滤：匹配 payee / narration / metadata（通过原始交易的 metadata 已丢失，
-    // 但 payee 和 narration 在 BucketTxFlow 中保留，足以覆盖大部分需求）
+    // 关键词过滤：匹配 payee / narration / metadata 值
     if let Some(keyword) = cli.filter.as_deref() {
         let kw = keyword.to_lowercase();
         flows.retain(|f| {
             f.payee.as_deref().map(|s| s.to_lowercase()).unwrap_or_default().contains(&kw)
                 || f.narration.as_deref().map(|s| s.to_lowercase()).unwrap_or_default().contains(&kw)
+                || f.metadata.values().any(|v| v.to_lowercase().contains(&kw))
         });
     }
 
