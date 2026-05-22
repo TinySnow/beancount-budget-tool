@@ -26,9 +26,9 @@ pub struct Cli {
     #[arg(long = "ledger-dir")]
     pub ledger_dirs: Vec<PathBuf>,
 
-    /// 统计月份（YYYY-MM）
+    /// 统计月份（YYYY-MM）。与 --from/--to 互斥
     #[arg(long, short = 'm')]
-    pub month: String,
+    pub month: Option<String>,
 
     /// 预算配置文件
     #[arg(long, required = true)]
@@ -65,6 +65,14 @@ pub struct Cli {
     /// 严格模式：若存在未知预算桶则返回非零退出码
     #[arg(long)]
     pub strict: bool,
+
+    /// 统计起始月份（YYYY-MM）。与 --month 互斥，配合 --to 使用
+    #[arg(long = "from")]
+    pub from: Option<String>,
+
+    /// 统计结束月份（YYYY-MM）。与 --month 互斥，配合 --from 使用
+    #[arg(long = "to")]
+    pub to: Option<String>,
 }
 
 /// 预算统计范围。
@@ -97,6 +105,55 @@ pub enum BucketView {
     Summary,
     Monthly,
     Detail,
+}
+
+/// 查询时间范围。
+///
+/// 用于替代 `--month` + `--scope` 的灵活时间段统计。
+/// - `Month { target, scope }`: 原有月度/累计模式
+/// - `Range { from, to }`: 起止月份全包含
+#[derive(Debug, Clone)]
+pub enum DateRange {
+    Month { target: String, scope: ReportScope },
+    Range { from: String, to: String },
+}
+
+impl DateRange {
+    /// 判断给定月份是否在范围内。
+    pub fn contains(&self, month: &str) -> bool {
+        match self {
+            DateRange::Month { target, scope } => crate::util::is_month_in_scope(month, target, *scope),
+            DateRange::Range { from, to } => month >= from.as_str() && month <= to.as_str(),
+        }
+    }
+
+    /// 生成范围标签，用于报告标题和文件名。
+    pub fn label(&self) -> String {
+        match self {
+            DateRange::Month { target, scope } => format!("{}-{}", target, scope.label()),
+            DateRange::Range { from, to } => format!("{}_{}", from, to),
+        }
+    }
+
+    /// 生成范围标签的中文形式。
+    pub fn display(&self) -> String {
+        match self {
+            DateRange::Month { target, scope } => {
+                format!("{} ({})", target, scope.label())
+            }
+            DateRange::Range { from, to } => {
+                format!("{} ~ {}", from, to)
+            }
+        }
+    }
+
+    /// 范围对应的结束月份（用于资产位置累计等）。
+    pub fn end_month(&self) -> &str {
+        match self {
+            DateRange::Month { target, .. } => target,
+            DateRange::Range { to, .. } => to,
+        }
+    }
 }
 
 /// 从 CLI 参数中解析所有账本文件路径。

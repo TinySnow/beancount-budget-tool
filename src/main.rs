@@ -3,6 +3,7 @@
 //! 该工具读取 Beancount 账本与预算配置，支持：
 //! - 月度预算与"同月额外预算"（如 `YYYY-MM 绩效`）聚合；
 //! - 月度或累计视角（截至目标月）的预算结余统计；
+//! - 时间范围查询（`--from YYYY-MM --to YYYY-MM`）；
 //! - 交易级 `budget` metadata 优先；
 //! - 未显式标注预算桶的 `Expenses:*` 自动归入默认生活费桶；
 //! - 资产类预算桶（如储蓄）在 `Assets` 账户间转移时也可统计，并可查看资金位置。
@@ -16,20 +17,26 @@ mod report;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use cli::Cli;
+use cli::{Cli, DateRange, ReportScope};
 
 use crate::util::fmt_decimal;
 
 /// 程序入口。
-///
-/// 1. 解析 CLI 参数
-/// 2. 加载账本文件与配置文件
-/// 3. 计算预算流与汇总
-/// 4. 渲染并输出报告
-/// 5. 可选导出 Markdown/CSV 文件
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    util::validate_month(&cli.month)?;
+    let mut cli = Cli::parse();
+
+    // 解析时间范围：--from/--to 与 --month 互斥
+    let date_range = resolve_date_range(&cli)?;
+
+    // 当使用 --from/--to 时，为了复用现有的 cumulative 汇总逻辑，
+    // 将输入数据裁剪到 [from, to] 区间，并将 cli.month/scope 设为区间末月的累积模式
+    if let DateRange::Range { ref from, ref to } = date_range {
+        cli.month = Some(to.clone());
+        cli.scope = ReportScope::Cumulative;
+        let _ = from; // used in filtering below
+    }
+
+    let month_str = cli.month.as_deref().unwrap_or("?");
     let ledger_files = cli::resolve_ledger_inputs(&cli)?;
 
     let budget_directives = config::load_budget_directives(&cli.budgets)
@@ -39,10 +46,15 @@ fn main() -> Result<()> {
 
     let target_currency = cli.currency.to_ascii_uppercase();
     let tx_flows = budget::collect_bucket_tx_flows(&ledger_files, &mappings, &target_currency)?;
-    let summaries = budget::summarize_buckets(&budget_directives, &tx_flows, &cli.month, cli.scope);
+
+    // 时间段裁剪
+    let budget_directives = filter_directives_by_range(budget_directives, &date_range);
+    let tx_flows = filter_flows_by_range(tx_flows, &date_range);
+
+    let summaries = budget::summarize_buckets(&budget_directives, &tx_flows, month_str, cli.scope);
 
     let known_buckets = config::collect_known_buckets(&budget_directives, &mappings);
-    let warnings = budget::collect_scope_warnings(&tx_flows, &known_buckets, &cli.month, cli.scope);
+    let warnings = budget::collect_scope_warnings(&tx_flows, &known_buckets, month_str, cli.scope);
 
     if let Some(bucket) = cli.bucket.as_ref() {
         let output = report::render_bucket_report_text(
@@ -52,12 +64,12 @@ fn main() -> Result<()> {
             cli.bucket_view,
             cli.show_locations,
             &tx_flows,
+            &date_range,
         );
         print!("{output}");
     } else {
         let output = report::render_summary_report_text(
-            &cli.month,
-            cli.scope,
+            &date_range,
             &target_currency,
             &summaries,
             &warnings,
@@ -75,6 +87,7 @@ fn main() -> Result<()> {
             &tx_flows,
             &summaries,
             &warnings,
+            &date_range,
         )?;
     }
 
@@ -87,6 +100,50 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 从 CLI 参数解析统计时间范围。
+fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
+    match (&cli.from, &cli.to, &cli.month) {
+        (Some(from), Some(to), None) => {
+            util::validate_month(from)?;
+            util::validate_month(to)?;
+            if from > to {
+                bail!("--from ({}) must not be later than --to ({})", from, to);
+            }
+            Ok(DateRange::Range { from: from.clone(), to: to.clone() })
+        }
+        (None, None, Some(month)) => {
+            util::validate_month(month)?;
+            Ok(DateRange::Month { target: month.clone(), scope: cli.scope })
+        }
+        (Some(_), None, _) => bail!("--from requires --to"),
+        (None, Some(_), _) => bail!("--to requires --from"),
+        (None, None, None) => bail!("Either --month or (--from + --to) is required"),
+        (Some(_), Some(_), Some(_)) => bail!("--from/--to and --month are mutually exclusive"),
+    }
+}
+
+/// 按时间范围过滤预算指令。
+fn filter_directives_by_range(
+    directives: Vec<config::BudgetDirective>,
+    range: &DateRange,
+) -> Vec<config::BudgetDirective> {
+    directives
+        .into_iter()
+        .filter(|d| range.contains(&d.month))
+        .collect()
+}
+
+/// 按时间范围过滤资金流动记录。
+fn filter_flows_by_range(
+    flows: Vec<budget::BucketTxFlow>,
+    range: &DateRange,
+) -> Vec<budget::BucketTxFlow> {
+    flows
+        .into_iter()
+        .filter(|f| range.contains(&f.month))
+        .collect()
 }
 
 // ===========================================================================
@@ -383,7 +440,7 @@ mod tests {
         let cli = Cli {
             ledgers: vec![],
             ledger_dirs: vec![],
-            month: "2026-06".into(),
+            month: Some("2026-06".into()),
             budgets: std::path::PathBuf::new(),
             mappings: std::path::PathBuf::new(),
             currency: "CNY".into(),
@@ -393,6 +450,8 @@ mod tests {
             show_locations: false,
             out_dir: None,
             strict: false,
+            from: None,
+            to: None,
         };
         let directives = vec![
             BudgetDirective {

@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Context, Result};
 use rust_decimal::Decimal;
 
-use crate::cli::{BucketView, Cli, ReportScope};
+use crate::cli::{BucketView, Cli, DateRange, ReportScope};
 use crate::config::{BucketKind, BudgetDirective, BudgetMappings};
 use crate::budget::{self, BucketSummary, BucketTxFlow, ScopedBucketData, WarningStats};
 use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, parent_bucket, sanitize_filename, shorten_account_label};
@@ -27,8 +27,7 @@ use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, parent_bucket
 /// 包含桶名、预算、实际、结余、状态五列及总计行。
 /// 若某桶的父桶已存在于汇总表中，则跳过子桶以避免重复计算。
 pub fn render_summary_report_text(
-    month: &str,
-    scope: ReportScope,
+    range: &DateRange,
     currency: &str,
     summaries: &BTreeMap<String, BucketSummary>,
     warnings: &WarningStats,
@@ -36,10 +35,9 @@ pub fn render_summary_report_text(
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "预算报告 ({}) [{}] scope={} ",
-        month,
+        "预算报告 ({}) [{}]",
+        range.display(),
         currency,
-        scope.label()
     );
     let _ = writeln!(
         out,
@@ -123,15 +121,15 @@ pub fn render_bucket_report_text(
     bucket_view: BucketView,
     show_locations: bool,
     all_flows: &[BucketTxFlow],
+    range: &DateRange,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "预算桶: {}", data.bucket);
     let _ = writeln!(out, "类型: {}", data.kind.label());
     let _ = writeln!(
         out,
-        "范围: {} (目标月份: {})",
-        cli.scope.label(),
-        cli.month
+        "统计区间: {}",
+        range.display(),
     );
     let _ = writeln!(out, "月预算: {} {}", fmt_decimal(data.planned), currency);
     let _ = writeln!(out, "已支出: {} {}", fmt_decimal(data.actual), currency);
@@ -143,7 +141,7 @@ pub fn render_bucket_report_text(
             &mut out,
             &data.bucket,
             data.kind,
-            &cli.month,
+            range.end_month(),
             cli.scope,
             currency,
             &data.directives,
@@ -155,7 +153,7 @@ pub fn render_bucket_report_text(
                 currency,
                 &data.bucket,
                 data.kind,
-                &cli.month,
+                range.end_month(),
                 &data.directives,
                 &data.flows,
                 all_flows,
@@ -165,16 +163,14 @@ pub fn render_bucket_report_text(
     }
 
     if data.kind == BucketKind::Asset {
-        // Summary: 仅当 --show-locations 时显示
-        // Monthly/Detail: 自动显示（Detail 已在明细函数内部处理）
         let show_here = match bucket_view {
             BucketView::Summary => show_locations,
             BucketView::Monthly => true,
             BucketView::Detail => false,
         };
         if show_here {
-            let locations = budget::collect_asset_locations(&data.bucket, &cli.month, all_flows);
-            append_asset_locations_view(&mut out, &cli.month, currency, &locations);
+            let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), all_flows);
+            append_asset_locations_view(&mut out, range.end_month(), currency, &locations);
         }
     }
 
@@ -387,25 +383,28 @@ pub fn export_reports(
     flows: &[BucketTxFlow],
     summaries: &BTreeMap<String, BucketSummary>,
     warnings: &WarningStats,
+    range: &DateRange,
 ) -> Result<()> {
     fs::create_dir_all(out_dir)
         .with_context(|| format!("Failed to create output dir: {}", out_dir.display()))?;
 
+    let scope_label = range.label();
+
     // 汇总报告：Markdown + 纯文本
     let summary_txt =
-        render_summary_report_text(&cli.month, cli.scope, currency, summaries, warnings);
-    let summary_md = render_summary_markdown(&cli.month, cli.scope, currency, summaries, warnings);
-    let summary_path = out_dir.join(format!("summary-{}-{}.md", cli.month, cli.scope.label()));
+        render_summary_report_text(range, currency, summaries, warnings);
+    let summary_md = render_summary_markdown(range, currency, summaries, warnings);
+    let summary_path = out_dir.join(format!("summary-{}.md", scope_label));
     fs::write(&summary_path, summary_md)
         .with_context(|| format!("Failed to write {}", summary_path.display()))?;
 
     let summary_console_path =
-        out_dir.join(format!("summary-{}-{}.txt", cli.month, cli.scope.label()));
+        out_dir.join(format!("summary-{}.txt", scope_label));
     fs::write(&summary_console_path, summary_txt)
         .with_context(|| format!("Failed to write {}", summary_console_path.display()))?;
 
     // CSV 汇总
-    let csv_path = out_dir.join(format!("buckets-{}-{}.csv", cli.month, cli.scope.label()));
+    let csv_path = out_dir.join(format!("buckets-{}.csv", scope_label));
     fs::write(&csv_path, render_summary_csv(summaries))
         .with_context(|| format!("Failed to write {}", csv_path.display()))?;
 
@@ -413,25 +412,19 @@ pub fn export_reports(
     let buckets = budget::collect_buckets_for_export(cli, directives, flows, summaries);
     for bucket in buckets {
         let data = budget::build_scoped_bucket_data(cli, &bucket, mappings, directives, flows);
-        let report = render_bucket_markdown(&data, cli, currency, flows);
-        let filename = format!(
-            "bucket-{}-{}-{}.md",
-            sanitize_filename(&bucket),
-            cli.month,
-            cli.scope.label()
-        );
+        let report = render_bucket_markdown(&data, cli, currency, flows, range);
+        let filename = format!("bucket-{}-{}.md", sanitize_filename(&bucket), scope_label);
         let path = out_dir.join(filename);
         fs::write(&path, report).with_context(|| format!("Failed to write {}", path.display()))?;
 
         if data.kind == BucketKind::Asset {
-            let locations = budget::collect_asset_locations(&data.bucket, &cli.month, flows);
+            let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), flows);
             let location_report =
-                render_asset_locations_markdown(&data.bucket, &cli.month, currency, &locations);
+                render_asset_locations_markdown(&data.bucket, range.end_month(), currency, &locations);
             let location_filename = format!(
-                "asset-locations-{}-{}-{}.md",
+                "asset-locations-{}-{}.md",
                 sanitize_filename(&bucket),
-                cli.month,
-                cli.scope.label()
+                scope_label
             );
             let location_path = out_dir.join(location_filename);
             fs::write(&location_path, location_report)
@@ -444,8 +437,7 @@ pub fn export_reports(
 
 /// 渲染汇总报告的 Markdown 格式。
 pub fn render_summary_markdown(
-    month: &str,
-    scope: ReportScope,
+    range: &DateRange,
     currency: &str,
     summaries: &BTreeMap<String, BucketSummary>,
     warnings: &WarningStats,
@@ -453,8 +445,7 @@ pub fn render_summary_markdown(
     let mut out = String::new();
     let _ = writeln!(out, "# 预算汇总报告");
     let _ = writeln!(out);
-    let _ = writeln!(out, "- 月份: `{}`", month);
-    let _ = writeln!(out, "- 统计范围: `{}`", scope.label());
+    let _ = writeln!(out, "- 统计区间: `{}`", range.display());
     let _ = writeln!(out, "- 币种: `{}`", currency);
     let _ = writeln!(out);
     let _ = writeln!(out, "| 预算桶 | 预算 | 实际 | 结余 | 状态 |");
@@ -553,13 +544,13 @@ pub fn render_bucket_markdown(
     cli: &Cli,
     currency: &str,
     all_flows: &[BucketTxFlow],
+    range: &DateRange,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# 预算桶报告：{}", data.bucket);
     let _ = writeln!(out);
     let _ = writeln!(out, "- 类型: `{}`", data.kind.label());
-    let _ = writeln!(out, "- 目标月份: `{}`", cli.month);
-    let _ = writeln!(out, "- 统计范围: `{}`", cli.scope.label());
+    let _ = writeln!(out, "- 统计区间: `{}`", range.display());
     let _ = writeln!(out, "- 月预算: `{}` {}", fmt_decimal(data.planned), currency);
     let _ = writeln!(out, "- 已支出: `{}` {}", fmt_decimal(data.actual), currency);
     let _ = writeln!(out, "- 结余: `{}` {}", fmt_decimal(data.remain), currency);
@@ -569,7 +560,7 @@ pub fn render_bucket_markdown(
         &mut out,
         &data.bucket,
         data.kind,
-        &cli.month,
+        range.end_month(),
         cli.scope,
         currency,
         &data.directives,
@@ -581,7 +572,7 @@ pub fn render_bucket_markdown(
         currency,
         &data.bucket,
         data.kind,
-        &cli.month,
+        range.end_month(),
         &data.directives,
         &data.flows,
         all_flows,
@@ -589,7 +580,7 @@ pub fn render_bucket_markdown(
     );
 
     if data.kind == BucketKind::Asset {
-        let locations = budget::collect_asset_locations(&data.bucket, &cli.month, all_flows);
+        let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), all_flows);
         let _ = writeln!(out);
         let _ = writeln!(out, "## 资产位置");
         let _ = writeln!(out);
