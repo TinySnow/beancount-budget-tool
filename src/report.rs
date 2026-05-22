@@ -36,7 +36,7 @@ pub fn render_summary_report_text(
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Budget Report ({}) [{}] scope={} ",
+        "预算报告 ({}) [{}] scope={} ",
         month,
         currency,
         scope.label()
@@ -44,7 +44,7 @@ pub fn render_summary_report_text(
     let _ = writeln!(
         out,
         "{:<24} {:>14} {:>14} {:>14} {:>10}",
-        "Bucket", "Planned", "Actual", "Remain", "Status"
+        "预算桶", "月预算", "已支出", "结余", "状态"
     );
     let _ = writeln!(out, "{}", "-".repeat(82));
 
@@ -58,9 +58,9 @@ pub fn render_summary_report_text(
         }
         let remain = summary.planned - summary.actual;
         let status = if remain.is_sign_negative() {
-            "OVER"
+            "超支"
         } else {
-            "OK"
+            "正常"
         };
         total_planned += summary.planned;
         total_actual += summary.actual;
@@ -79,14 +79,14 @@ pub fn render_summary_report_text(
     let _ = writeln!(out, "{}", "-".repeat(82));
     let total_remain = total_planned - total_actual;
     let total_status = if total_remain.is_sign_negative() {
-        "OVER"
+        "超支"
     } else {
-        "OK"
+        "正常"
     };
     let _ = writeln!(
         out,
         "{:<24} {:>14} {:>14} {:>14} {:>10}",
-        "TOTAL",
+        "合计",
         fmt_decimal(total_planned),
         fmt_decimal(total_actual),
         fmt_decimal(total_remain),
@@ -102,7 +102,7 @@ pub fn render_summary_report_text(
             .join(", ");
         let _ = writeln!(
             out,
-            "WARNING: unknown buckets amount = {} {} (buckets: {})",
+            "警告: unknown buckets amount = {} {} (buckets: {})",
             fmt_decimal(warnings.unknown_bucket_amount),
             currency,
             names
@@ -125,17 +125,17 @@ pub fn render_bucket_report_text(
     all_flows: &[BucketTxFlow],
 ) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "Bucket: {}", data.bucket);
-    let _ = writeln!(out, "Type: {}", data.kind.label());
+    let _ = writeln!(out, "预算桶: {}", data.bucket);
+    let _ = writeln!(out, "类型: {}", data.kind.label());
     let _ = writeln!(
         out,
-        "Scope: {} (target month: {})",
+        "范围: {} (目标月份: {})",
         cli.scope.label(),
         cli.month
     );
-    let _ = writeln!(out, "Planned: {} {}", fmt_decimal(data.planned), currency);
-    let _ = writeln!(out, "Actual:  {} {}", fmt_decimal(data.actual), currency);
-    let _ = writeln!(out, "Remain:  {} {}", fmt_decimal(data.remain), currency);
+    let _ = writeln!(out, "月预算: {} {}", fmt_decimal(data.planned), currency);
+    let _ = writeln!(out, "已支出: {} {}", fmt_decimal(data.actual), currency);
+    let _ = writeln!(out, "结余:   {} {}", fmt_decimal(data.remain), currency);
 
     match bucket_view {
         BucketView::Summary => {}
@@ -470,9 +470,9 @@ pub fn render_summary_markdown(
         }
         let remain = summary.planned - summary.actual;
         let status = if remain.is_sign_negative() {
-            "OVER"
+            "超支"
         } else {
-            "OK"
+            "正常"
         };
         total_planned += summary.planned;
         total_actual += summary.actual;
@@ -489,13 +489,13 @@ pub fn render_summary_markdown(
 
     let total_remain = total_planned - total_actual;
     let total_status = if total_remain.is_sign_negative() {
-        "OVER"
+        "超支"
     } else {
-        "OK"
+        "正常"
     };
     let _ = writeln!(
         out,
-        "| **TOTAL** | **{}** | **{}** | **{}** | **{}** |",
+        "| **合计** | **{}** | **{}** | **{}** | **{}** |",
         fmt_decimal(total_planned),
         fmt_decimal(total_actual),
         fmt_decimal(total_remain),
@@ -512,7 +512,7 @@ pub fn render_summary_markdown(
         let _ = writeln!(out);
         let _ = writeln!(
             out,
-            "> WARNING: unknown buckets amount = {} {} (buckets: {})",
+            "> 警告: unknown buckets amount = {} {} (buckets: {})",
             fmt_decimal(warnings.unknown_bucket_amount),
             currency,
             names
@@ -560,8 +560,8 @@ pub fn render_bucket_markdown(
     let _ = writeln!(out, "- 类型: `{}`", data.kind.label());
     let _ = writeln!(out, "- 目标月份: `{}`", cli.month);
     let _ = writeln!(out, "- 统计范围: `{}`", cli.scope.label());
-    let _ = writeln!(out, "- 预算: `{}` {}", fmt_decimal(data.planned), currency);
-    let _ = writeln!(out, "- 实际: `{}` {}", fmt_decimal(data.actual), currency);
+    let _ = writeln!(out, "- 月预算: `{}` {}", fmt_decimal(data.planned), currency);
+    let _ = writeln!(out, "- 已支出: `{}` {}", fmt_decimal(data.actual), currency);
     let _ = writeln!(out, "- 结余: `{}` {}", fmt_decimal(data.remain), currency);
     let _ = writeln!(out);
 
