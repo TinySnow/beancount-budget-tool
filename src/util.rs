@@ -15,6 +15,14 @@ pub fn default_expense_bucket() -> String {
     "生活费".to_string()
 }
 
+/// 从点号分隔的桶名中提取父桶名称。
+///
+/// `"生活费.交通"` → `Some("生活费")`
+/// `"数码"` → `None`
+pub fn parent_bucket(bucket: &str) -> Option<&str> {
+    bucket.rfind('.').map(|pos| &bucket[..pos])
+}
+
 /// 校验月份字符串格式为 `YYYY-MM` 且为合法日期。
 ///
 /// 例如 `"2026-06"` 校验通过，`"2026-13"` 或 `"2026-06-01"` 将返回错误。

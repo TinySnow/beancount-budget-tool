@@ -18,7 +18,7 @@ use rust_decimal::Decimal;
 
 use crate::config::{BucketKind, BudgetDirective, BudgetMappings};
 use crate::ledger::{self, LedgerTransaction};
-use crate::util::{is_month_in_scope, is_target_currency, month_of_date};
+use crate::util::{is_month_in_scope, is_target_currency, month_of_date, parent_bucket};
 use crate::cli::{Cli, ReportScope};
 
 // ---------------------------------------------------------------------------
@@ -378,6 +378,10 @@ pub fn derive_asset_bucket_flow(
 }
 
 /// 按桶聚合预算指令与资金流动，生成汇总统计。
+///
+/// 叶节点桶（如 `生活费.交通`）的 planned/actual 会自动向上聚合到
+/// 其父桶（如 `生活费`），形成层级汇总。父桶自身的统计值为其所有
+/// 子桶统计值之和。
 pub fn summarize_buckets(
     directives: &[BudgetDirective],
     flows: &[BucketTxFlow],
@@ -386,18 +390,43 @@ pub fn summarize_buckets(
 ) -> BTreeMap<String, BucketSummary> {
     let mut summaries: BTreeMap<String, BucketSummary> = BTreeMap::new();
 
+    // 第一轮：叶节点本身的预算与实际
     for item in directives {
         if !is_month_in_scope(&item.month, target_month, scope) {
             continue;
         }
-        summaries.entry(item.bucket.clone()).or_default().planned += item.amount;
+        summaries
+            .entry(item.bucket.clone())
+            .or_default()
+            .planned += item.amount;
     }
 
     for flow in flows {
         if !is_month_in_scope(&flow.month, target_month, scope) {
             continue;
         }
-        summaries.entry(flow.bucket.clone()).or_default().actual += flow.actual_amount();
+        let amount = flow.actual_amount();
+        let bucket = &flow.bucket;
+        summaries
+            .entry(bucket.clone())
+            .or_default()
+            .actual += amount;
+    }
+
+    // 第二轮：子桶向上聚合到父桶
+    let all_buckets: Vec<String> = summaries.keys().cloned().collect();
+    for bucket in all_buckets {
+        let mut parent = parent_bucket(&bucket);
+        let (planned, actual) = {
+            let s = &summaries[&bucket];
+            (s.planned, s.actual)
+        };
+        while let Some(p) = parent {
+            let entry = summaries.entry(p.to_string()).or_default();
+            entry.planned += planned;
+            entry.actual += actual;
+            parent = parent_bucket(p);
+        }
     }
 
     summaries
@@ -430,7 +459,8 @@ pub fn collect_scope_warnings(
 
 /// 构建指定预算桶在作用域内的完整数据视图。
 ///
-/// 过滤出属于目标桶且在范围内的指令与资金流动，并计算汇总值。
+/// 若目标桶是父桶（无直接预算指令，如 `生活费`），
+/// 则自动聚合其所有点号子桶（如 `生活费.交通`、`生活费.饮食`）的指令与资金流动。
 pub fn build_scoped_bucket_data(
     cli: &Cli,
     bucket: &str,
@@ -438,10 +468,13 @@ pub fn build_scoped_bucket_data(
     directives: &[BudgetDirective],
     flows: &[BucketTxFlow],
 ) -> ScopedBucketData {
+    let prefix = format!("{}.", bucket);
+
     let directives = directives
         .iter()
         .filter(|item| {
-            item.bucket == bucket && is_month_in_scope(&item.month, &cli.month, cli.scope)
+            (item.bucket == bucket || item.bucket.starts_with(&prefix))
+                && is_month_in_scope(&item.month, &cli.month, cli.scope)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -449,7 +482,8 @@ pub fn build_scoped_bucket_data(
     let flows = flows
         .iter()
         .filter(|flow| {
-            flow.bucket == bucket && is_month_in_scope(&flow.month, &cli.month, cli.scope)
+            (flow.bucket == bucket || flow.bucket.starts_with(&prefix))
+                && is_month_in_scope(&flow.month, &cli.month, cli.scope)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -476,14 +510,19 @@ pub fn build_scoped_bucket_data(
 /// 汇总所有资产桶资金流动，计算各账户的累计余额。
 ///
 /// 仅纳入指定桶的资产类型流动，按 Cumulative 范围（截至目标月）累计。
+/// 若查询的是父桶（无直接资产流动），则自动聚合所有子桶的位置数据。
 pub fn collect_asset_locations(
     bucket: &str,
     target_month: &str,
     flows: &[BucketTxFlow],
 ) -> BTreeMap<String, Decimal> {
+    let prefix = format!("{}.", bucket);
     let mut locations: BTreeMap<String, Decimal> = BTreeMap::new();
     for flow in flows {
-        if flow.bucket != bucket || flow.kind != BucketKind::Asset {
+        if flow.kind != BucketKind::Asset {
+            continue;
+        }
+        if flow.bucket != bucket && !flow.bucket.starts_with(&prefix) {
             continue;
         }
         if !is_month_in_scope(&flow.month, target_month, ReportScope::Cumulative) {

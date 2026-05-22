@@ -16,7 +16,7 @@ use rust_decimal::Decimal;
 use crate::cli::{BucketView, Cli, ReportScope};
 use crate::config::{BucketKind, BudgetDirective, BudgetMappings};
 use crate::budget::{self, BucketSummary, BucketTxFlow, ScopedBucketData, WarningStats};
-use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, sanitize_filename, shorten_account_label};
+use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, parent_bucket, sanitize_filename, shorten_account_label};
 
 // ---------------------------------------------------------------------------
 // 终端文本报告
@@ -25,6 +25,7 @@ use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, sanitize_file
 /// 渲染汇总报告的终端文本格式。
 ///
 /// 包含桶名、预算、实际、结余、状态五列及总计行。
+/// 若某桶的父桶已存在于汇总表中，则跳过子桶以避免重复计算。
 pub fn render_summary_report_text(
     month: &str,
     scope: ReportScope,
@@ -50,6 +51,11 @@ pub fn render_summary_report_text(
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
     for (bucket, summary) in summaries {
+        if let Some(parent) = parent_bucket(bucket) {
+            if summaries.contains_key(parent) {
+                continue;
+            }
+        }
         let remain = summary.planned - summary.actual;
         let status = if remain.is_sign_negative() {
             "OVER"
@@ -270,20 +276,33 @@ pub fn append_bucket_detail_view(
             .filter(|item| item.month == month)
             .collect::<Vec<_>>();
         for item in month_budgets {
+            // 当查询父桶（如 生活费）时，子桶指令（如 生活费.交通）的前缀追加桶名标签
+            let child_label = if item.bucket != bucket {
+                &item.bucket[bucket.len() + 1..]
+            } else {
+                ""
+            };
+            let child_tag = if child_label.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", child_label)
+            };
             if let Some(label) = item.label.as_ref() {
                 let _ = writeln!(
                     out,
-                    "{} {}：预算收入 {} {}",
+                    "{} {}：预算收入{} {} {}",
                     item.month,
                     label,
+                    child_tag,
                     fmt_decimal(item.amount),
                     currency
                 );
             } else {
                 let _ = writeln!(
                     out,
-                    "{}：预算收入 {} {}",
+                    "{}：预算收入{} {} {}",
                     item.month,
+                    child_tag,
                     fmt_decimal(item.amount),
                     currency
                 );
@@ -307,11 +326,17 @@ pub fn append_bucket_detail_view(
                     }
                 }
             };
+            let child_tag = if flow.bucket != bucket {
+                format!(" [{}]", &flow.bucket[bucket.len() + 1..])
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 out,
-                "{}：{} {} {} {}",
+                "{}：{}{} {} {} {}",
                 flow.date.format("%Y-%m-%d"),
                 format_tx_title(flow.payee.as_deref(), flow.narration.as_deref()),
+                child_tag,
                 action,
                 fmt_decimal(flow.flow),
                 currency
@@ -438,6 +463,11 @@ pub fn render_summary_markdown(
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
     for (bucket, summary) in summaries {
+        if let Some(parent) = parent_bucket(bucket) {
+            if summaries.contains_key(parent) {
+                continue;
+            }
+        }
         let remain = summary.planned - summary.actual;
         let status = if remain.is_sign_negative() {
             "OVER"

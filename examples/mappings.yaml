@@ -10,14 +10,14 @@ bucket_types:
 
 defaults:
   "Expenses:Consume:电子": 数码
-  "Expenses:Consume:交通": 生活费
-  "Expenses:Consume:饮食": 生活费
+  "Expenses:Consume:交通": 生活费.交通
+  "Expenses:Consume:饮食": 生活费.饮食
   "Expenses:Consume:娱乐": 爱好
   "Expenses:Travel": 旅行
   "Expenses:Health": 应急
 
 # 可选：用于精确定位资产类预算桶资金位置。
-# 若不配置，系统默认将资产桶交易中的正向资产腿视作“流入位置”。
+# 若不配置，系统默认将资产桶交易中的正向资产腿视作"流入位置"。
 asset_bucket_accounts:
   储蓄:
     - "Assets:Bank-银行:中国:建设银行"

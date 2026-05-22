@@ -2,6 +2,17 @@
 //!
 //! 负责加载和解析 `budgets.yaml` 与 `mappings.yaml` 配置文件，
 //! 定义预算桶类型、账户映射等核心配置数据结构。
+//!
+//! `budgets.yaml` 支持 YAML 嵌套层级来表达预算桶的父子关系，例如：
+//! ```yaml
+//! "2026-06":
+//!   生活费:
+//!     交通: 1500
+//!     饮食: 2500
+//!   数码: 5000
+//! ```
+//! 加载后 `交通` 和 `饮食` 将展平为 `生活费.交通`、`生活费.饮食` 的全路径桶名，
+//! 父桶 `生活费` 的统计值自动由子桶聚合得出。
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -88,6 +99,9 @@ impl BudgetMappings {
 }
 
 /// 单条预算指令，来自 `budgets.yaml` 中某个 bucket 的金额配置。
+///
+/// 嵌套的 YAML 会在加载时展平：父桶以点号路径命名（如 `生活费.交通`），
+/// 父桶 `生活费` 本身不会生成指令，其统计值由子桶聚合得出。
 #[derive(Debug, Clone)]
 pub struct BudgetDirective {
     /// 所属月份（YYYY-MM）
@@ -103,31 +117,81 @@ pub struct BudgetDirective {
 }
 
 // ---------------------------------------------------------------------------
+// YAML 嵌套值类型与展平逻辑
+// ---------------------------------------------------------------------------
+
+/// YAML 嵌套预算值：叶节点为金额，分支节点为子映射。
+///
+/// 通过 `#[serde(untagged)]` 自动识别 YAML 中值是 Decimal 还是嵌套 Map。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum BudgetValue {
+    Amount(Decimal),
+    Group(BTreeMap<String, BudgetValue>),
+}
+
+/// 递归展平嵌套的 YAML 预算映射为扁平化的 `BudgetDirective` 列表。
+///
+/// 例如 `生活费: { 交通: 1500 }` 将生成桶名为 `生活费.交通` 的指令，
+/// 父桶 `生活费` 本身不生成指令，其统计值由子桶聚合得出。
+fn flatten_budget_map(
+    prefix: &str,
+    map: &BTreeMap<String, BudgetValue>,
+    month: &str,
+    label: Option<&str>,
+    source_key: &str,
+    directives: &mut Vec<BudgetDirective>,
+) {
+    for (key, value) in map {
+        let full_name = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{}.{}", prefix, key)
+        };
+        match value {
+            BudgetValue::Amount(amount) => {
+                directives.push(BudgetDirective {
+                    month: month.to_string(),
+                    label: label.map(|s| s.to_string()),
+                    source_key: source_key.to_string(),
+                    bucket: full_name,
+                    amount: *amount,
+                });
+            }
+            BudgetValue::Group(sub_map) => {
+                flatten_budget_map(&full_name, sub_map, month, label, source_key, directives);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 配置加载函数
 // ---------------------------------------------------------------------------
 
 /// 从 `budgets.yaml` 加载所有预算指令。
 ///
-/// 解析格式：外层 `BTreeMap<String, BTreeMap<String, Decimal>>`，
-/// 其中外层 key 为 `YYYY-MM` 或 `YYYY-MM 标签`，内层 key 为桶名。
+/// 解析格式：外层 `BTreeMap<String, BTreeMap<String, BudgetValue>>`，
+/// 其中外层 key 为 `YYYY-MM` 或 `YYYY-MM 标签`，
+/// 内层值可为 Decimal（叶节点）或嵌套 Map（分支节点）。
+/// 嵌套 YAML 会在加载时递归展平为点号分隔的全路径桶名。
 pub fn load_budget_directives(path: &Path) -> Result<Vec<BudgetDirective>> {
     let content = fs::read_to_string(path)?;
     let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-    let raw: BTreeMap<String, BTreeMap<String, Decimal>> =
+    let raw: BTreeMap<String, BTreeMap<String, BudgetValue>> =
         serde_yaml::from_str(content).context("Invalid budgets YAML")?;
 
     let mut directives = Vec::new();
     for (raw_key, bucket_map) in raw {
         let (month, label) = parse_budget_key(&raw_key)?;
-        for (bucket, amount) in bucket_map {
-            directives.push(BudgetDirective {
-                month: month.clone(),
-                label: label.clone(),
-                source_key: raw_key.clone(),
-                bucket,
-                amount,
-            });
-        }
+        flatten_budget_map(
+            "",
+            &bucket_map,
+            &month,
+            label.as_deref(),
+            &raw_key,
+            &mut directives,
+        );
     }
 
     directives.sort_by(|a, b| {
@@ -174,7 +238,7 @@ pub fn load_mappings(path: &Path) -> Result<BudgetMappings> {
 /// 收集所有已知的预算桶名称集合。
 ///
 /// 来源包括：预算指令中的桶名、mappings 中声明的 bucket_types 键、
-/// 以及默认生活费桶名。
+/// 默认生活费桶名，以及从点号桶名推导出的父桶。
 pub fn collect_known_buckets(
     directives: &[BudgetDirective],
     mappings: &BudgetMappings,
@@ -183,6 +247,12 @@ pub fn collect_known_buckets(
 
     for item in directives {
         buckets.insert(item.bucket.clone());
+        // 点号桶名暗含父桶，一并纳入已知集合
+        let mut name = item.bucket.as_str();
+        while let Some(pos) = name.rfind('.') {
+            name = &name[..pos];
+            buckets.insert(name.to_string());
+        }
     }
     for bucket in mappings.bucket_types.keys() {
         buckets.insert(bucket.clone());
