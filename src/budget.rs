@@ -469,12 +469,13 @@ pub fn build_scoped_bucket_data(
     flows: &[BucketTxFlow],
 ) -> ScopedBucketData {
     let prefix = format!("{}.", bucket);
+    let target_month = cli.month.as_deref().unwrap_or("?");
 
     let directives = directives
         .iter()
         .filter(|item| {
             (item.bucket == bucket || item.bucket.starts_with(&prefix))
-                && is_month_in_scope(&item.month, &cli.month, cli.scope)
+                && is_month_in_scope(&item.month, target_month, cli.scope)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -483,7 +484,7 @@ pub fn build_scoped_bucket_data(
         .iter()
         .filter(|flow| {
             (flow.bucket == bucket || flow.bucket.starts_with(&prefix))
-                && is_month_in_scope(&flow.month, &cli.month, cli.scope)
+                && is_month_in_scope(&flow.month, target_month, cli.scope)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -550,17 +551,18 @@ pub fn collect_buckets_for_export(
         return BTreeSet::from([bucket.clone()]);
     }
 
+    let target_month = cli.month.as_deref().unwrap_or("?");
     let mut buckets = BTreeSet::new();
     for bucket in summaries.keys() {
         buckets.insert(bucket.clone());
     }
     for item in directives {
-        if is_month_in_scope(&item.month, &cli.month, cli.scope) {
+        if is_month_in_scope(&item.month, target_month, cli.scope) {
             buckets.insert(item.bucket.clone());
         }
     }
     for flow in flows {
-        if is_month_in_scope(&flow.month, &cli.month, cli.scope) {
+        if is_month_in_scope(&flow.month, target_month, cli.scope) {
             buckets.insert(flow.bucket.clone());
         }
     }
