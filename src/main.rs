@@ -106,7 +106,7 @@ mod tests {
     };
     use rust_decimal_macros::dec;
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         fs,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
@@ -320,6 +320,113 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parent_bucket_extracts_parent_name() {
+        use crate::util::parent_bucket;
+        assert_eq!(parent_bucket("生活费.交通"), Some("生活费"));
+        assert_eq!(parent_bucket("数码"), None);
+        assert_eq!(parent_bucket("A.B.C"), Some("A.B"));
+    }
+
+    #[test]
+    fn nested_yaml_flattens_to_dotted_names() {
+        use crate::config::load_budget_directives;
+        let tmp_yaml = make_temp_file_with_ext(
+            "\"2026-06\":\n  生活费:\n    交通: 1500\n    饮食: 2500\n  数码: 5000\n",
+            "yaml",
+        );
+        let directives = load_budget_directives(&tmp_yaml).expect("parse nested yaml");
+        fs::remove_file(tmp_yaml).ok();
+
+        let buckets: BTreeSet<String> = directives.iter().map(|d| d.bucket.clone()).collect();
+        assert!(buckets.contains("生活费.交通"));
+        assert!(buckets.contains("生活费.饮食"));
+        assert!(buckets.contains("数码"));
+        assert!(!buckets.contains("生活费"));
+    }
+
+    #[test]
+    fn summarize_hierarchy_aggregates_children_into_parent() {
+        use crate::{budget::summarize_buckets, cli::ReportScope};
+        let directives = vec![
+            BudgetDirective {
+                month: "2026-06".into(),
+                label: None,
+                source_key: "2026-06".into(),
+                bucket: "生活费.交通".into(),
+                amount: dec!(1500),
+            },
+            BudgetDirective {
+                month: "2026-06".into(),
+                label: None,
+                source_key: "2026-06".into(),
+                bucket: "生活费.饮食".into(),
+                amount: dec!(2500),
+            },
+        ];
+        let flows = vec![];
+        let summaries = summarize_buckets(&directives, &flows, "2026-06", ReportScope::Month);
+
+        assert_eq!(summaries["生活费.交通"].planned, dec!(1500));
+        assert_eq!(summaries["生活费.饮食"].planned, dec!(2500));
+        assert_eq!(summaries["生活费"].planned, dec!(4000));
+    }
+
+    #[test]
+    fn scoped_bucket_data_includes_children_for_parent() {
+        use crate::{
+            budget::build_scoped_bucket_data,
+            cli::{Cli, ReportScope, BucketView},
+            config::BudgetMappings,
+        };
+        // 使用假 Cli 数据
+        let cli = Cli {
+            ledgers: vec![],
+            ledger_dirs: vec![],
+            month: "2026-06".into(),
+            budgets: std::path::PathBuf::new(),
+            mappings: std::path::PathBuf::new(),
+            currency: "CNY".into(),
+            scope: ReportScope::Month,
+            bucket: None,
+            bucket_view: BucketView::Summary,
+            show_locations: false,
+            out_dir: None,
+            strict: false,
+        };
+        let directives = vec![
+            BudgetDirective {
+                month: "2026-06".into(),
+                label: None,
+                source_key: "2026-06".into(),
+                bucket: "生活费.交通".into(),
+                amount: dec!(1500),
+            },
+            BudgetDirective {
+                month: "2026-06".into(),
+                label: None,
+                source_key: "2026-06".into(),
+                bucket: "生活费.饮食".into(),
+                amount: dec!(2500),
+            },
+        ];
+        let mappings = BudgetMappings {
+            defaults: BTreeMap::new(),
+            default_expense_bucket: "生活费".into(),
+            bucket_types: BTreeMap::new(),
+            asset_bucket_accounts: BTreeMap::new(),
+        };
+        let flows = vec![];
+
+        let data = build_scoped_bucket_data(&cli, "生活费", &mappings, &directives, &flows);
+        assert_eq!(data.planned, dec!(4000));
+        assert_eq!(data.directives.len(), 2);
+
+        let data = build_scoped_bucket_data(&cli, "生活费.交通", &mappings, &directives, &flows);
+        assert_eq!(data.planned, dec!(1500));
+        assert_eq!(data.directives.len(), 1);
+    }
+
     fn make_temp_file(content: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
         let nonce = SystemTime::now()
@@ -327,6 +434,17 @@ mod tests {
             .expect("clock")
             .as_nanos();
         path.push(format!("budget_report_test_{}.bean", nonce));
+        fs::write(&path, content).expect("write temp file");
+        path
+    }
+
+    fn make_temp_file_with_ext(content: &str, ext: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        path.push(format!("budget_report_test_{}.{}", nonce, ext));
         fs::write(&path, content).expect("write temp file");
         path
     }
