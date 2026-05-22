@@ -45,6 +45,10 @@ static POSTING_RE: Lazy<Regex> = Lazy::new(|| {
     .expect("valid posting regex")
 });
 
+/// Beancount 原生标签：交易头行中的 `#tag` 或 `^link`（支持非 ASCII 字符）
+static TAG_LINK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[#^](\S+)").expect("valid tag/link regex"));
+
 // ---------------------------------------------------------------------------
 // 数据结构
 // ---------------------------------------------------------------------------
@@ -140,11 +144,22 @@ pub fn parse_ledger_content(content: &str) -> Result<Vec<LedgerTransaction>> {
                 .with_context(|| format!("Invalid transaction date '{}'", &header["date"]))?;
             let (payee, narration) = parse_tx_title(line);
 
+            // 提取 Beancount 原生标签 #tag / ^link，注入 metadata
+            let tags: Vec<&str> = TAG_LINK_RE
+                .captures_iter(line)
+                .filter_map(|cap| cap.get(1))
+                .map(|m| m.as_str())
+                .collect();
+            let mut metadata = HashMap::new();
+            if !tags.is_empty() {
+                metadata.insert("_beancount_tags".to_string(), tags.join(" "));
+            }
+
             current = Some(Builder {
                 date,
                 payee,
                 narration,
-                metadata: HashMap::new(),
+                metadata,
                 postings: Vec::new(),
             });
             continue;
