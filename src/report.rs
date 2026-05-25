@@ -24,13 +24,15 @@ use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, parent_bucket
 
 /// 渲染汇总报告的终端文本格式。
 ///
-/// 包含桶名、预算、实际、结余、状态五列及总计行。
+/// 包含桶名、月预算、已支出、使用率、结余、状态六列及总计行。
+/// 支持 --sort-by name|planned|actual|remain 排序。
 /// 若某桶的父桶已存在于汇总表中，则跳过子桶以避免重复计算。
 pub fn render_summary_report_text(
     range: &DateRange,
     currency: &str,
     summaries: &BTreeMap<String, BucketSummary>,
     warnings: &WarningStats,
+    sort_by: Option<&str>,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -41,52 +43,70 @@ pub fn render_summary_report_text(
     );
     let _ = writeln!(
         out,
-        "{:<24} {:>14} {:>14} {:>14} {:>10}",
-        "预算桶", "月预算", "已支出", "结余", "状态"
+        "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
+        "预算桶", "月预算", "已支出", "使用率", "结余", "状态"
     );
-    let _ = writeln!(out, "{}", "-".repeat(82));
+    let _ = writeln!(out, "{}", "-".repeat(76));
+
+    let mut entries: Vec<(&String, &BucketSummary)> = summaries.iter()
+        .filter(|(bucket, _)| {
+            if let Some(parent) = parent_bucket(bucket) {
+                !summaries.contains_key(parent)
+            } else { true }
+        })
+        .collect();
+
+    match sort_by.unwrap_or("name") {
+        "planned" => entries.sort_by(|a, b| b.1.planned.partial_cmp(&a.1.planned).unwrap_or(std::cmp::Ordering::Equal)),
+        "actual" => entries.sort_by(|a, b| b.1.actual.partial_cmp(&a.1.actual).unwrap_or(std::cmp::Ordering::Equal)),
+        "remain" => entries.sort_by(|a, b| {
+            let ra = a.1.planned - a.1.actual;
+            let rb = b.1.planned - b.1.actual;
+            ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        _ => {} // name (default BTreeMap order)
+    }
 
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
-    for (bucket, summary) in summaries {
-        if let Some(parent) = parent_bucket(bucket) {
-            if summaries.contains_key(parent) {
-                continue;
-            }
-        }
+    for (bucket, summary) in &entries {
         let remain = summary.planned - summary.actual;
-        let status = if remain.is_sign_negative() {
-            "超支"
+        let pct = if summary.planned.is_zero() {
+            "  --".to_string()
         } else {
-            "正常"
+            format!("{:5.1}%", (summary.actual / summary.planned * Decimal::from(100u32)).round_dp(1))
         };
+        let status = if remain.is_sign_negative() { "超支" } else { "正常" };
         total_planned += summary.planned;
         total_actual += summary.actual;
 
         let _ = writeln!(
             out,
-            "{:<24} {:>14} {:>14} {:>14} {:>10}",
+            "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
             bucket,
             fmt_decimal(summary.planned),
             fmt_decimal(summary.actual),
+            pct,
             fmt_decimal(remain),
             status
         );
     }
 
-    let _ = writeln!(out, "{}", "-".repeat(82));
+    let _ = writeln!(out, "{}", "-".repeat(76));
     let total_remain = total_planned - total_actual;
-    let total_status = if total_remain.is_sign_negative() {
-        "超支"
+    let total_pct = if total_planned.is_zero() {
+        "  --".to_string()
     } else {
-        "正常"
+        format!("{:5.1}%", (total_actual / total_planned * Decimal::from(100u32)).round_dp(1))
     };
+    let total_status = if total_remain.is_sign_negative() { "超支" } else { "正常" };
     let _ = writeln!(
         out,
-        "{:<24} {:>14} {:>14} {:>14} {:>10}",
+        "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
         "合计",
         fmt_decimal(total_planned),
         fmt_decimal(total_actual),
+        total_pct,
         fmt_decimal(total_remain),
         total_status
     );
@@ -109,6 +129,71 @@ pub fn render_summary_report_text(
 
     out
 }
+
+/// 渲染同比/环比对比报告。
+pub fn render_compare_report_text(
+    cur_range: &DateRange,
+    cur_summaries: &BTreeMap<String, BucketSummary>,
+    _cur_warnings: &WarningStats,
+    cmp_range: &DateRange,
+    cmp_summaries: &BTreeMap<String, BucketSummary>,
+    _cmp_warnings: &WarningStats,
+    currency: &str,
+    sort_by: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    let all_buckets: BTreeSet<&String> = cur_summaries.keys()
+        .chain(cmp_summaries.keys())
+        .filter(|bucket| {
+            if let Some(parent) = parent_bucket(bucket) {
+                !(cur_summaries.contains_key(parent) || cmp_summaries.contains_key(parent))
+            } else { true }
+        })
+        .collect();
+
+    let mut entries: Vec<(&String, &BucketSummary, &BucketSummary)> = all_buckets.iter()
+        .map(|bucket| {
+            let cur = cur_summaries.get(*bucket).unwrap_or(&EMPTY_SUMMARY);
+            let cmp = cmp_summaries.get(*bucket).unwrap_or(&EMPTY_SUMMARY);
+            (*bucket, cur, cmp)
+        })
+        .collect();
+
+    match sort_by.unwrap_or("name") {
+        "planned" => entries.sort_by(|a, b| b.1.planned.partial_cmp(&a.1.planned).unwrap_or(std::cmp::Ordering::Equal)),
+        "actual" => entries.sort_by(|a, b| b.1.actual.partial_cmp(&a.1.actual).unwrap_or(std::cmp::Ordering::Equal)),
+        "remain" => entries.sort_by(|a, b| {
+            (a.1.planned - a.1.actual).partial_cmp(&(b.1.planned - b.1.actual)).unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        _ => {}
+    }
+
+    let _ = writeln!(out, "预算对比报告");
+    let _ = writeln!(out, "本期: {}  对比: {}  [{}]", cur_range.display(), cmp_range.display(), currency);
+    let _ = writeln!(
+        out,
+        "{:<16} {:>10} {:>10} {:>10} | {:>10} {:>10} {:>10}",
+        "预算桶", "月预算", "已支出", "结余", "月预算", "已支出", "结余"
+    );
+    let _ = writeln!(out, "{}", "-".repeat(74));
+
+    for (bucket, cur, cmp) in &entries {
+        let cur_remain = cur.planned - cur.actual;
+        let cmp_remain = cmp.planned - cmp.actual;
+        let _ = writeln!(
+            out,
+            "{:<16} {:>10} {:>10} {:>10} | {:>10} {:>10} {:>10}",
+            bucket,
+            fmt_decimal(cur.planned), fmt_decimal(cur.actual), fmt_decimal(cur_remain),
+            fmt_decimal(cmp.planned), fmt_decimal(cmp.actual), fmt_decimal(cmp_remain),
+        );
+    }
+
+    out
+}
+
+/// 空汇总，用于对比时缺失桶的兜底。
+static EMPTY_SUMMARY: BucketSummary = BucketSummary { planned: Decimal::ZERO, actual: Decimal::ZERO };
 
 /// 渲染单桶报告的终端文本格式。
 ///
@@ -392,8 +477,8 @@ pub fn export_reports(
 
     // 汇总报告：Markdown + 纯文本
     let summary_txt =
-        render_summary_report_text(range, currency, summaries, warnings);
-    let summary_md = render_summary_markdown(range, currency, summaries, warnings);
+        render_summary_report_text(range, currency, summaries, warnings, None);
+    let summary_md = render_summary_markdown(range, currency, summaries, warnings, cli.sort_by.as_deref());
     let summary_path = out_dir.join(format!("summary-{}.md", scope_label));
     fs::write(&summary_path, summary_md)
         .with_context(|| format!("Failed to write {}", summary_path.display()))?;
@@ -407,6 +492,13 @@ pub fn export_reports(
     let csv_path = out_dir.join(format!("buckets-{}.csv", scope_label));
     fs::write(&csv_path, render_summary_csv(summaries))
         .with_context(|| format!("Failed to write {}", csv_path.display()))?;
+
+    // Pivot CSV（横向月度透视）
+    if cli.csv_pivot {
+        let pivot_path = out_dir.join(format!("pivot-{}.csv", scope_label));
+        fs::write(&pivot_path, render_pivot_csv(flows, range))
+            .with_context(|| format!("Failed to write {}", pivot_path.display()))?;
+    }
 
     // 每个桶的 Markdown 报告
     let buckets = budget::collect_buckets_for_export(cli, directives, flows, summaries);
@@ -441,6 +533,7 @@ pub fn render_summary_markdown(
     currency: &str,
     summaries: &BTreeMap<String, BucketSummary>,
     warnings: &WarningStats,
+    sort_by: Option<&str>,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# 预算汇总报告");
@@ -448,47 +541,65 @@ pub fn render_summary_markdown(
     let _ = writeln!(out, "- 统计区间: `{}`", range.display());
     let _ = writeln!(out, "- 币种: `{}`", currency);
     let _ = writeln!(out);
-    let _ = writeln!(out, "| 预算桶 | 预算 | 实际 | 结余 | 状态 |");
-    let _ = writeln!(out, "|---|---:|---:|---:|---|");
+    let _ = writeln!(out, "| 预算桶 | 月预算 | 已支出 | 使用率 | 结余 | 状态 |");
+    let _ = writeln!(out, "|---:|---:|---:|---:|---:|---|");
+
+    let mut entries: Vec<(&String, &BucketSummary)> = summaries.iter()
+        .filter(|(bucket, _)| {
+            if let Some(parent) = parent_bucket(bucket) {
+                !summaries.contains_key(parent)
+            } else { true }
+        })
+        .collect();
+
+    match sort_by.unwrap_or("name") {
+        "planned" => entries.sort_by(|a, b| b.1.planned.partial_cmp(&a.1.planned).unwrap_or(std::cmp::Ordering::Equal)),
+        "actual" => entries.sort_by(|a, b| b.1.actual.partial_cmp(&a.1.actual).unwrap_or(std::cmp::Ordering::Equal)),
+        "remain" => entries.sort_by(|a, b| {
+            let ra = a.1.planned - a.1.actual;
+            let rb = b.1.planned - b.1.actual;
+            ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        _ => {}
+    }
 
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
-    for (bucket, summary) in summaries {
-        if let Some(parent) = parent_bucket(bucket) {
-            if summaries.contains_key(parent) {
-                continue;
-            }
-        }
+    for (bucket, summary) in &entries {
         let remain = summary.planned - summary.actual;
-        let status = if remain.is_sign_negative() {
-            "超支"
+        let pct = if summary.planned.is_zero() {
+            "--".to_string()
         } else {
-            "正常"
+            format!("{:.1}%", (summary.actual / summary.planned * Decimal::from(100u32)).round_dp(1))
         };
+        let status = if remain.is_sign_negative() { "超支" } else { "正常" };
         total_planned += summary.planned;
         total_actual += summary.actual;
         let _ = writeln!(
             out,
-            "| {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} |",
             bucket,
             fmt_decimal(summary.planned),
             fmt_decimal(summary.actual),
+            pct,
             fmt_decimal(remain),
             status
         );
     }
 
     let total_remain = total_planned - total_actual;
-    let total_status = if total_remain.is_sign_negative() {
-        "超支"
+    let total_pct = if total_planned.is_zero() {
+        "--".to_string()
     } else {
-        "正常"
+        format!("{:.1}%", (total_actual / total_planned * Decimal::from(100u32)).round_dp(1))
     };
+    let total_status = if total_remain.is_sign_negative() { "超支" } else { "正常" };
     let _ = writeln!(
         out,
-        "| **合计** | **{}** | **{}** | **{}** | **{}** |",
+        "| **合计** | **{}** | **{}** | **{}** | **{}** | **{}** |",
         fmt_decimal(total_planned),
         fmt_decimal(total_actual),
+        total_pct,
         fmt_decimal(total_remain),
         total_status
     );
@@ -518,11 +629,7 @@ pub fn render_summary_csv(summaries: &BTreeMap<String, BucketSummary>) -> String
     let mut out = String::from("bucket,planned,actual,remain,status\n");
     for (bucket, summary) in summaries {
         let remain = summary.planned - summary.actual;
-        let status = if remain.is_sign_negative() {
-            "OVER"
-        } else {
-            "OK"
-        };
+        let status = if remain.is_sign_negative() { "OVER" } else { "OK" };
         let _ = writeln!(
             out,
             "{},{},{},{},{}",
@@ -533,6 +640,45 @@ pub fn render_summary_csv(summaries: &BTreeMap<String, BucketSummary>) -> String
             status
         );
     }
+    out
+}
+
+/// 渲染月度横向透视 CSV：行为月份，列为预算桶，值为 actual。
+fn render_pivot_csv(flows: &[BucketTxFlow], range: &DateRange) -> String {
+    let mut per_month: BTreeMap<String, BTreeMap<String, Decimal>> = BTreeMap::new();
+    let mut all_buckets = BTreeSet::new();
+
+    for flow in flows {
+        if !range.contains(&flow.month) {
+            continue;
+        }
+        let amount = flow.actual_amount();
+        if amount.is_zero() {
+            continue;
+        }
+        all_buckets.insert(flow.bucket.clone());
+        *per_month
+            .entry(flow.month.clone())
+            .or_default()
+            .entry(flow.bucket.clone())
+            .or_default() += amount;
+    }
+
+    let bucket_list: Vec<String> = all_buckets.into_iter().collect();
+    let mut out = String::from("月份");
+    for b in &bucket_list {
+        let _ = write!(out, ",{}", b);
+    }
+    let _ = writeln!(out);
+
+    for (month, bucket_amounts) in &per_month {
+        let _ = write!(out, "{}", month);
+        for b in &bucket_list {
+            let _ = write!(out, ",{}", fmt_decimal(*bucket_amounts.get(b).unwrap_or(&Decimal::ZERO)));
+        }
+        let _ = writeln!(out);
+    }
+
     out
 }
 

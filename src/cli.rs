@@ -77,6 +77,22 @@ pub struct Cli {
     /// 统计结束月份（YYYY-MM）。与 --month 互斥，配合 --from 使用
     #[arg(long = "to")]
     pub to: Option<String>,
+
+    /// 快捷年份（YYYY）：等价于 --from YYYY-01 --to YYYY-12。与 --month/--from/--to 互斥
+    #[arg(long = "year")]
+    pub year: Option<String>,
+
+    /// 汇总表排序方式 [default: name] [possible values: name, planned, actual, remain]
+    #[arg(long = "sort-by")]
+    pub sort_by: Option<String>,
+
+    /// 额外生成月度横向透视 CSV（行为月份，列为桶名）
+    #[arg(long = "csv-pivot")]
+    pub csv_pivot: bool,
+
+    /// 同比/环比对比月份（YYYY-MM）：在同一表内对比当前区间与历史区间的数据
+    #[arg(long = "compare")]
+    pub compare: Option<String>,
 }
 
 /// 预算统计范围。

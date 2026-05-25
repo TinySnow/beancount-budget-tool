@@ -56,7 +56,36 @@ fn main() -> Result<()> {
     let known_buckets = config::collect_known_buckets(&budget_directives, &mappings);
     let warnings = budget::collect_scope_warnings(&tx_flows, &known_buckets, month_str, cli.scope);
 
-    if let Some(bucket) = cli.bucket.as_ref() {
+    if let Some(ref compare_month) = cli.compare {
+        // 构建对比区间的 DateRange：同类型但月份替换
+        util::validate_month(compare_month)?;
+        let cmp_range = match &date_range {
+            DateRange::Month { scope, .. } => DateRange::Month {
+                target: compare_month.clone(),
+                scope: *scope,
+            },
+            DateRange::Range { to: _, .. } => DateRange::Range {
+                from: format!("{}-01", &compare_month[..4]),
+                to: compare_month.clone(),
+            },
+        };
+        let cmp_directives = filter_directives_by_range(config::load_budget_directives(&cli.budgets)
+            .with_context(|| format!("Failed to load budgets: {}", cli.budgets.display()))?, &cmp_range);
+        let cmp_flows = filter_flows_by_range(
+            budget::collect_bucket_tx_flows(&ledger_files, &mappings, &target_currency)?,
+            &cmp_range,
+        );
+        let cmp_target = cmp_range.end_month().to_string();
+        let cmp_summaries = budget::summarize_buckets(&cmp_directives, &cmp_flows, &cmp_target, cli.scope);
+        let cmp_warnings = budget::collect_scope_warnings(&cmp_flows, &known_buckets, &cmp_target, cli.scope);
+
+        let output = report::render_compare_report_text(
+            &date_range, &summaries, &warnings,
+            &cmp_range, &cmp_summaries, &cmp_warnings,
+            &target_currency, cli.sort_by.as_deref(),
+        );
+        print!("{output}");
+    } else if let Some(bucket) = cli.bucket.as_ref() {
         let output = report::render_bucket_report_text(
             &budget::build_scoped_bucket_data(&cli, bucket, &mappings, &budget_directives, &tx_flows),
             &cli,
@@ -73,6 +102,7 @@ fn main() -> Result<()> {
             &target_currency,
             &summaries,
             &warnings,
+            cli.sort_by.as_deref(),
         );
         print!("{output}");
     }
@@ -104,6 +134,16 @@ fn main() -> Result<()> {
 
 /// 从 CLI 参数解析统计时间范围。
 fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
+    if let Some(year) = &cli.year {
+        if cli.month.is_some() || cli.from.is_some() || cli.to.is_some() {
+            bail!("--year is mutually exclusive with --month/--from/--to");
+        }
+        let y: i32 = year.parse().context("--year must be a 4-digit number")?;
+        return Ok(DateRange::Range {
+            from: format!("{:04}-01", y),
+            to: format!("{:04}-12", y),
+        });
+    }
     match (&cli.from, &cli.to, &cli.month) {
         (Some(from), Some(to), None) => {
             util::validate_month(from)?;
@@ -452,6 +492,10 @@ mod tests {
             strict: false,
             from: None,
             to: None,
+            year: None,
+            sort_by: None,
+            csv_pivot: false,
+            compare: None,
             filter: None,
         };
         let directives = vec![
