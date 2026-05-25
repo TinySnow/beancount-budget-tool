@@ -26,10 +26,11 @@ static QUOTED_TEXT_RE: Lazy<Regex> =
 
 /// Metadata 行正则：`  key: value`
 ///
+/// 接受任意数量空白缩进（空格或 Tab）。
 /// 要求 key 必须是 `[A-Za-z_][A-Za-z0-9_]*` 的形式，
 /// key 后必须有 `: `（冒号+空格），避免将 `Expenses:Food  10 CNY` 误判为 metadata。
 static TX_METADATA_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^\s{2}(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*:\s+(?P<value>.+?)\s*$")
+    Regex::new(r"^\s+(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*:\s+(?P<value>.+?)\s*$")
         .expect("valid tx metadata regex")
 });
 
@@ -37,10 +38,11 @@ static TX_METADATA_RE: Lazy<Regex> = Lazy::new(|| {
 /// `  Expenses:Food  10 CNY`
 /// `  Income:Misc`
 ///
-/// 要求账户名后至少两个空格才识别金额，兼容无金额的过账行。
+/// 接受任意数量空白缩进（空格或 Tab）。
+/// 账户名后至少一个空格即视为有金额跟随，兼容非标准格式。
 static POSTING_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"^\s{2}(?:[*!]\s+)?(?P<account>\S+)(?:\s{2,}(?P<number>[+-]?\d+(?:\.\d+)?)(?:\s+(?P<currency>[A-Za-z0-9_.-]+))?)?",
+        r"^\s+(?:[*!]\s+)?(?P<account>\S+)(?:\s+(?P<number>[+-]?\d+(?:\.\d+)?)(?:\s+(?P<currency>[A-Za-z0-9_.-]+))?)?",
     )
     .expect("valid posting regex")
 });
