@@ -263,7 +263,6 @@ pub fn collect_known_buckets(
 
     for item in directives {
         buckets.insert(item.bucket.clone());
-        // 点号桶名暗含父桶，一并纳入已知集合
         let mut name = item.bucket.as_str();
         while let Some(pos) = name.rfind('.') {
             name = &name[..pos];
@@ -271,6 +270,10 @@ pub fn collect_known_buckets(
         }
     }
     for bucket in mappings.bucket_types.keys() {
+        buckets.insert(bucket.clone());
+    }
+    // asset_bucket_accounts 中的桶也视为已知（自动推断为 asset 类型）
+    for bucket in mappings.asset_bucket_accounts.keys() {
         buckets.insert(bucket.clone());
     }
 
