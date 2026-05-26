@@ -105,12 +105,41 @@ pub struct WarningStats {
 // 核心函数
 // ---------------------------------------------------------------------------
 
+/// 解析 bucket metadata 值中的"桶名:金额"或"桶名900"语法。
+///
+/// 优先尝试冒号分隔，若无冒号则从尾部提取连续数字作为金额。
+fn parse_bucket_amount(raw: &str) -> (&str, Option<Decimal>) {
+    // 优先冒号分隔
+    if let Some((name, amt)) = raw.split_once(':') {
+        let parsed = Decimal::from_str(amt.trim()).ok();
+        return (name.trim(), parsed);
+    }
+    // 无冒号：从尾部提取连续数字（含可选的小数点和负号）
+    let trimmed = raw.trim();
+    // 找到最后一个非数字、非小数点的字符，其后即为金额
+    if let Some((pos, ch)) = trimmed.char_indices().rev()
+        .find(|(_, c)| !c.is_ascii_digit() && *c != '.' && *c != '-')
+    {
+        let number_start = pos + ch.len_utf8();
+        let number_part = &trimmed[number_start..];
+        if !number_part.is_empty() {
+            if let Ok(amt) = Decimal::from_str(number_part) {
+                let name_part = trimmed[..number_start].trim_end();
+                if !name_part.is_empty() {
+                    return (name_part, Some(amt));
+                }
+            }
+        }
+    }
+    (trimmed, None)
+}
+
 /// 解析所有账本文件，将每笔交易映射到对应的预算桶资金流动记录。
 ///
 /// # 映射逻辑
 ///
 /// 1. **显式 bucket metadata**：若交易含有 `budget`（或兼容拼写 `budge`）metadata，
-///    则根据桶类型（Expense/Asset）分别处理。
+///    则根据桶类型（Expense/Asset）分别处理。支持 `桶名:金额` 和 `桶名900` 两种写法。
 /// 2. **隐式映射**：无 budget metadata 的消费过账按最长前缀匹配账户映射，
 ///    最终回退到默认生活费桶。
 ///
@@ -159,13 +188,8 @@ pub fn collect_bucket_tx_flows(
                 .filter(|s| !s.is_empty())
                 .collect();
             for raw_name in bucket_names {
-                // 支持 budget: "桶名:金额" 语法——冒号后为分配给该桶的固定金额
-                let (bucket_name, cap_amount) = if let Some((name, amt)) = raw_name.split_once(':') {
-                    let amt_parsed = rust_decimal::Decimal::from_str(amt.trim()).ok();
-                    (name.trim(), amt_parsed)
-                } else {
-                    (raw_name, None)
-                };
+                // 支持 budget: "桶名:金额" 或 "桶名900" 两种写法
+                let (bucket_name, cap_amount) = parse_bucket_amount(raw_name);
                 let kind = mappings.bucket_kind(bucket_name);
                 match kind {
                     BucketKind::Expense => {
