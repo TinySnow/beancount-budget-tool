@@ -415,7 +415,9 @@ pub fn append_bucket_detail_view(
 
         for flow in month_flows {
             let action = match flow.kind {
-                BucketKind::Expense => "支出",
+                BucketKind::Expense => {
+                    if flow.flow.is_sign_negative() { "支出" } else { "入账" }
+                }
                 BucketKind::Asset => {
                     if flow.flow.is_sign_positive() {
                         "存入"
