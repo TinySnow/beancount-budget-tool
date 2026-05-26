@@ -258,14 +258,19 @@ pub fn collect_bucket_tx_flows(
                 match kind {
                     BucketKind::Expense => {
                         let mut flow = Decimal::ZERO;
+                        let mut asset_legs: BTreeMap<String, Decimal> = BTreeMap::new();
                         for posting in &tx.postings {
-                            if !posting.account.starts_with("Expenses:") { continue; }
-                            let Some(amount) = posting.amount else { continue; };
-                            if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
-                            flow -= amount;
+                            if posting.account.starts_with("Expenses:") {
+                                let Some(amount) = posting.amount else { continue; };
+                                if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
+                                flow -= amount;
+                            } else if posting.account.starts_with("Assets:") {
+                                let Some(amount) = posting.amount else { continue; };
+                                if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
+                                *asset_legs.entry(posting.account.clone()).or_default() += amount;
+                            }
                         }
                         if flow.is_zero() {
-                            // 无实际支出 → 纯资产转移，回退为 Asset 模式记录位置
                             process_as_asset(
                                 &tx, bucket_name, cap_amount, target_currency, &month, &mut flows,
                             );
@@ -274,7 +279,12 @@ pub fn collect_bucket_tx_flows(
                         if let Some(cap) = cap_amount {
                             let cap_abs = cap.abs();
                             if flow.abs() > cap_abs {
+                                let ratio = (cap_abs / flow.abs()).round_dp(6);
                                 flow = if flow.is_sign_negative() { -cap_abs } else { cap_abs };
+                                for (_account, delta) in asset_legs.iter_mut() {
+                                    *delta = (*delta * ratio).round_dp(2);
+                                }
+                                asset_legs.retain(|_, v| !v.is_zero());
                             }
                         }
 
@@ -286,7 +296,7 @@ pub fn collect_bucket_tx_flows(
                             flow,
                             payee: tx.payee.clone(),
                             narration: tx.narration.clone(),
-                            location_deltas: BTreeMap::new(),
+                            location_deltas: asset_legs,
                             metadata: tx.metadata.clone(),
                         });
                     }
@@ -660,9 +670,7 @@ pub fn collect_asset_locations(
     let prefix = format!("{}.", bucket);
     let mut locations: BTreeMap<String, Decimal> = BTreeMap::new();
     for flow in flows {
-        if flow.kind != BucketKind::Asset {
-            continue;
-        }
+        if flow.location_deltas.is_empty() { continue; }
         if flow.bucket != bucket && !flow.bucket.starts_with(&prefix) {
             continue;
         }
