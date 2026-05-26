@@ -52,8 +52,10 @@ pub fn render_summary_report_text(
     for (bucket, summary) in &entries {
         let remain = summary.planned - summary.actual;
         let status = if remain.is_sign_negative() { "超支" } else { "正常" };
-        total_planned += summary.planned;
-        total_actual += summary.actual;
+        if !summary.planned.is_zero() {
+            total_planned += summary.planned;
+            total_actual += summary.actual;
+        }
         let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
             bucket, fmt_decimal(summary.planned), fmt_decimal(summary.actual),
             fmt_pct(summary.actual, summary.planned), fmt_decimal(remain), status);
@@ -174,6 +176,16 @@ fn sort_entries<'a>(
         }),
         _ => {}
     }
+    // planned 为 0 的跟踪桶始终排最后
+    entries.sort_by(|a, b| {
+        if a.1.planned.is_zero() == b.1.planned.is_zero() {
+            std::cmp::Ordering::Equal
+        } else if a.1.planned.is_zero() {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Less
+        }
+    });
 }
 
 /// 过滤掉已有父桶存在于 summaries 中的子桶（避免重复计算）。
@@ -576,8 +588,10 @@ pub fn render_summary_markdown(
     for (bucket, summary) in &entries {
         let remain = summary.planned - summary.actual;
         let status = if remain.is_sign_negative() { "超支" } else { "正常" };
-        total_planned += summary.planned;
-        total_actual += summary.actual;
+        if !summary.planned.is_zero() {
+            total_planned += summary.planned;
+            total_actual += summary.actual;
+        }
         let _ = writeln!(out, "| {} | {} | {} | {} | {} | {} |",
             bucket, fmt_decimal(summary.planned), fmt_decimal(summary.actual),
             fmt_pct(summary.actual, summary.planned), fmt_decimal(remain), status);
