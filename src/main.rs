@@ -23,11 +23,17 @@ use crate::util::fmt_decimal;
 
 /// 程序入口。
 fn main() -> Result<()> {
-    // Windows 系统切换控制台输出到 UTF-8 编码，避免重定向乱码
+    // Windows 系统切换 stdout 到 UTF-8，覆盖控制台和文件重定向两种场景
     #[cfg(windows)]
     {
-        unsafe extern "system" { fn SetConsoleOutputCP(code: u32) -> i32; }
-        unsafe { SetConsoleOutputCP(65001); }
+        unsafe extern "system" {
+            fn SetConsoleOutputCP(code: u32) -> i32;
+            fn _setmode(fd: i32, mode: i32) -> i32;
+        }
+        unsafe {
+            SetConsoleOutputCP(65001);
+            _setmode(1, 0x40000); // stdout → UTF-8 mode
+        }
     }
 
     let mut cli = Cli::parse();
