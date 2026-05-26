@@ -5,21 +5,24 @@ Beancount 预算工具。独立的预算分析工具，输入账本与预算配�
 ## 功能
 
 - 月度预算 + 同月额外预算（如 `2026-06 绩效`）
-- **YAML 嵌套层级预算**（`生活费: {交通: 1500, 饮食: 2500}` 父子桶自动聚合）
-- **任意时间范围查询**（`--from` / `--to` / `--year`）
+- **YAML 嵌套层级预算**（父子桶自动聚合，支持 `--expand` 展开子桶）
+- **任意时间范围查询**（`--month` / `--from` / `--to` / `--year`）
 - **多桶归属**（`budget: "数码, 爱好"` 逗号分隔，各计全额；支持中文逗号 `，`）
-- **桶名:金额 / 桶名900 分配**（`budget: "电子产品900, 旅游：900"` 一笔转账拆入多桶）
+- **桶名:金额 / 桶名900 分配**（一笔转账拆入多桶）
+- **Income 归入预算**（显式写标签的收入计入入账，抵消支出）
+- **简写桶名自动补全**（`额外储蓄` → `投资.额外储蓄`）
 - **同比对比**（`--compare 2025-12` 并排展示两期数据）
-- 月度 / 累计 / 区间 / 年份四种统计范围
+- 四种统计范围：月度 / 累计 / 区间 / 年份
 - 预算桶历史查询（汇总 / 分月 / 明细 + 关键词过滤 + 资产流隐藏）
-- **资产桶资金位置追踪**（自动分「持仓/已分配」/「超支/出金来源」，超支时隐藏前者）
-- **Expense 桶资产退化**：纯资产转移自动转为位置追踪（汇总表不计入支出）
-- **expense 流携带 asset 腿**：每笔支出自动记录资金来源账户位置
-- 使用率百分比列 + 按需排序（`--sort-by remain|actual|planned`）
-- `bucket_types` 可选：`asset_bucket_accounts` 中出现的桶自动推断为 asset
-- 未标注预算的 `Expenses:*` 自动归入默认生活费桶
-- 递归扫描账本目录（兼容 Tab 缩进、单空格分隔、YAML 空值）
-- 报告全中文化输出 + 自动导出 Markdown / CSV / TXT + 横向透视 CSV
+- **资产位置追踪**（「持仓/已分配」/「超支/出金来源」分组，超支时隐藏前者）
+- **Expense 桶资产退化**：纯资产转移自动记录位置（不虚增支出）
+- **跟踪桶自动沉底**（planned=0 的桶排在底部，合计不纳入）
+- 使用率百分比 + 按需排序（`--sort-by`）
+- `bucket_types` 可选：`asset_bucket_accounts` 中的桶自动推断为 asset
+- 未标注 `budget:` 的 `Expenses:*` 自动归入默认生活费桶
+- 递归扫描目录（兼容 Tab 缩进、单空格分隔、YAML 空值、具体日期 key）
+- 报告全中文化 + 导出 Markdown / CSV / TXT + 横向透视 CSV
+- Windows 重定向 UTF-8 输出
 
 ## 构建
 
@@ -64,14 +67,8 @@ cargo build --release
 ```yaml
 default_expense_bucket: 生活费
 
-bucket_types:
-  生活费: expense
-  数码: expense
-  储蓄: asset
-
 defaults:
   "Expenses:Consume:交通": 生活费.交通
-  "Expenses:Consume:饮食": 生活费.饮食
   "Expenses:Consume:电子": 数码
 
 asset_bucket_accounts:
@@ -79,15 +76,13 @@ asset_bucket_accounts:
     - "Assets:Bank:建设银行"
 ```
 
+> `bucket_types` 可以省略——`asset_bucket_accounts` 中出现的桶自动识别为 asset，其余默认 expense。
+
 **Step 3** — 运行：
 
 ```bash
-beancount-budget-tool \
-  -l my_ledger.bean \
-  -m 2026-06 \
-  --budgets my_budgets.yaml \
-  --mappings my_mappings.yaml \
-  --scope cumulative
+beancount-budget-tool -l my_ledger.bean -m 2026-06 \
+  --budgets my_budgets.yaml --mappings my_mappings.yaml --scope cumulative
 ```
 
 输出：
@@ -107,35 +102,40 @@ beancount-budget-tool \
 
 ### budgets.yaml
 
-三种写法：
+四种 key 格式：
 
 ```yaml
-# 1. 扁平桶
+# 1. 月度（YYYY-MM）
 "2026-06":
   数码: 3000
   旅行: 2000
 
-# 2. 嵌套层级 → 自动展平为 生活费.交通、生活费.饮食
+# 2. 具体日期（YYYY-MM-DD）
+"2000-08-20 对方还款":
+  生活费: 500
+
+# 3. 月度 + 标签（绩效、年终奖等，与基础月预算叠加）
+"2026-06 绩效":
+  旅行: 2000
+
+# 4. 嵌套层级 → 自动展平为 生活费.交通、生活费.饮食
 "2026-06":
   生活费:
     交通: 1500
     饮食: 2500
-
-# 3. 额外标签预算（与基础月预算叠加）
-"2026-06 绩效":
-  旅行: 2000
-  爱好: 1000
 ```
 
-`生活费` 是父桶，`生活费.交通` 是子桶。父桶统计自动由子桶之和得出。查询 `--bucket 生活费` 汇总全子桶，`--bucket 生活费.交通` 只看交通。
+- `生活费` 是父桶，`生活费.交通` 是子桶。父桶统计自动由子桶之和得出。
+- 查询 `--bucket 生活费` 汇总全子桶，`--bucket 生活费.交通` 只看交通。
+- 日期 key（`YYYY-MM-DD`）的月份部分用于范围过滤，日期信息保留在标签中展示。
 
 ### mappings.yaml
 
 ```yaml
 default_expense_bucket: 生活费           # 无匹配时的兜底桶
 
-# bucket_types 是可选的：asset_bucket_accounts 中出现的桶自动推断为 asset，
-# 其余默认 expense。只有需要显式声明时才写。
+# bucket_types 是可选的：asset_bucket_accounts 中出现的桶自动推断为 asset
+# 只有需要显式声明时才写
 bucket_types:
   储蓄: asset
 
@@ -149,12 +149,12 @@ asset_bucket_accounts:                   # 可选：资产桶的账户前缀
     - "Assets:Invest:货币基金"
 ```
 
-> - 不想让某类账户自动划到特定桶：删掉对应 `defaults` 行，只有显式写 `budget:` 才会进入该桶。
-> - 不想手写 `bucket_types`：只要资产桶出现在 `asset_bucket_accounts` 里，系统自动识别为 asset，其余默认 expense。
+- **不想自动划到某桶**：删掉对应 `defaults` 行，只有显式写 `budget:` 才入桶。
+- **不想手写 `bucket_types`**：`asset_bucket_accounts` 中的桶自动识别为 asset。
 
 ## Beancount 交易标注
 
-### 基本
+### 基本用法
 
 ```beancount
 2026-06-17 * "京东" "买耳机"
@@ -177,71 +177,76 @@ asset_bucket_accounts:                   # 可选：资产桶的账户前缀
 
 ### 桶名:金额 / 桶名900（基金拆分）
 
-一笔转账同时属于多个桶，按指定金额分配。三种写法等价：
+三种写法等价，支持中文逗号 `，` 混用：
 
 ```beancount
-; 冒号（半角 :）
+; 半角冒号 + 英文逗号
 budget: "电子产品:900, 旅游:900, 保险:200"
 
-; 中文冒号（全角 ：），不用切输入法
-budget: "电子产品：900, 旅游：900, 保险200"
+; 全角冒号（不用切输入法）+ 中文逗号
+budget: "电子产品：900，旅游900，保险200"
 
 ; 无分隔符（尾部数字自动识别）
 budget: "电子产品900, 旅游900, 保险200"
 ```
 
-支持中文逗号 `，` 和英文逗号 `,` 混用。
+配合 `asset_bucket_accounts` 可独立追踪各桶的资金位置及后续消费扣减。
 
-配合 `asset_bucket_accounts` 配置后，各桶可独立追踪资金位置和消费扣减：
+### 简写桶名自动补全
+
+写 `额外储蓄` 会自动查找 `*.额外储蓄` 的完整桶名，所以：
 
 ```beancount
-; 消费扣减
-2026-05-01 * "京东" "买MacBook"
-  budget: "电子产品"
-  Expenses:Consume:电子  1200 CNY
-  Assets:Invest:货币基金A  -1200 CNY
+budget: "额外储蓄13847"    # → 自动匹配到 投资.额外储蓄
+budget: "待投资金2000"     # → 自动匹配到 投资.待投资金
 ```
 
-`--bucket 电子产品 --bucket-view detail` 就能看到：存入 +900 → 消费 -1200 → 位置 基金A:-300。
+`--bucket 额外储蓄` 同样自动补全。
 
-**Expense 桶自动退化**：如果交易只有 Assets↔Assets（纯资产转移），不论是否指定金额，系统不会凭空生成支出，而是自动转为资产位置追踪。汇总表 actual 不变，明细末尾展示「持仓/已分配」（未超支时）或仅「超支/出金来源」（超支时）。支出消费的 asset 腿也会自动记录到位置，帮助追溯资金来源。
+### Income 标签通道
+
+工资分桶在 `budgets.yml` 里做，不写标签。零星收入写 `budget: "生活费"` 即可入账抵消支出：
+
+```beancount
+2026-04-03 * "广告" "广告费"
+  budget: "生活费"
+  Income:Misc:广告  -50 CNY
+  Assets:Bank:工行  50 CNY
+```
+
+Income 只有**显式写 `budget:` 标签**的才入桶，不写标签的收入（工资、退款等）不影响预算。
+
+### 跟踪桶（纯统计不预算）
+
+`budgets.yml` 里写 `planned: 0`，只看不设预算：
+
+```yaml
+"2026-06":
+  大额支出: 0        # 仅跟踪，不计入预算总额
+```
+
+```beancount
+budget: "数码, 大额支出"   # 花费同时计入数码预算和大额支出跟踪
+```
+
+汇总表中跟踪桶排在底部，合计不纳入其 actual。
+
+### Expense 桶自动退化
+
+纯资产转移（只有 Assets↔Assets）不会凭空生成支出，而是自动记录位置变动。超支时「持仓/已分配」段隐藏，仅显示「超支/出金来源」。
 
 ### 支付链路标注
 
-支付链路中的每一段都可以写 `budget:`，不会重复计算支出。只有含 `Expenses:` 行的那笔才计入支出，其余纯资产转移只记位置：
+链路中每段都可写 `budget:`，不重复算支出：
 
 ```beancount
-; 链路：银行卡 → 余额宝 → 基金 → 消费
-2026-04-01 * "工行" "转入余额宝"
-  budget: "数码"
-  Assets:Digital:余额宝  5000 CNY
-  Assets:Bank:工行  -5000 CNY
-  → 不计支出，仅位置变动
-
-2026-04-01 * "蚂蚁" "余额宝转基金"
-  budget: "数码"
-  Assets:Invest:货币基金  5000 CNY
-  Assets:Digital:余额宝  -5000 CNY
-  → 不计支出，仅位置变动
-
+# 只有最后一段（有 Expenses: 行）才算支出
 2026-04-02 * "京东" "买MacBook"
   budget: "数码"
   Expenses:Consume:电子  12000 CNY
   Assets:Invest:货币基金  -5000 CNY
   Assets:Bank:工行  -7000 CNY
-  → 支出 12000，位置扣减 5000+7000
-```
-
-### 不写 budget（自动归类）
-
-```beancount
-2026-06-16 * "工行" "地铁"       ; 没写 budget
-  Expenses:Consume:交通  6 CNY    ; → 前缀匹配到 生活费.交通
-  Assets:Bank:工行  -6 CNY
-
-2026-06-19 * "淘宝" "杂货"       ; 没写 budget
-  Expenses:Consume:杂货  50 CNY   ; → 无匹配，回退到 生活费
-  Assets:Bank:工行  -50 CNY
+  → 支出 12000，位置扣减 Fund+Bank
 ```
 
 ### #tag / ^link（Beancount 原生标签）
@@ -250,10 +255,19 @@ budget: "电子产品900, 旅游900, 保险200"
 2026-05-16 * "工行" "机票" #东京 #家族旅行 ^trip-2026
   budget: "旅行"
   Expenses:Travel  5000 CNY
-  Assets:Bank:工行  -5000 CNY
 ```
 
-标签会被提取为 metadata，可配合 `--filter` 搜索。
+标签被提取为 metadata，配合 `--filter` 搜索。
+
+### 不写 budget（自动归类）
+
+```beancount
+2026-06-16 * "工行" "地铁"       ; 没写 budget
+  Expenses:Consume:交通  6 CNY    ; → 前缀匹配到 生活费.交通
+
+2026-06-19 * "淘宝" "杂货"       ; 没写 budget
+  Expenses:Consume:杂货  50 CNY   ; → 无匹配，回退到 生活费
+```
 
 ## CLI 参数
 
@@ -268,17 +282,18 @@ budget: "电子产品900, 旅游900, 保险200"
 | `--budgets <FILE>` | 预算配置文件（必需） |
 | `--mappings <FILE>` | 映射配置文件（必需） |
 | `--scope <month\|cumulative>` | 统计范围。默认 `month` |
-| `--bucket <NAME>` | 指定桶名称，输出该桶单独报告 |
+| `--bucket <NAME>` | 指定桶名称，输出该桶单独报告（支持简写自动补全） |
 | `--bucket-view <summary\|monthly\|detail>` | 桶视图粒度。默认 `summary` |
-| `--filter <KEYWORD>` | 过滤交易（匹配 payee / narration / metadata） |
+| `--filter <KEYWORD>` | 过滤交易（匹配 payee / narration / metadata / #tag） |
 | `--sort-by <name\|planned\|actual\|remain>` | 汇总表排序。默认 `name` |
+| `--expand` | 展开所有子桶到汇总表 |
 | `--compare <YYYY-MM>` | 同比对比：并排展示两期数据 |
 | `--show-locations` | Summary 视图下显示资产桶资金位置 |
+| `--hide-asset-flows` | 明细视图中隐藏资产间转移，仅显示预算收入和实际支出 |
 | `--out-dir <DIR>` | 导出报告到目录 |
 | `--csv-pivot` | 额外生成横向月表 CSV（月 × 桶） |
 | `--currency <CODE>` | 统计币种，默认 `CNY` |
 | `--strict` | 严格模式：存在未知预算桶则非零退出 |
-| `--hide-asset-flows` | 明细视图中隐藏资产间转移，仅显示预算收入和实际支出 |
 
 ### 时间范围示例
 
@@ -295,10 +310,13 @@ budget: "电子产品900, 旅游900, 保险200"
 # 今年的整体预算执行情况
 --year 2026
 
+# 展开子桶看明细
+--year 2026 --expand
+
 # 今年 vs 去年对比
 --year 2026 --compare 2025-12
 
-# 按超支程度排，最严重的在顶部
+# 按超支程度排
 --year 2026 --sort-by remain
 
 # 搜旅行桶里"东京"相关的消费
@@ -308,26 +326,7 @@ budget: "电子产品900, 旅游900, 保险200"
 --year 2026 --out-dir ./reports --csv-pivot
 ```
 
-### `--bucket-view` 选项
-
-```bash
---bucket 旅行 --bucket-view summary   # 仅汇总统计
---bucket 旅行 --bucket-view monthly   # 按月拆分（预算收入/支出/结余）
---bucket 旅行 --bucket-view detail    # 每笔交易明细 + 资产位置
-```
-
-### `--sort-by` 排序
-
-```bash
---sort-by name      # 按桶名字典序（默认）
---sort-by planned   # 按预算从大到小
---sort-by actual    # 按实际支出从大到小
---sort-by remain    # 按结余从小到大（超支的排最前）
-```
-
 ## 输出文件
-
-`--out-dir ./reports` 后生成：
 
 | 文件 | 内容 |
 |------|------|
@@ -335,14 +334,15 @@ budget: "电子产品900, 旅游900, 保险200"
 | `buckets-{range}.csv` | 每桶 planned/actual/remain |
 | `bucket-{桶名}-{range}.md` | 某桶完整报告（分月 + 明细 + 资产位置） |
 | `asset-locations-{桶名}-{range}.md` | 资产桶资金位置 |
-| `pivot-{range}.csv`（需 `--csv-pivot`） | 横向月表（行=月，列=桶，拖 Excel 画图） |
-
-`{range}` 示例：`2026-06-month`、`2026-06-cumulative`、`2026-01_2026-06`。
+| `pivot-{range}.csv`（需 `--csv-pivot`） | 横向月表（行=月，列=桶） |
 
 ## 注意事项
 
-- **资产位置跟着 scope 走**：`--scope month` 只显示当月位置变动，`--scope cumulative` 显示全部历史。
-- **格式兼容**：支持 Tab 缩进、单空格分隔的账本文件，YAML 空值（`额外储蓄:` 后面不填数字）视为 0。
+- **位置跟着 scope 走**：`--scope month` 只看当月位置，`--scope cumulative` 看全部历史。
+- **格式兼容**：支持 Tab 缩进、单空格分隔、YAML 空值（视为 0）。
+- **跟踪桶**：planned=0 的桶排在底部，合计不纳入其实际数据。
+- **Income**：仅显式写 `budget:` 的 Income 入桶，不写标签的（工资、退款等）完全忽略。
+- **Windows**：输出 UTF-8，重定向 `> tmp.txt` 正常显示。
 
 ## 完整示例
 
