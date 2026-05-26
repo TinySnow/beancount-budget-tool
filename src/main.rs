@@ -51,7 +51,7 @@ fn main() -> Result<()> {
     let budget_directives = filter_directives_by_range(budget_directives, &date_range);
     let tx_flows = filter_flows_by_range(tx_flows, &date_range);
 
-    let summaries = budget::summarize_buckets(&budget_directives, &tx_flows, month_str, cli.scope);
+    let summaries = budget::summarize_buckets(&budget_directives, &tx_flows, month_str, cli.scope, &mappings);
 
     let known_buckets = config::collect_known_buckets(&budget_directives, &mappings);
     let warnings = budget::collect_scope_warnings(&tx_flows, &known_buckets, month_str, cli.scope);
@@ -76,7 +76,7 @@ fn main() -> Result<()> {
             &cmp_range,
         );
         let cmp_target = cmp_range.end_month().to_string();
-        let cmp_summaries = budget::summarize_buckets(&cmp_directives, &cmp_flows, &cmp_target, cli.scope);
+        let cmp_summaries = budget::summarize_buckets(&cmp_directives, &cmp_flows, &cmp_target, cli.scope, &mappings);
         let cmp_warnings = budget::collect_scope_warnings(&cmp_flows, &known_buckets, &cmp_target, cli.scope);
 
         let output = report::render_compare_report_text(
@@ -353,12 +353,12 @@ mod tests {
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY").expect("flows");
         fs::remove_file(tmp).ok();
 
-        let month_summary = summarize_buckets(&directives, &flows, "2026-06", ReportScope::Month);
+        let month_summary = summarize_buckets(&directives, &flows, "2026-06", ReportScope::Month, &mappings);
         assert_eq!(month_summary["旅行"].planned, dec!(4000));
         assert_eq!(month_summary["旅行"].actual, dec!(0));
 
         let cum_summary =
-            summarize_buckets(&directives, &flows, "2026-06", ReportScope::Cumulative);
+            summarize_buckets(&directives, &flows, "2026-06", ReportScope::Cumulative, &mappings);
         assert_eq!(cum_summary["旅行"].planned, dec!(7000));
         assert_eq!(cum_summary["旅行"].actual, dec!(1000));
     }
@@ -462,7 +462,13 @@ mod tests {
             },
         ];
         let flows = vec![];
-        let summaries = summarize_buckets(&directives, &flows, "2026-06", ReportScope::Month);
+        let mappings = BudgetMappings {
+            defaults: BTreeMap::new(),
+            default_expense_bucket: "生活费".into(),
+            bucket_types: BTreeMap::new(),
+            asset_bucket_accounts: BTreeMap::new(),
+        };
+        let summaries = summarize_buckets(&directives, &flows, "2026-06", ReportScope::Month, &mappings);
 
         assert_eq!(summaries["生活费.交通"].planned, dec!(1500));
         assert_eq!(summaries["生活费.饮食"].planned, dec!(2500));

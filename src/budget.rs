@@ -134,6 +134,50 @@ fn parse_bucket_amount(raw: &str) -> (&str, Option<Decimal>) {
     (trimmed, None)
 }
 
+/// 将一笔纯资产转移按资产桶方式处理（用于 expense 桶的退化分支）。
+fn process_as_asset(
+    tx: &LedgerTransaction,
+    bucket_name: &str,
+    cap_amount: Option<Decimal>,
+    target_currency: &str,
+    mappings: &BudgetMappings,
+    inferred_asset_accounts: &mut HashMap<String, BTreeSet<String>>,
+    month: &str,
+    flows: &mut Vec<BucketTxFlow>,
+) {
+    let Some((mut flow, mut location_deltas)) = derive_asset_bucket_flow(
+        tx, bucket_name, target_currency, mappings, inferred_asset_accounts,
+    ) else { return; };
+
+    if let Some(cap) = cap_amount {
+        if flow.is_zero() {
+            flow = cap;
+        } else {
+            let ratio = (cap / flow).round_dp(6);
+            flow = cap;
+            for (_account, delta) in location_deltas.iter_mut() {
+                *delta = (*delta * ratio).round_dp(2);
+            }
+            location_deltas.retain(|_, v| !v.is_zero());
+        }
+    }
+
+    if !flow.is_zero() || !location_deltas.is_empty() {
+        // 退化分支生成 Asset 类型流，summary 层会按配置类型过滤
+        flows.push(BucketTxFlow {
+            date: tx.date,
+            month: month.to_string(),
+            bucket: bucket_name.to_string(),
+            kind: BucketKind::Asset,
+            flow,
+            payee: tx.payee.clone(),
+            narration: tx.narration.clone(),
+            location_deltas,
+            metadata: tx.metadata.clone(),
+        });
+    }
+}
+
 /// 解析所有账本文件，将每笔交易映射到对应的预算桶资金流动记录。
 ///
 /// # 映射逻辑
@@ -201,11 +245,18 @@ pub fn collect_bucket_tx_flows(
                             if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
                             flow -= amount;
                         }
-                        // 无实际 Expense posting 时不凭空生成支出
                         if flow.is_zero() {
+                            // 无实际支出但有指定金额 → 可能是纯资产转移（基金申购等），
+                            // 回退为 Asset 模式记录位置
+                            if cap_amount.is_some() {
+                                // 委托给 Asset 分支处理（见下方）
+                                process_as_asset(
+                                    &tx, bucket_name, cap_amount, target_currency, mappings,
+                                    &mut inferred_asset_accounts, &month, &mut flows,
+                                );
+                            }
                             continue;
                         }
-                        // cap_amount 仅作为支出上限，限制不超过指定值
                         if let Some(cap) = cap_amount {
                             let cap_abs = cap.abs();
                             if flow.abs() > cap_abs {
@@ -433,18 +484,17 @@ pub fn derive_asset_bucket_flow(
 
 /// 按桶聚合预算指令与资金流动，生成汇总统计。
 ///
-/// 叶节点桶（如 `生活费.交通`）的 planned/actual 会自动向上聚合到
-/// 其父桶（如 `生活费`），形成层级汇总。父桶自身的统计值为其所有
-/// 子桶统计值之和。
+/// 叶节点桶的 planned/actual 会自动向上聚合到父桶。
+/// 仅计入与桶配置类型匹配的流（expense 桶只算 expense 流，asset 桶只算 asset 流）。
 pub fn summarize_buckets(
     directives: &[BudgetDirective],
     flows: &[BucketTxFlow],
     target_month: &str,
     scope: ReportScope,
+    mappings: &BudgetMappings,
 ) -> BTreeMap<String, BucketSummary> {
     let mut summaries: BTreeMap<String, BucketSummary> = BTreeMap::new();
 
-    // 第一轮：叶节点本身的预算与实际
     for item in directives {
         if !is_month_in_scope(&item.month, target_month, scope) {
             continue;
@@ -459,12 +509,15 @@ pub fn summarize_buckets(
         if !is_month_in_scope(&flow.month, target_month, scope) {
             continue;
         }
-        let amount = flow.actual_amount();
-        let bucket = &flow.bucket;
+        // 只计入与桶配置类型匹配的流
+        let bucket_kind = mappings.bucket_kind(&flow.bucket);
+        if flow.kind != bucket_kind {
+            continue;
+        }
         summaries
-            .entry(bucket.clone())
+            .entry(flow.bucket.clone())
             .or_default()
-            .actual += amount;
+            .actual += flow.actual_amount();
     }
 
     // 第二轮：子桶向上聚合到父桶
@@ -557,8 +610,11 @@ pub fn build_scoped_bucket_data(
     let planned = directives
         .iter()
         .fold(Decimal::ZERO, |acc, item| acc + item.amount);
+    // 仅汇总与桶配置类型匹配的流（exclude 退化 Asset 流 for expense 桶）
+    let bucket_kind = mappings.bucket_kind(bucket);
     let actual = flows
         .iter()
+        .filter(|f| f.kind == bucket_kind)
         .fold(Decimal::ZERO, |acc, flow| acc + flow.actual_amount());
     let remain = planned - actual;
 
