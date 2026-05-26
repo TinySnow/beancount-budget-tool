@@ -365,24 +365,17 @@ pub fn collect_bucket_tx_flows(
             continue;
         }
 
-        // 未显式标注 budget 的 Expense/Income 过账：按映射或默认生活费桶归类
+        // 未显式标注 budget 的消费类过账：按映射或默认生活费桶归类
         let mut per_bucket_flow: BTreeMap<String, Decimal> = BTreeMap::new();
         for posting in &tx.postings {
-            let is_expense = posting.account.starts_with("Expenses:");
-            let is_income = posting.account.starts_with("Income:");
-            if !is_expense && !is_income {
+            if !posting.account.starts_with("Expenses:") {
                 continue;
             }
             let Some(amount) = posting.amount else { continue; };
             if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
 
-            let bucket = if is_income {
-                mappings.default_expense_bucket.clone()
-            } else {
-                crate::config::resolve_bucket_by_account(mappings, &posting.account)
-                    .unwrap_or_else(|| mappings.default_expense_bucket.clone())
-            };
-            // 统一用 flow -= amount（Expense 为正，Income 为负，借贷抵消自动处理）
+            let bucket = crate::config::resolve_bucket_by_account(mappings, &posting.account)
+                .unwrap_or_else(|| mappings.default_expense_bucket.clone());
             *per_bucket_flow.entry(bucket).or_default() -= amount;
         }
 
