@@ -23,6 +23,13 @@ use crate::util::fmt_decimal;
 
 /// 程序入口。
 fn main() -> Result<()> {
+    // Windows 系统切换控制台输出到 UTF-8 编码，避免重定向乱码
+    #[cfg(windows)]
+    unsafe {
+        extern "system" { fn SetConsoleOutputCP(code: u32) -> i32; }
+        SetConsoleOutputCP(65001); // CP_UTF8
+    }
+
     let mut cli = Cli::parse();
 
     // 解析时间范围：--from/--to 与 --month 互斥
