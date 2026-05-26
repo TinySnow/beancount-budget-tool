@@ -210,6 +210,11 @@ pub fn render_bucket_report_text(
     let _ = writeln!(out, "月预算: {} {}", fmt_decimal(data.planned), currency);
     let _ = writeln!(out, "已支出: {} {}", fmt_decimal(data.actual), currency);
     let _ = writeln!(out, "结余:   {} {}", fmt_decimal(data.remain), currency);
+    let _ = writeln!(
+        out,
+        "状态: {}",
+        if data.remain.is_sign_negative() { "超支" } else { "正常" }
+    );
 
     match bucket_view {
         BucketView::Summary => {}
@@ -664,6 +669,7 @@ pub fn render_bucket_markdown(
     let _ = writeln!(out, "- 月预算: `{}` {}", fmt_decimal(data.planned), currency);
     let _ = writeln!(out, "- 已支出: `{}` {}", fmt_decimal(data.actual), currency);
     let _ = writeln!(out, "- 结余: `{}` {}", fmt_decimal(data.remain), currency);
+    let _ = writeln!(out, "- 状态: `{}`", if data.remain.is_sign_negative() { "超支" } else { "正常" });
     let _ = writeln!(out);
 
     append_bucket_monthly_view(
