@@ -443,7 +443,7 @@ pub fn append_asset_locations_view(
     let sources: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_negative()).collect();
 
     if !holdings.is_empty() {
-        let _ = writeln!(out, "\n当前持仓（截至 {}）:", target_month);
+        let _ = writeln!(out, "\n持仓/已分配（截至 {}）:", target_month);
         for (account, amount) in &holdings {
             let _ = writeln!(out, "{}: {} {}", shorten_account_label(account), fmt_decimal(**amount), currency);
         }
@@ -706,7 +706,7 @@ pub fn render_bucket_markdown(
             let holdings: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_positive()).collect();
             let negatives: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_negative()).collect();
             if !holdings.is_empty() {
-                let _ = writeln!(out, "**当前持仓**");
+                let _ = writeln!(out, "**持仓/已分配**");
                 let _ = writeln!(out);
                 let _ = writeln!(out, "| 账户 | 金额 |");
                 let _ = writeln!(out, "|---|---:|");
