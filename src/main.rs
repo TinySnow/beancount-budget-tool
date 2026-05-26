@@ -57,7 +57,6 @@ fn main() -> Result<()> {
     let warnings = budget::collect_scope_warnings(&tx_flows, &known_buckets, month_str, cli.scope);
 
     if let Some(ref compare_month) = cli.compare {
-        // 构建对比区间的 DateRange：同类型但月份替换
         util::validate_month(compare_month)?;
         let cmp_range = match &date_range {
             DateRange::Month { scope, .. } => DateRange::Month {
@@ -502,6 +501,7 @@ mod tests {
             sort_by: None,
             csv_pivot: false,
             compare: None,
+            hide_asset_flows: false,
             filter: None,
         };
         let directives = vec![
