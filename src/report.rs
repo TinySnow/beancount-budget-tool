@@ -239,20 +239,12 @@ pub fn render_bucket_report_text(
                 &data.flows,
                 all_flows,
                 true,
+                data.remain,
             )
         }
     }
 
     if data.kind == BucketKind::Asset || all_flows.iter().any(|f| f.bucket == data.bucket && !f.location_deltas.is_empty()) {
-        let show_here = match bucket_view {
-            BucketView::Summary => show_locations,
-            BucketView::Monthly => true,
-            BucketView::Detail => false,
-        };
-        if show_here {
-            let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), all_flows);
-            append_asset_locations_view(&mut out, range.end_month(), currency, &locations);
-        }
     }
 
     out
@@ -336,6 +328,7 @@ pub fn append_bucket_detail_view(
     flows: &[BucketTxFlow],
     all_flows: &[BucketTxFlow],
     show_locations_in_detail: bool,
+    remain: Decimal,
 ) {
     let _ = writeln!(out, "\n历史明细:");
 
@@ -425,24 +418,26 @@ pub fn append_bucket_detail_view(
         && show_locations_in_detail
     {
         let locations = budget::collect_asset_locations(bucket, target_month, all_flows);
-        append_asset_locations_view(out, target_month, currency, &locations);
+        append_asset_locations_view(out, target_month, currency, &locations, remain);
     }
 }
 
 /// 追加资产位置表格到输出缓冲区。
-/// 正数归入「当前持仓」，负数归入「出金来源」。
+/// 正数归入「持仓/已分配」，负数归入「超支/出金来源」。
+/// 超支时隐藏「持仓/已分配」段。
 pub fn append_asset_locations_view(
     out: &mut String,
     target_month: &str,
     currency: &str,
     locations: &BTreeMap<String, Decimal>,
+    remain: Decimal,
 ) {
     if locations.is_empty() { return; }
 
     let holdings: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_positive()).collect();
     let sources: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_negative()).collect();
 
-    if !holdings.is_empty() {
+    if !holdings.is_empty() && !remain.is_sign_negative() {
         let _ = writeln!(out, "\n持仓/已分配（截至 {}）:", target_month);
         for (account, amount) in &holdings {
             let _ = writeln!(out, "{}: {} {}", shorten_account_label(account), fmt_decimal(**amount), currency);
@@ -693,6 +688,7 @@ pub fn render_bucket_markdown(
         &data.flows,
         all_flows,
         false,
+        data.remain,
     );
 
     if data.kind == BucketKind::Asset || data.flows.iter().any(|f| !f.location_deltas.is_empty()) {
