@@ -239,7 +239,7 @@ pub fn render_bucket_report_text(
             &mut out,
             &data.bucket,
             data.kind,
-            range.end_month(),
+            &range.end_month(),
             config.scope,
             currency,
             &data.directives,
@@ -251,7 +251,7 @@ pub fn render_bucket_report_text(
                 currency,
                 &data.bucket,
                 data.kind,
-                range.end_month(),
+                &range.end_month(),
                 &data.directives,
                 &data.flows,
                 all_flows,
@@ -269,8 +269,8 @@ pub fn render_bucket_report_text(
             BucketView::Detail => false,
         };
         if show_here {
-            let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), all_flows, config.scope);
-            append_asset_locations_view(&mut out, range.end_month(), currency, &locations, data.remain);
+            let locations = budget::collect_asset_locations(&data.bucket, &range.end_month(), all_flows, config.scope);
+            append_asset_locations_view(&mut out, &range.end_month(), currency, &locations, data.remain);
         }
     }
 
@@ -543,9 +543,9 @@ pub fn export_reports(
         fs::write(&path, report).with_context(|| format!("Failed to write {}", path.display()))?;
 
         if data.kind == BucketKind::Asset || data.flows.iter().any(|f| !f.location_deltas.is_empty()) {
-            let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), flows, config.scope);
+            let locations = budget::collect_asset_locations(&data.bucket, &range.end_month(), flows, config.scope);
             let location_report =
-                render_asset_locations_markdown(&data.bucket, range.end_month(), currency, &locations);
+                render_asset_locations_markdown(&data.bucket, &range.end_month(), currency, &locations);
             let location_filename = format!(
                 "asset-locations-{}-{}.md",
                 sanitize_filename(&bucket),
@@ -708,7 +708,7 @@ pub fn render_bucket_markdown(
         &mut out,
         &data.bucket,
         data.kind,
-        range.end_month(),
+        &range.end_month(),
         config.scope,
         currency,
         &data.directives,
@@ -720,7 +720,7 @@ pub fn render_bucket_markdown(
         currency,
         &data.bucket,
         data.kind,
-        range.end_month(),
+        &range.end_month(),
         &data.directives,
         &data.flows,
         all_flows,
@@ -730,7 +730,7 @@ pub fn render_bucket_markdown(
     );
 
     if data.kind == BucketKind::Asset || data.flows.iter().any(|f| !f.location_deltas.is_empty()) {
-        let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), all_flows, config.scope);
+        let locations = budget::collect_asset_locations(&data.bucket, &range.end_month(), all_flows, config.scope);
         let _ = writeln!(out);
         let _ = writeln!(out, "## 资产位置");
         let _ = writeln!(out);

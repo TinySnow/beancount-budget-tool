@@ -16,6 +16,7 @@ mod budget;
 mod report;
 
 use anyhow::{Context, Result, bail};
+use chrono::Datelike;
 use clap::Parser;
 use cli::{Cli, DateRange, ReportScope};
 
@@ -42,9 +43,9 @@ fn main() -> Result<()> {
     // 当使用 --from/--to 时，为了复用现有的 cumulative 汇总逻辑，
     // 将输入数据裁剪到 [from, to] 区间，并将 cli.month/scope 设为区间末月的累积模式
     if let DateRange::Range { ref from, ref to } = date_range {
-        cli.month = Some(to.clone());
+        cli.month = Some(format!("{:04}-{:02}", to.year(), to.month()));
         cli.scope = ReportScope::Cumulative;
-        let _ = from; // used in filtering below
+        let _ = from;
     }
 
     let month_str = cli.month.as_deref().unwrap_or("?");
@@ -77,9 +78,13 @@ fn main() -> Result<()> {
                 target: compare_month.clone(),
                 scope: *scope,
             },
-            DateRange::Range { to: _, .. } => DateRange::Range {
-                from: format!("{}-01", &compare_month[..4]),
-                to: compare_month.clone(),
+            DateRange::Range { .. } => DateRange::Range {
+                from: chrono::NaiveDate::from_ymd_opt(
+                    compare_month[..4].parse()?, 1, 1,
+                ).unwrap(),
+                to: chrono::NaiveDate::from_ymd_opt(
+                    compare_month[..4].parse()?, compare_month[5..].parse()?, 28,
+                ).unwrap(),
             },
         };
         let cmp_directives = filter_directives_by_range(config::load_budget_directives(&cli.budgets)
@@ -155,18 +160,18 @@ fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
         }
         let y: i32 = year.parse().context("--year must be a 4-digit number")?;
         return Ok(DateRange::Range {
-            from: format!("{:04}-01", y),
-            to: format!("{:04}-12", y),
+            from: chrono::NaiveDate::from_ymd_opt(y, 1, 1).unwrap(),
+            to: chrono::NaiveDate::from_ymd_opt(y, 12, 31).unwrap(),
         });
     }
     match (&cli.from, &cli.to, &cli.month) {
         (Some(from), Some(to), None) => {
-            util::validate_month(from)?;
-            util::validate_month(to)?;
-            if from > to {
+            let from_date = parse_date_arg(from)?;
+            let to_date = parse_date_arg(to)?;
+            if from_date > to_date {
                 bail!("--from ({}) must not be later than --to ({})", from, to);
             }
-            Ok(DateRange::Range { from: from.clone(), to: to.clone() })
+            Ok(DateRange::Range { from: from_date, to: to_date })
         }
         (None, None, Some(month)) => {
             util::validate_month(month)?;
@@ -179,25 +184,46 @@ fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
     }
 }
 
-/// 按时间范围过滤预算指令。
+/// 解析日期参数：YYYY-MM 展开为当月首日，YYYY-MM-DD 直接解析。
+fn parse_date_arg(raw: &str) -> Result<chrono::NaiveDate> {
+    if raw.len() == 7 {
+        util::validate_month(raw)?;
+        chrono::NaiveDate::parse_from_str(&format!("{}-01", raw), "%Y-%m-%d")
+            .with_context(|| format!("Invalid date: {}", raw))
+    } else if raw.len() == 10 {
+        chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+            .with_context(|| format!("Invalid date: {}", raw))
+    } else {
+        bail!("Expected YYYY-MM or YYYY-MM-DD, got: {}", raw)
+    }
+}
+
+/// 按时间范围过滤预算指令（日期级）。
 fn filter_directives_by_range(
     directives: Vec<config::BudgetDirective>,
     range: &DateRange,
 ) -> Vec<config::BudgetDirective> {
     directives
         .into_iter()
-        .filter(|d| range.contains(&d.month))
+        .filter(|d| {
+            let month_key = format!("{}-01", &d.month);
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(&month_key, "%Y-%m-%d") {
+                range.contains_date(date)
+            } else {
+                range.contains(&d.month)
+            }
+        })
         .collect()
 }
 
-/// 按时间范围过滤资金流动记录。
+/// 按时间范围过滤资金流动记录（日期级）。
 fn filter_flows_by_range(
     flows: Vec<budget::BucketTxFlow>,
     range: &DateRange,
 ) -> Vec<budget::BucketTxFlow> {
     flows
         .into_iter()
-        .filter(|f| range.contains(&f.month))
+        .filter(|f| range.contains_date(f.date))
         .collect()
 }
 
