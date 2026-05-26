@@ -13,8 +13,9 @@ Beancount 预算工具。独立的预算分析工具，输入账本与预算配�
 - 月度 / 累计 / 区间 / 年份四种统计范围
 - 预算桶历史查询（汇总 / 分月 / 明细 + 关键词过滤 + 资产流隐藏）
 - **资产桶资金位置追踪**（自动分「当前持仓」/「超支/出金来源」两组展示）
-- **Expense 桶资产退化**：有 `:金额` 但无实际 `Expenses:` 行时，自动转为资产位置追踪
+- **Expense 桶资产退化**：纯资产转移自动转为位置追踪（汇总表不计入支出）
 - 使用率百分比列 + 按需排序（`--sort-by remain|actual|planned`）
+- `bucket_types` 可选：`asset_bucket_accounts` 中出现的桶自动推断为 asset
 - 未标注预算的 `Expenses:*` 自动归入默认生活费桶
 - 递归扫描账本目录（兼容 Tab 缩进、单空格分隔、YAML 空值）
 - 报告全中文化输出 + 自动导出 Markdown / CSV / TXT + 横向透视 CSV
@@ -132,8 +133,9 @@ beancount-budget-tool \
 ```yaml
 default_expense_bucket: 生活费           # 无匹配时的兜底桶
 
-bucket_types:                            # 声明桶类型（expense / asset）
-  生活费: expense
+# bucket_types 是可选的：asset_bucket_accounts 中出现的桶自动推断为 asset，
+# 其余默认 expense。只有需要显式声明时才写。
+bucket_types:
   储蓄: asset
 
 defaults:                                # 账户前缀 → 桶名（最长前缀优先）
@@ -146,7 +148,8 @@ asset_bucket_accounts:                   # 可选：资产桶的账户前缀
     - "Assets:Invest:货币基金"
 ```
 
-> 如果不想让某类账户自动划到特定桶，删掉对应 `defaults` 行即可。删掉后只有显式写 `budget:` 才会进入该桶。
+> - 不想让某类账户自动划到特定桶：删掉对应 `defaults` 行，只有显式写 `budget:` 才会进入该桶。
+> - 不想手写 `bucket_types`：只要资产桶出现在 `asset_bucket_accounts` 里，系统自动识别为 asset，其余默认 expense。
 
 ## Beancount 交易标注
 
@@ -200,7 +203,7 @@ budget: "电子产品900, 旅游900, 保险200"
 
 `--bucket 电子产品 --bucket-view detail` 就能看到：存入 +900 → 消费 -1200 → 位置 基金A:-300。
 
-**Expense 桶自动退化**：如果桶类型是 expense，但交易只有 Assets↔Assets 且指定了金额（如 `budget: "保险240"`），系统不会凭空生成支出，而是自动转为资产位置追踪，汇总表 actual 不变，明细末尾有「当前持仓」。
+**Expense 桶自动退化**：如果桶类型是 expense，但交易只有 Assets↔Assets（纯资产转移），系统不会凭空生成支出，而是自动转为资产位置追踪，汇总表 actual 不变，明细末尾有「当前持仓」。有 `:金额` 则按指定金额记录，无金额则按全额记录。
 
 ### 不写 budget（自动归类）
 
