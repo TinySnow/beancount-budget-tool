@@ -28,9 +28,9 @@ use serde::Deserialize;
 
 use crate::util::{default_expense_bucket, validate_month};
 
-/// 预算 key 解析正则：`YYYY-MM` 或 `YYYY-MM 任意标签`
+/// 预算 key 解析正则：`YYYY-MM` 或 `YYYY-MM-DD` 或 `YYYY-MM 任意标签` 或 `YYYY-MM-DD 标签`
 static BUDGET_KEY_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<month>\d{4}-\d{2})(?:\s+(?P<label>\S.*))?$").expect("valid budget key regex")
+    Regex::new(r"^(?P<month>\d{4}-\d{2})(?:-(?P<day>\d{2}))?(?:\s+(?P<label>\S.*))?$").expect("valid budget key regex")
 });
 
 // ---------------------------------------------------------------------------
@@ -224,11 +224,12 @@ pub fn load_budget_directives(path: &Path) -> Result<Vec<BudgetDirective>> {
 /// 示例：
 /// - `"2026-06"` → `("2026-06", None)`
 /// - `"2026-06 绩效"` → `("2026-06", Some("绩效"))`
+/// - `"2000-08-20 对方还款"` → `("2000-08", Some("20日 对方还款"))`
 pub fn parse_budget_key(raw: &str) -> Result<(String, Option<String>)> {
     let trimmed = raw.trim();
     let cap = BUDGET_KEY_RE.captures(trimmed).ok_or_else(|| {
         anyhow!(
-            "Invalid budget key '{}', expected 'YYYY-MM' or 'YYYY-MM <label>'",
+            "Invalid budget key '{}', expected 'YYYY-MM' or 'YYYY-MM-DD' or 'YYYY-MM <label>'",
             raw
         )
     })?;
@@ -236,10 +237,18 @@ pub fn parse_budget_key(raw: &str) -> Result<(String, Option<String>)> {
     let month = cap["month"].to_string();
     validate_month(&month)?;
 
-    let label = cap
+    let day = cap.name("day").map(|m| m.as_str());
+    let text_label = cap
         .name("label")
         .map(|m| m.as_str().trim().to_string())
         .filter(|s| !s.is_empty());
+
+    let label = match (day, text_label) {
+        (Some(d), Some(t)) => Some(format!("{}日 {}", d, t)),
+        (Some(d), None) => Some(format!("{}日", d)),
+        (None, Some(t)) => Some(t),
+        (None, None) => None,
+    };
 
     Ok((month, label))
 }
