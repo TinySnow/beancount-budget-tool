@@ -109,8 +109,8 @@ pub struct WarningStats {
 ///
 /// 优先尝试冒号分隔，若无冒号则从尾部提取连续数字作为金额。
 fn parse_bucket_amount(raw: &str) -> (&str, Option<Decimal>) {
-    // 优先冒号分隔
-    if let Some((name, amt)) = raw.split_once(':') {
+    // 优先冒号分隔（半角 : 或全角 ：）
+    if let Some((name, amt)) = raw.split_once(':').or_else(|| raw.split_once('：')) {
         let parsed = Decimal::from_str(amt.trim()).ok();
         return (name.trim(), parsed);
     }
