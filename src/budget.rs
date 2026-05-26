@@ -267,15 +267,11 @@ pub fn collect_bucket_tx_flows(
                             flow -= amount;
                         }
                         if flow.is_zero() {
-                            // 无实际支出但有指定金额 → 可能是纯资产转移（基金申购等），
-                            // 回退为 Asset 模式记录位置
-                            if cap_amount.is_some() {
-                                // 委托给 Asset 分支处理（见下方）
-                                process_as_asset(
-                                    &tx, bucket_name, cap_amount, target_currency, mappings,
-                                    &mut inferred_asset_accounts, &month, &mut flows,
-                                );
-                            }
+                            // 无实际支出 → 纯资产转移，回退为 Asset 模式记录位置
+                            process_as_asset(
+                                &tx, bucket_name, cap_amount, target_currency, mappings,
+                                &mut inferred_asset_accounts, &month, &mut flows,
+                            );
                             continue;
                         }
                         if let Some(cap) = cap_amount {
