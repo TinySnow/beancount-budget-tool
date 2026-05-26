@@ -74,6 +74,10 @@ pub struct Cli {
     #[arg(long = "hide-asset-flows")]
     pub hide_asset_flows: bool,
 
+    /// 汇总表中展开显示所有子桶（不折叠到父桶）
+    #[arg(long)]
+    pub expand: bool,
+
     /// 统计起始月份（YYYY-MM）。与 --month 互斥，配合 --to 使用
     #[arg(long = "from")]
     pub from: Option<String>,
@@ -192,6 +196,7 @@ pub struct ReportConfig {
     pub sort_by: Option<String>,
     pub csv_pivot: bool,
     pub bucket: Option<String>,
+    pub expand: bool,
     pub strict: bool,
 }
 
@@ -207,6 +212,7 @@ impl Cli {
             sort_by: self.sort_by.clone(),
             csv_pivot: self.csv_pivot,
             bucket: self.bucket.clone(),
+            expand: self.expand,
             strict: self.strict,
         }
     }

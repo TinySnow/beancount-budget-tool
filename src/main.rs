@@ -117,6 +117,7 @@ fn main() -> Result<()> {
             &summaries,
             &warnings,
             config.sort_by.as_deref(),
+            config.expand,
         );
         write_stdout(&output);
     }
@@ -506,6 +507,7 @@ mod tests {
             sort_by: None,
             csv_pivot: false,
             bucket: None,
+            expand: false,
             strict: false,
         };
         let directives = vec![
