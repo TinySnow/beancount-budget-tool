@@ -21,21 +21,17 @@ use cli::{Cli, DateRange, ReportScope};
 
 use crate::util::fmt_decimal;
 
+/// 将 UTF-8 文本写入 stdout（绕过 Windows 控制台编码问题）
+fn write_stdout(text: &str) {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let _ = handle.write_all(text.as_bytes());
+    let _ = handle.flush();
+}
+
 /// 程序入口。
 fn main() -> Result<()> {
-    // Windows 系统切换 stdout 到 UTF-8，覆盖控制台和文件重定向两种场景
-    #[cfg(windows)]
-    {
-        unsafe extern "system" {
-            fn SetConsoleOutputCP(code: u32) -> i32;
-            fn _setmode(fd: i32, mode: i32) -> i32;
-        }
-        unsafe {
-            SetConsoleOutputCP(65001);
-            _setmode(1, 0x40000); // stdout → UTF-8 mode
-        }
-    }
-
     let mut cli = Cli::parse();
 
     // 解析时间范围：--from/--to 与 --month 互斥
@@ -97,7 +93,7 @@ fn main() -> Result<()> {
             &cmp_range, &cmp_summaries, &cmp_warnings,
             &target_currency, config.sort_by.as_deref(),
         );
-        print!("{output}");
+        write_stdout(&output);
     } else if let Some(bucket) = cli.bucket.as_ref() {
         let output = report::render_bucket_report_text(
             &budget::build_scoped_bucket_data(&config, bucket, &mappings, &budget_directives, &tx_flows),
@@ -108,7 +104,7 @@ fn main() -> Result<()> {
             &tx_flows,
             &date_range,
         );
-        print!("{output}");
+        write_stdout(&output);
     } else {
         let output = report::render_summary_report_text(
             &date_range,
@@ -117,7 +113,7 @@ fn main() -> Result<()> {
             &warnings,
             config.sort_by.as_deref(),
         );
-        print!("{output}");
+        write_stdout(&output);
     }
 
     if let Some(out_dir) = cli.out_dir.as_ref() {
