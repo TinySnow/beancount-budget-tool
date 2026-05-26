@@ -666,6 +666,7 @@ pub fn collect_asset_locations(
     bucket: &str,
     target_month: &str,
     flows: &[BucketTxFlow],
+    scope: ReportScope,
 ) -> BTreeMap<String, Decimal> {
     let prefix = format!("{}.", bucket);
     let mut locations: BTreeMap<String, Decimal> = BTreeMap::new();
@@ -674,7 +675,7 @@ pub fn collect_asset_locations(
         if flow.bucket != bucket && !flow.bucket.starts_with(&prefix) {
             continue;
         }
-        if !is_month_in_scope(&flow.month, target_month, ReportScope::Cumulative) {
+        if !is_month_in_scope(&flow.month, target_month, scope) {
             continue;
         }
         for (account, delta) in &flow.location_deltas {
