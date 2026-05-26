@@ -33,13 +33,18 @@ pub fn render_summary_report_text(
     summaries: &BTreeMap<String, BucketSummary>,
     warnings: &WarningStats,
     sort_by: Option<&str>,
+    expand: bool,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "预算报告 ({}) [{}]", range.display(), currency);
     let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}", "预算桶", "月预算", "已支出", "使用率", "结余", "状态");
     let _ = writeln!(out, "{}", "-".repeat(76));
 
-    let mut entries = filter_top_level(summaries.iter(), summaries);
+    let mut entries = if expand {
+        summaries.iter().collect()
+    } else {
+        filter_top_level(summaries.iter(), summaries)
+    };
     sort_entries(&mut entries, sort_by);
 
     let mut total_planned = Decimal::ZERO;
@@ -491,8 +496,8 @@ pub fn export_reports(
 
     // 汇总报告：Markdown + 纯文本
     let summary_txt =
-        render_summary_report_text(range, currency, summaries, warnings, None);
-    let summary_md = render_summary_markdown(range, currency, summaries, warnings, config.sort_by.as_deref());
+        render_summary_report_text(range, currency, summaries, warnings, None, config.expand);
+    let summary_md = render_summary_markdown(range, currency, summaries, warnings, config.sort_by.as_deref(), config.expand);
     let summary_path = out_dir.join(format!("summary-{}.md", scope_label));
     fs::write(&summary_path, summary_md)
         .with_context(|| format!("Failed to write {}", summary_path.display()))?;
@@ -548,6 +553,7 @@ pub fn render_summary_markdown(
     summaries: &BTreeMap<String, BucketSummary>,
     warnings: &WarningStats,
     sort_by: Option<&str>,
+    expand: bool,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# 预算汇总报告");
@@ -558,7 +564,11 @@ pub fn render_summary_markdown(
     let _ = writeln!(out, "| 预算桶 | 月预算 | 已支出 | 使用率 | 结余 | 状态 |");
     let _ = writeln!(out, "|---:|---:|---:|---:|---:|---|");
 
-    let mut entries = filter_top_level(summaries.iter(), summaries);
+    let mut entries = if expand {
+        summaries.iter().collect()
+    } else {
+        filter_top_level(summaries.iter(), summaries)
+    };
     sort_entries(&mut entries, sort_by);
 
     let mut total_planned = Decimal::ZERO;
