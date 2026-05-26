@@ -195,31 +195,35 @@ pub fn collect_bucket_tx_flows(
                 match kind {
                     BucketKind::Expense => {
                         let mut flow = Decimal::ZERO;
-                        // 若指定了固定金额则直接用，否则汇总所有 Expenses: postings
+                        for posting in &tx.postings {
+                            if !posting.account.starts_with("Expenses:") { continue; }
+                            let Some(amount) = posting.amount else { continue; };
+                            if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
+                            flow -= amount;
+                        }
+                        // 无实际 Expense posting 时不凭空生成支出
+                        if flow.is_zero() {
+                            continue;
+                        }
+                        // cap_amount 仅作为支出上限，限制不超过指定值
                         if let Some(cap) = cap_amount {
-                            flow = if cap.is_sign_positive() { -cap } else { -cap };
-                        } else {
-                            for posting in &tx.postings {
-                                if !posting.account.starts_with("Expenses:") { continue; }
-                                let Some(amount) = posting.amount else { continue; };
-                                if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
-                                flow -= amount;
+                            let cap_abs = cap.abs();
+                            if flow.abs() > cap_abs {
+                                flow = if flow.is_sign_negative() { -cap_abs } else { cap_abs };
                             }
                         }
 
-                        if !flow.is_zero() {
-                            flows.push(BucketTxFlow {
-                                date: tx.date,
-                                month: month.clone(),
-                                bucket: bucket_name.to_string(),
-                                kind,
-                                flow,
-                                payee: tx.payee.clone(),
-                                narration: tx.narration.clone(),
-                                location_deltas: BTreeMap::new(),
-                                metadata: tx.metadata.clone(),
-                            });
-                        }
+                        flows.push(BucketTxFlow {
+                            date: tx.date,
+                            month: month.clone(),
+                            bucket: bucket_name.to_string(),
+                            kind,
+                            flow,
+                            payee: tx.payee.clone(),
+                            narration: tx.narration.clone(),
+                            location_deltas: BTreeMap::new(),
+                            metadata: tx.metadata.clone(),
+                        });
                     }
                     BucketKind::Asset => {
                         let Some((mut flow, mut location_deltas)) = derive_asset_bucket_flow(
