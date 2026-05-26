@@ -57,7 +57,9 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to load mappings: {}", cli.mappings.display()))?;
 
     let target_currency = cli.currency.to_ascii_uppercase();
-    let tx_flows = budget::collect_bucket_tx_flows(&ledger_files, &mappings, &target_currency)?;
+    // known_buckets 基于全量预算指令（未裁剪），供 bucket 名自动补全
+    let all_known = config::collect_known_buckets(&budget_directives, &mappings);
+    let tx_flows = budget::collect_bucket_tx_flows(&ledger_files, &mappings, &target_currency, &all_known)?;
 
     // 时间段裁剪
     let budget_directives = filter_directives_by_range(budget_directives, &date_range);
@@ -83,7 +85,7 @@ fn main() -> Result<()> {
         let cmp_directives = filter_directives_by_range(config::load_budget_directives(&cli.budgets)
             .with_context(|| format!("Failed to load budgets: {}", cli.budgets.display()))?, &cmp_range);
         let cmp_flows = filter_flows_by_range(
-            budget::collect_bucket_tx_flows(&ledger_files, &mappings, &target_currency)?,
+            budget::collect_bucket_tx_flows(&ledger_files, &mappings, &target_currency, &all_known)?,
             &cmp_range,
         );
         let cmp_target = cmp_range.end_month().to_string();
@@ -289,7 +291,7 @@ mod tests {
             asset_bucket_accounts: BTreeMap::new(),
         };
 
-        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY").expect("flows");
+        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
         fs::remove_file(tmp).ok();
 
         assert_eq!(flows.len(), 1);
@@ -311,7 +313,7 @@ mod tests {
             asset_bucket_accounts: BTreeMap::new(),
         };
 
-        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY").expect("flows");
+        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
         fs::remove_file(tmp).ok();
 
         assert_eq!(flows.len(), 1);
@@ -361,7 +363,7 @@ mod tests {
             asset_bucket_accounts: BTreeMap::new(),
         };
 
-        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY").expect("flows");
+        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
         fs::remove_file(tmp).ok();
 
         let month_summary = summarize_buckets(&directives, &flows, "2026-06", ReportScope::Month, &mappings);
@@ -405,7 +407,7 @@ mod tests {
             ]),
         };
 
-        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY").expect("flows");
+        let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
         fs::remove_file(tmp).ok();
 
         assert_eq!(flows.len(), 2);
