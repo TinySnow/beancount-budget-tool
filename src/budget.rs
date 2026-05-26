@@ -628,6 +628,11 @@ pub fn build_scoped_bucket_data(
         });
     }
 
+    // --hide-asset-flows：明细中隐藏资产间转移，仅保留预算收入和实际支出
+    if cli.hide_asset_flows {
+        flows.retain(|f| f.kind != BucketKind::Asset);
+    }
+
     let planned = directives
         .iter()
         .fold(Decimal::ZERO, |acc, item| acc + item.amount);

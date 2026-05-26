@@ -70,6 +70,10 @@ pub struct Cli {
     #[arg(long)]
     pub filter: Option<String>,
 
+    /// 明细视图中隐藏资产间转移记录，仅显示预算收入和实际支出
+    #[arg(long = "hide-asset-flows")]
+    pub hide_asset_flows: bool,
+
     /// 统计起始月份（YYYY-MM）。与 --month 互斥，配合 --to 使用
     #[arg(long = "from")]
     pub from: Option<String>,
