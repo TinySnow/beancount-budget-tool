@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Context, Result};
 use rust_decimal::Decimal;
 
-use crate::cli::{BucketView, Cli, DateRange, ReportScope};
+use crate::cli::{BucketView, DateRange, ReportConfig, ReportScope};
 use crate::config::{BucketKind, BudgetDirective, BudgetMappings};
 use crate::budget::{self, BucketSummary, BucketTxFlow, ScopedBucketData, WarningStats};
 use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, parent_bucket, sanitize_filename, shorten_account_label};
@@ -35,81 +35,31 @@ pub fn render_summary_report_text(
     sort_by: Option<&str>,
 ) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "预算报告 ({}) [{}]",
-        range.display(),
-        currency,
-    );
-    let _ = writeln!(
-        out,
-        "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
-        "预算桶", "月预算", "已支出", "使用率", "结余", "状态"
-    );
+    let _ = writeln!(out, "预算报告 ({}) [{}]", range.display(), currency);
+    let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}", "预算桶", "月预算", "已支出", "使用率", "结余", "状态");
     let _ = writeln!(out, "{}", "-".repeat(76));
 
-    let mut entries: Vec<(&String, &BucketSummary)> = summaries.iter()
-        .filter(|(bucket, _)| {
-            if let Some(parent) = parent_bucket(bucket) {
-                !summaries.contains_key(parent)
-            } else { true }
-        })
-        .collect();
-
-    match sort_by.unwrap_or("name") {
-        "planned" => entries.sort_by(|a, b| b.1.planned.partial_cmp(&a.1.planned).unwrap_or(std::cmp::Ordering::Equal)),
-        "actual" => entries.sort_by(|a, b| b.1.actual.partial_cmp(&a.1.actual).unwrap_or(std::cmp::Ordering::Equal)),
-        "remain" => entries.sort_by(|a, b| {
-            let ra = a.1.planned - a.1.actual;
-            let rb = b.1.planned - b.1.actual;
-            ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
-        }),
-        _ => {} // name (default BTreeMap order)
-    }
+    let mut entries = filter_top_level(summaries.iter(), summaries);
+    sort_entries(&mut entries, sort_by);
 
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
     for (bucket, summary) in &entries {
         let remain = summary.planned - summary.actual;
-        let pct = if summary.planned.is_zero() {
-            "  --".to_string()
-        } else {
-            format!("{:5.1}%", (summary.actual / summary.planned * Decimal::from(100u32)).round_dp(1))
-        };
         let status = if remain.is_sign_negative() { "超支" } else { "正常" };
         total_planned += summary.planned;
         total_actual += summary.actual;
-
-        let _ = writeln!(
-            out,
-            "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
-            bucket,
-            fmt_decimal(summary.planned),
-            fmt_decimal(summary.actual),
-            pct,
-            fmt_decimal(remain),
-            status
-        );
+        let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
+            bucket, fmt_decimal(summary.planned), fmt_decimal(summary.actual),
+            fmt_pct(summary.actual, summary.planned), fmt_decimal(remain), status);
     }
 
     let _ = writeln!(out, "{}", "-".repeat(76));
     let total_remain = total_planned - total_actual;
-    let total_pct = if total_planned.is_zero() {
-        "  --".to_string()
-    } else {
-        format!("{:5.1}%", (total_actual / total_planned * Decimal::from(100u32)).round_dp(1))
-    };
     let total_status = if total_remain.is_sign_negative() { "超支" } else { "正常" };
-    let _ = writeln!(
-        out,
-        "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
-        "合计",
-        fmt_decimal(total_planned),
-        fmt_decimal(total_actual),
-        total_pct,
-        fmt_decimal(total_remain),
-        total_status
-    );
+    let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
+        "合计", fmt_decimal(total_planned), fmt_decimal(total_actual),
+        fmt_pct(total_actual, total_planned), fmt_decimal(total_remain), total_status);
 
     if !warnings.unknown_bucket_amount.is_zero() {
         let names = warnings
@@ -195,13 +145,54 @@ pub fn render_compare_report_text(
 /// 空汇总，用于对比时缺失桶的兜底。
 static EMPTY_SUMMARY: BucketSummary = BucketSummary { planned: Decimal::ZERO, actual: Decimal::ZERO };
 
+// ---- 共享工具 ----
+
+/// 格式化使用率百分比。
+fn fmt_pct(actual: Decimal, planned: Decimal) -> String {
+    if planned.is_zero() {
+        "  --".to_string()
+    } else {
+        format!("{:5.1}%", (actual / planned * Decimal::from(100u32)).round_dp(1))
+    }
+}
+
+/// 按指定字段排序桶条目列表。
+fn sort_entries<'a>(
+    entries: &mut [(&'a String, &'a BucketSummary)],
+    sort_by: Option<&str>,
+) {
+    match sort_by.unwrap_or("name") {
+        "planned" => entries.sort_by(|a, b| b.1.planned.partial_cmp(&a.1.planned).unwrap_or(std::cmp::Ordering::Equal)),
+        "actual" => entries.sort_by(|a, b| b.1.actual.partial_cmp(&a.1.actual).unwrap_or(std::cmp::Ordering::Equal)),
+        "remain" => entries.sort_by(|a, b| {
+            (a.1.planned - a.1.actual).partial_cmp(&(b.1.planned - b.1.actual)).unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        _ => {}
+    }
+}
+
+/// 过滤掉已有父桶存在于 summaries 中的子桶（避免重复计算）。
+fn filter_top_level<'a>(
+    entries: impl IntoIterator<Item = (&'a String, &'a BucketSummary)>,
+    summaries: &BTreeMap<String, BucketSummary>,
+) -> Vec<(&'a String, &'a BucketSummary)> {
+    entries
+        .into_iter()
+        .filter(|(bucket, _)| {
+            if let Some(parent) = parent_bucket(bucket) {
+                !summaries.contains_key(parent)
+            } else { true }
+        })
+        .collect()
+}
+
 /// 渲染单桶报告的终端文本格式。
 ///
 /// 根据 `bucket_view` 显示汇总统计、分月视图或明细历史。
 /// 资产桶在 Detail/Monthly 视图下自动附带资产位置。
 pub fn render_bucket_report_text(
     data: &ScopedBucketData,
-    cli: &Cli,
+    config: &ReportConfig,
     currency: &str,
     bucket_view: BucketView,
     show_locations: bool,
@@ -227,7 +218,7 @@ pub fn render_bucket_report_text(
             &data.bucket,
             data.kind,
             range.end_month(),
-            cli.scope,
+            config.scope,
             currency,
             &data.directives,
             &data.flows,
@@ -473,7 +464,7 @@ pub fn append_asset_locations_view(
 /// 将报告导出到指定目录，生成 Markdown、CSV 和纯文本文件。
 pub fn export_reports(
     out_dir: &Path,
-    cli: &Cli,
+    config: &ReportConfig,
     currency: &str,
     mappings: &BudgetMappings,
     directives: &[BudgetDirective],
@@ -490,7 +481,7 @@ pub fn export_reports(
     // 汇总报告：Markdown + 纯文本
     let summary_txt =
         render_summary_report_text(range, currency, summaries, warnings, None);
-    let summary_md = render_summary_markdown(range, currency, summaries, warnings, cli.sort_by.as_deref());
+    let summary_md = render_summary_markdown(range, currency, summaries, warnings, config.sort_by.as_deref());
     let summary_path = out_dir.join(format!("summary-{}.md", scope_label));
     fs::write(&summary_path, summary_md)
         .with_context(|| format!("Failed to write {}", summary_path.display()))?;
@@ -506,22 +497,22 @@ pub fn export_reports(
         .with_context(|| format!("Failed to write {}", csv_path.display()))?;
 
     // Pivot CSV（横向月度透视）
-    if cli.csv_pivot {
+    if config.csv_pivot {
         let pivot_path = out_dir.join(format!("pivot-{}.csv", scope_label));
         fs::write(&pivot_path, render_pivot_csv(flows, range))
             .with_context(|| format!("Failed to write {}", pivot_path.display()))?;
     }
 
     // 每个桶的 Markdown 报告
-    let buckets = budget::collect_buckets_for_export(cli, directives, flows, summaries);
+    let buckets = budget::collect_buckets_for_export(config, directives, flows, summaries);
     for bucket in buckets {
-        let data = budget::build_scoped_bucket_data(cli, &bucket, mappings, directives, flows);
-        let report = render_bucket_markdown(&data, cli, currency, flows, range);
+        let data = budget::build_scoped_bucket_data(config, &bucket, mappings, directives, flows);
+        let report = render_bucket_markdown(&data, config, currency, flows, range);
         let filename = format!("bucket-{}-{}.md", sanitize_filename(&bucket), scope_label);
         let path = out_dir.join(filename);
         fs::write(&path, report).with_context(|| format!("Failed to write {}", path.display()))?;
 
-    if data.kind == BucketKind::Asset || data.flows.iter().any(|f| !f.location_deltas.is_empty()) {
+        if data.kind == BucketKind::Asset || data.flows.iter().any(|f| !f.location_deltas.is_empty()) {
             let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), flows);
             let location_report =
                 render_asset_locations_markdown(&data.bucket, range.end_month(), currency, &locations);
@@ -556,65 +547,26 @@ pub fn render_summary_markdown(
     let _ = writeln!(out, "| 预算桶 | 月预算 | 已支出 | 使用率 | 结余 | 状态 |");
     let _ = writeln!(out, "|---:|---:|---:|---:|---:|---|");
 
-    let mut entries: Vec<(&String, &BucketSummary)> = summaries.iter()
-        .filter(|(bucket, _)| {
-            if let Some(parent) = parent_bucket(bucket) {
-                !summaries.contains_key(parent)
-            } else { true }
-        })
-        .collect();
-
-    match sort_by.unwrap_or("name") {
-        "planned" => entries.sort_by(|a, b| b.1.planned.partial_cmp(&a.1.planned).unwrap_or(std::cmp::Ordering::Equal)),
-        "actual" => entries.sort_by(|a, b| b.1.actual.partial_cmp(&a.1.actual).unwrap_or(std::cmp::Ordering::Equal)),
-        "remain" => entries.sort_by(|a, b| {
-            let ra = a.1.planned - a.1.actual;
-            let rb = b.1.planned - b.1.actual;
-            ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
-        }),
-        _ => {}
-    }
+    let mut entries = filter_top_level(summaries.iter(), summaries);
+    sort_entries(&mut entries, sort_by);
 
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
     for (bucket, summary) in &entries {
         let remain = summary.planned - summary.actual;
-        let pct = if summary.planned.is_zero() {
-            "--".to_string()
-        } else {
-            format!("{:.1}%", (summary.actual / summary.planned * Decimal::from(100u32)).round_dp(1))
-        };
         let status = if remain.is_sign_negative() { "超支" } else { "正常" };
         total_planned += summary.planned;
         total_actual += summary.actual;
-        let _ = writeln!(
-            out,
-            "| {} | {} | {} | {} | {} | {} |",
-            bucket,
-            fmt_decimal(summary.planned),
-            fmt_decimal(summary.actual),
-            pct,
-            fmt_decimal(remain),
-            status
-        );
+        let _ = writeln!(out, "| {} | {} | {} | {} | {} | {} |",
+            bucket, fmt_decimal(summary.planned), fmt_decimal(summary.actual),
+            fmt_pct(summary.actual, summary.planned), fmt_decimal(remain), status);
     }
 
     let total_remain = total_planned - total_actual;
-    let total_pct = if total_planned.is_zero() {
-        "--".to_string()
-    } else {
-        format!("{:.1}%", (total_actual / total_planned * Decimal::from(100u32)).round_dp(1))
-    };
     let total_status = if total_remain.is_sign_negative() { "超支" } else { "正常" };
-    let _ = writeln!(
-        out,
-        "| **合计** | **{}** | **{}** | **{}** | **{}** | **{}** |",
-        fmt_decimal(total_planned),
-        fmt_decimal(total_actual),
-        total_pct,
-        fmt_decimal(total_remain),
-        total_status
-    );
+    let _ = writeln!(out, "| **合计** | **{}** | **{}** | **{}** | **{}** | **{}** |",
+        fmt_decimal(total_planned), fmt_decimal(total_actual),
+        fmt_pct(total_actual, total_planned), fmt_decimal(total_remain), total_status);
 
     if !warnings.unknown_bucket_amount.is_zero() {
         let names = warnings
@@ -699,7 +651,7 @@ fn render_pivot_csv(flows: &[BucketTxFlow], range: &DateRange) -> String {
 /// 包含分月视图、交易明细以及资产桶的资产位置表格。
 pub fn render_bucket_markdown(
     data: &ScopedBucketData,
-    cli: &Cli,
+    config: &ReportConfig,
     currency: &str,
     all_flows: &[BucketTxFlow],
     range: &DateRange,
@@ -719,7 +671,7 @@ pub fn render_bucket_markdown(
         &data.bucket,
         data.kind,
         range.end_month(),
-        cli.scope,
+        config.scope,
         currency,
         &data.directives,
         &data.flows,

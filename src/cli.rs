@@ -180,6 +180,38 @@ impl DateRange {
     }
 }
 
+/// 报告配置：从 CLI 中提取，解耦核心逻辑与命令行层。
+#[derive(Debug, Clone)]
+pub struct ReportConfig {
+    pub scope: ReportScope,
+    pub month: String,
+    pub filter: Option<String>,
+    pub hide_asset_flows: bool,
+    pub bucket_view: BucketView,
+    pub show_locations: bool,
+    pub sort_by: Option<String>,
+    pub csv_pivot: bool,
+    pub bucket: Option<String>,
+    pub strict: bool,
+}
+
+impl Cli {
+    pub fn report_config(&self) -> ReportConfig {
+        ReportConfig {
+            scope: self.scope,
+            month: self.month.clone().unwrap_or_default(),
+            filter: self.filter.clone(),
+            hide_asset_flows: self.hide_asset_flows,
+            bucket_view: self.bucket_view,
+            show_locations: self.show_locations,
+            sort_by: self.sort_by.clone(),
+            csv_pivot: self.csv_pivot,
+            bucket: self.bucket.clone(),
+            strict: self.strict,
+        }
+    }
+}
+
 /// 从 CLI 参数中解析所有账本文件路径。
 ///
 /// 支持通过 `--ledger` 指定单个文件和 `--ledger-dir` 递归扫描目录。
