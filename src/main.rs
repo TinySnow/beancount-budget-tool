@@ -99,6 +99,7 @@ fn main() -> Result<()> {
         );
         write_stdout(&output);
     } else if let Some(bucket) = cli.bucket.as_ref() {
+        let bucket = budget::resolve_short_bucket(bucket, &all_known);
         let output = report::render_bucket_report_text(
             &budget::build_scoped_bucket_data(&config, bucket, &mappings, &budget_directives, &tx_flows),
             &config,

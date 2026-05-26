@@ -210,7 +210,7 @@ fn process_as_asset(
 /// 自动补全简写桶名为完整路径。
 /// `"额外储蓄"` 且已知集合中有 `"投资.额外储蓄"` → `"投资.额外储蓄"`。
 /// 若无不匹配或匹配到多个，保持原名。
-fn resolve_short_bucket<'a>(name: &'a str, known: &'a BTreeSet<String>) -> &'a str {
+pub fn resolve_short_bucket<'a>(name: &'a str, known: &'a BTreeSet<String>) -> &'a str {
     // 优先匹配完整路径（如额外储蓄 → 投资.额外储蓄）
     let pattern = format!(".{}", name);
     let matches: Vec<&String> = known.iter()
