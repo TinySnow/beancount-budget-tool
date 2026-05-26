@@ -434,25 +434,35 @@ pub fn append_bucket_detail_view(
 }
 
 /// 追加资产位置表格到输出缓冲区。
+/// 正数归入「当前持仓」，负数归入「出金来源」。
 pub fn append_asset_locations_view(
     out: &mut String,
     target_month: &str,
     currency: &str,
     locations: &BTreeMap<String, Decimal>,
 ) {
-    let _ = writeln!(out, "\n资产位置（截至 {}）:", target_month);
-    if locations.is_empty() {
-        let _ = writeln!(out, "(无资产位置数据)");
-        return;
+    if locations.is_empty() { return; }
+
+    let holdings: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_positive()).collect();
+    let sources: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_negative()).collect();
+
+    if !holdings.is_empty() {
+        let _ = writeln!(out, "\n当前持仓（截至 {}）:", target_month);
+        for (account, amount) in &holdings {
+            let _ = writeln!(out, "{}: {} {}", shorten_account_label(account), fmt_decimal(**amount), currency);
+        }
     }
-    for (account, amount) in locations {
-        let _ = writeln!(
-            out,
-            "{}: {} {}",
-            shorten_account_label(account),
-            fmt_decimal(*amount),
-            currency
-        );
+
+    if !sources.is_empty() {
+        let _ = writeln!(out, "\n超支/出金来源（截至 {}）:", target_month);
+        for (account, amount) in &sources {
+            let _ = writeln!(out, "{}: {} {}", shorten_account_label(account), fmt_decimal(**amount), currency);
+        }
+    }
+
+    if holdings.is_empty() && sources.is_empty() {
+        let _ = writeln!(out, "\n资产位置（截至 {}）:", target_month);
+        let _ = writeln!(out, "(无资产位置数据)");
     }
 }
 
@@ -735,15 +745,26 @@ pub fn render_bucket_markdown(
         if locations.is_empty() {
             let _ = writeln!(out, "(无资产位置数据)");
         } else {
-            let _ = writeln!(out, "| 账户 | 金额 |");
-            let _ = writeln!(out, "|---|---:|");
-            for (account, amount) in &locations {
-                let _ = writeln!(
-                    out,
-                    "| {} | {} |",
-                    shorten_account_label(account),
-                    fmt_decimal(*amount)
-                );
+            let holdings: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_positive()).collect();
+            let negatives: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_negative()).collect();
+            if !holdings.is_empty() {
+                let _ = writeln!(out, "**当前持仓**");
+                let _ = writeln!(out);
+                let _ = writeln!(out, "| 账户 | 金额 |");
+                let _ = writeln!(out, "|---|---:|");
+                for (account, amount) in &holdings {
+                    let _ = writeln!(out, "| {} | {} |", shorten_account_label(account), fmt_decimal(**amount));
+                }
+                if !negatives.is_empty() { let _ = writeln!(out); }
+            }
+            if !negatives.is_empty() {
+                let _ = writeln!(out, "**超支/出金来源**");
+                let _ = writeln!(out);
+                let _ = writeln!(out, "| 账户 | 金额 |");
+                let _ = writeln!(out, "|---|---:|");
+                for (account, amount) in &negatives {
+                    let _ = writeln!(out, "| {} | {} |", shorten_account_label(account), fmt_decimal(**amount));
+                }
             }
         }
     }
