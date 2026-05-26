@@ -128,6 +128,8 @@ pub struct BudgetDirective {
 enum BudgetValue {
     Amount(Decimal),
     Group(BTreeMap<String, BudgetValue>),
+    /// YAML 空值（如 `额外储蓄:` 后面没填数字），视为金额 0
+    Null,
 }
 
 /// 递归展平嵌套的 YAML 预算映射为扁平化的 `BudgetDirective` 列表。
@@ -160,6 +162,15 @@ fn flatten_budget_map(
             }
             BudgetValue::Group(sub_map) => {
                 flatten_budget_map(&full_name, sub_map, month, label, source_key, directives);
+            }
+            BudgetValue::Null => {
+                directives.push(BudgetDirective {
+                    month: month.to_string(),
+                    label: label.map(|s| s.to_string()),
+                    source_key: source_key.to_string(),
+                    bucket: full_name,
+                    amount: Decimal::ZERO,
+                });
             }
         }
     }

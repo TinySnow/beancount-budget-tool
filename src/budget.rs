@@ -181,8 +181,9 @@ pub fn collect_bucket_tx_flows(
             });
 
         if let Some(override_str) = bucket_override {
-            // 支持逗号分隔的多桶归属：budget: "储蓄, 投资" → 两桶各计全额
-            let bucket_names: Vec<&str> = override_str
+            // 支持半角和全角逗号分隔
+            let normalized = override_str.replace('，', ",");
+            let bucket_names: Vec<&str> = normalized
                 .split(',')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
