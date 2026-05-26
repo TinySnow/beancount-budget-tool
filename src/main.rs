@@ -37,6 +37,7 @@ fn main() -> Result<()> {
     }
 
     let month_str = cli.month.as_deref().unwrap_or("?");
+    let config = cli.report_config();
     let ledger_files = cli::resolve_ledger_inputs(&cli)?;
 
     let budget_directives = config::load_budget_directives(&cli.budgets)
@@ -81,16 +82,16 @@ fn main() -> Result<()> {
         let output = report::render_compare_report_text(
             &date_range, &summaries, &warnings,
             &cmp_range, &cmp_summaries, &cmp_warnings,
-            &target_currency, cli.sort_by.as_deref(),
+            &target_currency, config.sort_by.as_deref(),
         );
         print!("{output}");
     } else if let Some(bucket) = cli.bucket.as_ref() {
         let output = report::render_bucket_report_text(
-            &budget::build_scoped_bucket_data(&cli, bucket, &mappings, &budget_directives, &tx_flows),
-            &cli,
+            &budget::build_scoped_bucket_data(&config, bucket, &mappings, &budget_directives, &tx_flows),
+            &config,
             &target_currency,
-            cli.bucket_view,
-            cli.show_locations,
+            config.bucket_view,
+            config.show_locations,
             &tx_flows,
             &date_range,
         );
@@ -101,7 +102,7 @@ fn main() -> Result<()> {
             &target_currency,
             &summaries,
             &warnings,
-            cli.sort_by.as_deref(),
+            config.sort_by.as_deref(),
         );
         print!("{output}");
     }
@@ -109,7 +110,7 @@ fn main() -> Result<()> {
     if let Some(out_dir) = cli.out_dir.as_ref() {
         report::export_reports(
             out_dir,
-            &cli,
+            &config,
             &target_currency,
             &mappings,
             &budget_directives,
@@ -120,7 +121,7 @@ fn main() -> Result<()> {
         )?;
     }
 
-    if cli.strict && !warnings.unknown_bucket_amount.is_zero() {
+    if config.strict && !warnings.unknown_bucket_amount.is_zero() {
         bail!(
             "Strict mode failed: unknown budget buckets amount = {} {}",
             fmt_decimal(warnings.unknown_bucket_amount),
@@ -478,31 +479,20 @@ mod tests {
     fn scoped_bucket_data_includes_children_for_parent() {
         use crate::{
             budget::build_scoped_bucket_data,
-            cli::{Cli, ReportScope, BucketView},
+            cli::{ReportConfig, ReportScope, BucketView},
             config::BudgetMappings,
         };
-        // 使用假 Cli 数据
-        let cli = Cli {
-            ledgers: vec![],
-            ledger_dirs: vec![],
-            month: Some("2026-06".into()),
-            budgets: std::path::PathBuf::new(),
-            mappings: std::path::PathBuf::new(),
-            currency: "CNY".into(),
+        let config = ReportConfig {
             scope: ReportScope::Month,
-            bucket: None,
+            month: "2026-06".into(),
+            filter: None,
+            hide_asset_flows: false,
             bucket_view: BucketView::Summary,
             show_locations: false,
-            out_dir: None,
-            strict: false,
-            from: None,
-            to: None,
-            year: None,
             sort_by: None,
             csv_pivot: false,
-            compare: None,
-            hide_asset_flows: false,
-            filter: None,
+            bucket: None,
+            strict: false,
         };
         let directives = vec![
             BudgetDirective {
@@ -528,11 +518,11 @@ mod tests {
         };
         let flows = vec![];
 
-        let data = build_scoped_bucket_data(&cli, "生活费", &mappings, &directives, &flows);
+        let data = build_scoped_bucket_data(&config, "生活费", &mappings, &directives, &flows);
         assert_eq!(data.planned, dec!(4000));
         assert_eq!(data.directives.len(), 2);
 
-        let data = build_scoped_bucket_data(&cli, "生活费.交通", &mappings, &directives, &flows);
+        let data = build_scoped_bucket_data(&config, "生活费.交通", &mappings, &directives, &flows);
         assert_eq!(data.planned, dec!(1500));
         assert_eq!(data.directives.len(), 1);
     }

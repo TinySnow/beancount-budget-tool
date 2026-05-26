@@ -20,7 +20,7 @@ use rust_decimal::Decimal;
 use crate::config::{BucketKind, BudgetDirective, BudgetMappings};
 use crate::ledger::{self, LedgerTransaction};
 use crate::util::{is_month_in_scope, is_target_currency, month_of_date, parent_bucket};
-use crate::cli::{Cli, ReportScope};
+use crate::cli::{ReportConfig, ReportScope};
 
 // ---------------------------------------------------------------------------
 // 数据结构
@@ -143,8 +143,6 @@ fn process_as_asset(
     bucket_name: &str,
     cap_amount: Option<Decimal>,
     target_currency: &str,
-    _mappings: &BudgetMappings,
-    _inferred_asset_accounts: &mut HashMap<String, BTreeSet<String>>,
     month: &str,
     flows: &mut Vec<BucketTxFlow>,
 ) {
@@ -269,8 +267,7 @@ pub fn collect_bucket_tx_flows(
                         if flow.is_zero() {
                             // 无实际支出 → 纯资产转移，回退为 Asset 模式记录位置
                             process_as_asset(
-                                &tx, bucket_name, cap_amount, target_currency, mappings,
-                                &mut inferred_asset_accounts, &month, &mut flows,
+                                &tx, bucket_name, cap_amount, target_currency, &month, &mut flows,
                             );
                             continue;
                         }
@@ -587,20 +584,20 @@ pub fn collect_scope_warnings(
 /// 则自动聚合其所有点号子桶（如 `生活费.交通`、`生活费.饮食`）的指令与资金流动。
 /// 若指定了 `--filter` 关键词，仅保留 payee/narration/metadata 中匹配的交易。
 pub fn build_scoped_bucket_data(
-    cli: &Cli,
+    config: &ReportConfig,
     bucket: &str,
     mappings: &BudgetMappings,
     directives: &[BudgetDirective],
     flows: &[BucketTxFlow],
 ) -> ScopedBucketData {
     let prefix = format!("{}.", bucket);
-    let target_month = cli.month.as_deref().unwrap_or("?");
+    let target_month = &config.month;
 
     let directives = directives
         .iter()
         .filter(|item| {
             (item.bucket == bucket || item.bucket.starts_with(&prefix))
-                && is_month_in_scope(&item.month, target_month, cli.scope)
+                && is_month_in_scope(&item.month, target_month, config.scope)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -609,13 +606,13 @@ pub fn build_scoped_bucket_data(
         .iter()
         .filter(|flow| {
             (flow.bucket == bucket || flow.bucket.starts_with(&prefix))
-                && is_month_in_scope(&flow.month, target_month, cli.scope)
+                && is_month_in_scope(&flow.month, target_month, config.scope)
         })
         .cloned()
         .collect();
 
-    // 关键词过滤：匹配 payee / narration / metadata 值
-    if let Some(keyword) = cli.filter.as_deref() {
+    // 关键词过滤
+    if let Some(keyword) = config.filter.as_deref() {
         let kw = keyword.to_lowercase();
         flows.retain(|f| {
             f.payee.as_deref().map(|s| s.to_lowercase()).unwrap_or_default().contains(&kw)
@@ -624,8 +621,8 @@ pub fn build_scoped_bucket_data(
         });
     }
 
-    // --hide-asset-flows：明细中隐藏资产间转移，仅保留预算收入和实际支出
-    if cli.hide_asset_flows {
+    // --hide-asset-flows
+    if config.hide_asset_flows {
         flows.retain(|f| f.kind != BucketKind::Asset);
     }
 
@@ -685,27 +682,27 @@ pub fn collect_asset_locations(
 /// 若用户在 CLI 中指定了 `--bucket`，则仅导出该桶；
 /// 否则导出所有在范围内出现的桶。
 pub fn collect_buckets_for_export(
-    cli: &Cli,
+    config: &ReportConfig,
     directives: &[BudgetDirective],
     flows: &[BucketTxFlow],
     summaries: &BTreeMap<String, BucketSummary>,
 ) -> BTreeSet<String> {
-    if let Some(bucket) = cli.bucket.as_ref() {
+    if let Some(bucket) = config.bucket.as_ref() {
         return BTreeSet::from([bucket.clone()]);
     }
 
-    let target_month = cli.month.as_deref().unwrap_or("?");
+    let target_month = &config.month;
     let mut buckets = BTreeSet::new();
     for bucket in summaries.keys() {
         buckets.insert(bucket.clone());
     }
     for item in directives {
-        if is_month_in_scope(&item.month, target_month, cli.scope) {
+        if is_month_in_scope(&item.month, target_month, config.scope) {
             buckets.insert(item.bucket.clone());
         }
     }
     for flow in flows {
-        if is_month_in_scope(&flow.month, target_month, cli.scope) {
+        if is_month_in_scope(&flow.month, target_month, config.scope) {
             buckets.insert(flow.bucket.clone());
         }
     }
