@@ -135,35 +135,56 @@ fn parse_bucket_amount(raw: &str) -> (&str, Option<Decimal>) {
 }
 
 /// 将一笔纯资产转移按资产桶方式处理（用于 expense 桶的退化分支）。
+///
+/// 与普通资产桶不同：这里直接收录所有 Assets: 腿（正负均记录），
+/// 以便完整追踪转入方和转出方的位置变动。
 fn process_as_asset(
     tx: &LedgerTransaction,
     bucket_name: &str,
     cap_amount: Option<Decimal>,
     target_currency: &str,
-    mappings: &BudgetMappings,
-    inferred_asset_accounts: &mut HashMap<String, BTreeSet<String>>,
+    _mappings: &BudgetMappings,
+    _inferred_asset_accounts: &mut HashMap<String, BTreeSet<String>>,
     month: &str,
     flows: &mut Vec<BucketTxFlow>,
 ) {
-    let Some((mut flow, mut location_deltas)) = derive_asset_bucket_flow(
-        tx, bucket_name, target_currency, mappings, inferred_asset_accounts,
-    ) else { return; };
+    // 收集所有目标币种的 Assets: 腿
+    let mut asset_legs: Vec<(String, Decimal)> = Vec::new();
+    for posting in &tx.postings {
+        if !posting.account.starts_with("Assets:") { continue; }
+        let Some(amount) = posting.amount else { continue; };
+        if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
+        asset_legs.push((posting.account.clone(), amount));
+    }
+    if asset_legs.is_empty() { return; }
 
+    let mut location_deltas: BTreeMap<String, Decimal> = BTreeMap::new();
+    let mut positive_flow = Decimal::ZERO;
+    for (account, amount) in &asset_legs {
+        *location_deltas.entry(account.clone()).or_default() += *amount;
+        if amount.is_sign_positive() {
+            positive_flow += *amount;
+        }
+    }
+
+    // flow 用正腿额做展示用（不为 0 才能在明细中显示存入/转出标签）
+    // 净流 0 不影响 expense 汇总（summary 按类型过滤）
+    let mut flow = positive_flow;
+    // 用 cap 缩放
     if let Some(cap) = cap_amount {
-        if flow.is_zero() {
-            flow = cap;
-        } else {
-            let ratio = (cap / flow).round_dp(6);
+        if !positive_flow.is_zero() {
+            let ratio = (cap / positive_flow).round_dp(6);
             flow = cap;
             for (_account, delta) in location_deltas.iter_mut() {
                 *delta = (*delta * ratio).round_dp(2);
             }
             location_deltas.retain(|_, v| !v.is_zero());
+        } else {
+            flow = cap;
         }
     }
 
-    if !flow.is_zero() || !location_deltas.is_empty() {
-        // 退化分支生成 Asset 类型流，summary 层会按配置类型过滤
+    if !location_deltas.is_empty() {
         flows.push(BucketTxFlow {
             date: tx.date,
             month: month.to_string(),
