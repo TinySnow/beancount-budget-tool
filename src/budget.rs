@@ -281,6 +281,11 @@ pub fn collect_bucket_tx_flows(
                                 let Some(amount) = posting.amount else { continue; };
                                 if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
                                 flow -= amount;
+                            } else if posting.account.starts_with("Income:") {
+                                // 收入归入预算桶：增加 flow 抵消支出（如广告费 → 生活费）
+                                let Some(amount) = posting.amount else { continue; };
+                                if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
+                                flow += amount;
                             } else if posting.account.starts_with("Assets:") {
                                 let Some(amount) = posting.amount else { continue; };
                                 if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
