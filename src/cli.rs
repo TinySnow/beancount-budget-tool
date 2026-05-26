@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use chrono::Datelike;
 use clap::{Parser, ValueEnum};
 
 /// CLI 参数集合，通过 `clap` derive 宏自动解析。
@@ -139,19 +140,36 @@ pub enum BucketView {
 ///
 /// 用于替代 `--month` + `--scope` 的灵活时间段统计。
 /// - `Month { target, scope }`: 原有月度/累计模式
-/// - `Range { from, to }`: 起止月份全包含
+/// - `Range { from, to }`: 起止日期（精确到天）
 #[derive(Debug, Clone)]
 pub enum DateRange {
     Month { target: String, scope: ReportScope },
-    Range { from: String, to: String },
+    Range { from: chrono::NaiveDate, to: chrono::NaiveDate },
 }
 
 impl DateRange {
-    /// 判断给定月份是否在范围内。
+    /// 判断给定日期是否在范围内。
+    pub fn contains_date(&self, date: chrono::NaiveDate) -> bool {
+        match self {
+            DateRange::Month { target, scope } => {
+                let month = chrono::NaiveDate::parse_from_str(&format!("{}-01", target), "%Y-%m-%d")
+                    .map(|d| format!("{:04}-{:02}", d.year(), d.month()))
+                    .unwrap_or_default();
+                crate::util::is_month_in_scope(&month, target, *scope)
+            }
+            DateRange::Range { from, to } => date >= *from && date <= *to,
+        }
+    }
+
+    /// 判断给定月份字符串是否在范围内（向后兼容）。
     pub fn contains(&self, month: &str) -> bool {
         match self {
             DateRange::Month { target, scope } => crate::util::is_month_in_scope(month, target, *scope),
-            DateRange::Range { from, to } => month >= from.as_str() && month <= to.as_str(),
+            DateRange::Range { from, to } => {
+                let f = format!("{:04}-{:02}", from.year(), from.month());
+                let t = format!("{:04}-{:02}", to.year(), to.month());
+                month >= f.as_str() && month <= t.as_str()
+            }
         }
     }
 
@@ -176,10 +194,10 @@ impl DateRange {
     }
 
     /// 范围对应的结束月份（用于资产位置累计等）。
-    pub fn end_month(&self) -> &str {
+    pub fn end_month(&self) -> String {
         match self {
-            DateRange::Month { target, .. } => target,
-            DateRange::Range { to, .. } => to,
+            DateRange::Month { target, .. } => target.clone(),
+            DateRange::Range { to, .. } => format!("{:04}-{:02}", to.year(), to.month()),
         }
     }
 }
