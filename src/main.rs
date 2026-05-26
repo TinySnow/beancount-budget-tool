@@ -25,9 +25,9 @@ use crate::util::fmt_decimal;
 fn main() -> Result<()> {
     // Windows 系统切换控制台输出到 UTF-8 编码，避免重定向乱码
     #[cfg(windows)]
-    unsafe {
-        extern "system" { fn SetConsoleOutputCP(code: u32) -> i32; }
-        SetConsoleOutputCP(65001); // CP_UTF8
+    {
+        unsafe extern "system" { fn SetConsoleOutputCP(code: u32) -> i32; }
+        unsafe { SetConsoleOutputCP(65001); }
     }
 
     let mut cli = Cli::parse();
