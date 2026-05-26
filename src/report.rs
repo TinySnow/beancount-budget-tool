@@ -397,7 +397,7 @@ pub fn append_bucket_detail_view(
         month_flows.sort_by_key(|flow| flow.date);
 
         for flow in month_flows {
-            let action = match bucket_kind {
+            let action = match flow.kind {
                 BucketKind::Expense => "支出",
                 BucketKind::Asset => {
                     if flow.flow.is_sign_positive() {
