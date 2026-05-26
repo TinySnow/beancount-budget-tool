@@ -11,6 +11,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::PathBuf,
+    str::FromStr,
 };
 
 use anyhow::{Context, Result};
@@ -157,25 +158,28 @@ pub fn collect_bucket_tx_flows(
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
-            for bucket_name in bucket_names {
+            for raw_name in bucket_names {
+                // 支持 budget: "桶名:金额" 语法——冒号后为分配给该桶的固定金额
+                let (bucket_name, cap_amount) = if let Some((name, amt)) = raw_name.split_once(':') {
+                    let amt_parsed = rust_decimal::Decimal::from_str(amt.trim()).ok();
+                    (name.trim(), amt_parsed)
+                } else {
+                    (raw_name, None)
+                };
                 let kind = mappings.bucket_kind(bucket_name);
                 match kind {
                     BucketKind::Expense => {
                         let mut flow = Decimal::ZERO;
-                        for posting in &tx.postings {
-                            if !posting.account.starts_with("Expenses:") {
-                                continue;
+                        // 若指定了固定金额则直接用，否则汇总所有 Expenses: postings
+                        if let Some(cap) = cap_amount {
+                            flow = if cap.is_sign_positive() { -cap } else { -cap };
+                        } else {
+                            for posting in &tx.postings {
+                                if !posting.account.starts_with("Expenses:") { continue; }
+                                let Some(amount) = posting.amount else { continue; };
+                                if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
+                                flow -= amount;
                             }
-                            let Some(amount) = posting.amount else {
-                                continue;
-                            };
-                            if !is_target_currency(posting.currency.as_deref(), target_currency)
-                            {
-                                continue;
-                            }
-
-                            // 消费减少预算余额，记负数；退款（负金额）会转为正流入
-                            flow -= amount;
                         }
 
                         if !flow.is_zero() {
@@ -193,7 +197,7 @@ pub fn collect_bucket_tx_flows(
                         }
                     }
                     BucketKind::Asset => {
-                        let Some((flow, location_deltas)) = derive_asset_bucket_flow(
+                        let Some((mut flow, mut location_deltas)) = derive_asset_bucket_flow(
                             &tx,
                             bucket_name,
                             target_currency,
@@ -202,6 +206,22 @@ pub fn collect_bucket_tx_flows(
                         ) else {
                             continue;
                         };
+
+                        // 若指定了固定金额，按比例缩放 flow 和 location_deltas
+                        if let Some(cap) = cap_amount {
+                            if flow.is_zero() {
+                                // 无自然 flow（如配置未匹配到但手动分配金额），创建虚拟 flow
+                                flow = cap;
+                                // location_deltas 保持为空或手动分配
+                            } else {
+                                let ratio = (cap / flow).round_dp(6);
+                                flow = cap;
+                                for (_account, delta) in location_deltas.iter_mut() {
+                                    *delta = (*delta * ratio).round_dp(2);
+                                }
+                                location_deltas.retain(|_, v| !v.is_zero());
+                            }
+                        }
 
                         if !flow.is_zero() || !location_deltas.is_empty() {
                             flows.push(BucketTxFlow {
