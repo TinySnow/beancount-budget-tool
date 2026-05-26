@@ -207,10 +207,26 @@ fn process_as_asset(
 ///    最终回退到默认生活费桶。
 ///
 /// 所有交易按日期排序处理，以保证资产桶的推断位置稳定。
+/// 自动补全简写桶名为完整路径。
+/// `"额外储蓄"` 且已知集合中有 `"投资.额外储蓄"` → `"投资.额外储蓄"`。
+/// 若无不匹配或匹配到多个，保持原名。
+fn resolve_short_bucket<'a>(name: &'a str, known: &'a BTreeSet<String>) -> &'a str {
+    // 优先匹配完整路径（如额外储蓄 → 投资.额外储蓄）
+    let pattern = format!(".{}", name);
+    let matches: Vec<&String> = known.iter()
+        .filter(|k| k.ends_with(&pattern))
+        .collect();
+    if matches.len() == 1 { return matches[0].as_str(); }
+    // 精确匹配
+    if known.contains(name) { return name; }
+    name
+}
+
 pub fn collect_bucket_tx_flows(
     ledgers: &[PathBuf],
     mappings: &BudgetMappings,
     target_currency: &str,
+    known_buckets: &BTreeSet<String>,
 ) -> Result<Vec<BucketTxFlow>> {
     let mut all_txs = Vec::new();
 
@@ -252,8 +268,9 @@ pub fn collect_bucket_tx_flows(
                 .filter(|s| !s.is_empty())
                 .collect();
             for raw_name in bucket_names {
-                // 支持 budget: "桶名:金额" 或 "桶名900" 两种写法
                 let (bucket_name, cap_amount) = parse_bucket_amount(raw_name);
+                // 自动补全简写桶名：额外储蓄 → 投资.额外储蓄
+                let bucket_name = resolve_short_bucket(bucket_name, known_buckets);
                 let kind = mappings.bucket_kind(bucket_name);
                 match kind {
                     BucketKind::Expense => {
