@@ -247,7 +247,7 @@ pub fn render_bucket_report_text(
         }
     }
 
-    if data.kind == BucketKind::Asset {
+    if data.kind == BucketKind::Asset || data.flows.iter().any(|f| !f.location_deltas.is_empty()) {
         let show_here = match bucket_view {
             BucketView::Summary => show_locations,
             BucketView::Monthly => true,
@@ -425,7 +425,9 @@ pub fn append_bucket_detail_view(
         }
     }
 
-    if bucket_kind == BucketKind::Asset && show_locations_in_detail {
+    if (bucket_kind == BucketKind::Asset || flows.iter().any(|f| !f.location_deltas.is_empty()))
+        && show_locations_in_detail
+    {
         let locations = budget::collect_asset_locations(bucket, target_month, all_flows);
         append_asset_locations_view(out, target_month, currency, &locations);
     }
@@ -509,7 +511,7 @@ pub fn export_reports(
         let path = out_dir.join(filename);
         fs::write(&path, report).with_context(|| format!("Failed to write {}", path.display()))?;
 
-        if data.kind == BucketKind::Asset {
+        if data.kind == BucketKind::Asset || data.flows.iter().any(|f| !f.location_deltas.is_empty()) {
             let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), flows);
             let location_report =
                 render_asset_locations_markdown(&data.bucket, range.end_month(), currency, &locations);
@@ -725,7 +727,7 @@ pub fn render_bucket_markdown(
         false,
     );
 
-    if data.kind == BucketKind::Asset {
+    if data.kind == BucketKind::Asset || data.flows.iter().any(|f| !f.location_deltas.is_empty()) {
         let locations = budget::collect_asset_locations(&data.bucket, range.end_month(), all_flows);
         let _ = writeln!(out);
         let _ = writeln!(out, "## 资产位置");
