@@ -84,12 +84,17 @@ pub struct BudgetMappings {
 }
 
 impl BudgetMappings {
-    /// 查询指定预算桶的类型，若未在 `bucket_types` 中配置则默认为 `Expense`。
+    /// 查询指定预算桶的类型。
+    ///
+    /// 优先级：`bucket_types` 显式声明 > `asset_bucket_accounts` 中出现 > 默认 Expense。
     pub fn bucket_kind(&self, bucket: &str) -> BucketKind {
-        self.bucket_types
-            .get(bucket)
-            .copied()
-            .unwrap_or(BucketKind::Expense)
+        if let Some(k) = self.bucket_types.get(bucket) {
+            return *k;
+        }
+        if self.asset_bucket_accounts.contains_key(bucket) {
+            return BucketKind::Asset;
+        }
+        BucketKind::Expense
     }
 
     /// 获取指定资产桶显式配置的账户前缀列表。
