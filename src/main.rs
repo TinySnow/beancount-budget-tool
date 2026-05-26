@@ -21,11 +21,13 @@ use cli::{Cli, DateRange, ReportScope};
 
 use crate::util::fmt_decimal;
 
-/// 将 UTF-8 文本写入 stdout（绕过 Windows 控制台编码问题）
+/// 将 UTF-8 文本写入 stdout（绕过 Windows 控制台编码问题）。
+/// 写 UTF-8 BOM 作为编码标记。
 fn write_stdout(text: &str) {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
+    let _ = handle.write_all(b"\xEF\xBB\xBF"); // UTF-8 BOM
     let _ = handle.write_all(text.as_bytes());
     let _ = handle.flush();
 }
