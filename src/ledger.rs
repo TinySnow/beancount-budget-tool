@@ -15,6 +15,8 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use rust_decimal::Decimal;
 
+use crate::util::strip_bom;
+
 /// 交易头正则：`YYYY-MM-DD * ...` 或 `YYYY-MM-DD ! ...`
 static TX_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^(?P<date>\d{4}-\d{2}-\d{2})\s+[*!](?:\s|$)").expect("valid tx header regex")
@@ -98,7 +100,7 @@ pub fn parse_ledger_file(path: &Path) -> Result<Vec<LedgerTransaction>> {
 /// 使用状态机模式：遇到新交易头时完成上一笔交易，逐行累积 metadata 和过账行。
 /// 空行或文件结束也会触发当前交易的完工。
 pub fn parse_ledger_content(content: &str) -> Result<Vec<LedgerTransaction>> {
-    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let content = strip_bom(content);
 
     /// 内部构建器，逐行累积交易数据。
     #[derive(Debug)]
