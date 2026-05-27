@@ -7,6 +7,11 @@ use rust_decimal::Decimal;
 
 use crate::cli::ReportScope;
 
+/// 去除 UTF-8 BOM 前缀。
+pub fn strip_bom(content: &str) -> &str {
+    content.strip_prefix('\u{feff}').unwrap_or(content)
+}
+
 /// 默认的生活费预算桶名称。
 ///
 /// 当账本交易没有显式标注 `budget` metadata 且无法通过账户前缀映射到
@@ -71,11 +76,21 @@ pub fn is_target_currency(posting_currency: Option<&str>, target_currency: &str)
 /// 判断给定月份是否在目标月份与范围的统计范围内。
 ///
 /// - `Month`: 仅当 `month == target_month`。
-/// - `Cumulative`: 当 `month <= target_month`（字典序比较，同世纪有效）。
+/// - `Cumulative`: 当 `month <= target_month`（解析为数值比较）。
 pub fn is_month_in_scope(month: &str, target_month: &str, scope: ReportScope) -> bool {
     match scope {
         ReportScope::Month => month == target_month,
-        ReportScope::Cumulative => month <= target_month,
+        ReportScope::Cumulative => {
+            let parse = |s: &str| -> Option<(i32, u32)> {
+                let y: i32 = s[..4].parse().ok()?;
+                let m: u32 = s[5..].parse().ok()?;
+                Some((y, m))
+            };
+            match (parse(month), parse(target_month)) {
+                (Some(a), Some(b)) => a <= b,
+                _ => month <= target_month,
+            }
+        }
     }
 }
 
