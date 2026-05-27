@@ -533,6 +533,13 @@ pub fn export_reports(
             .with_context(|| format!("Failed to write {}", pivot_path.display()))?;
     }
 
+    // JSON 导出
+    if config.out_json {
+        let json_path = out_dir.join(format!("summary-{}.json", scope_label));
+        fs::write(&json_path, render_summary_json(summaries, range, currency))
+            .with_context(|| format!("Failed to write {}", json_path.display()))?;
+    }
+
     // 每个桶的 Markdown 报告
     let buckets = budget::collect_buckets_for_export(config, directives, flows, summaries);
     for bucket in buckets {
@@ -625,7 +632,33 @@ pub fn render_summary_markdown(
     out
 }
 
-/// 渲染汇总报告的 CSV 格式。
+/// 渲染汇���报告 JSON 格式。
+pub fn render_summary_json(
+    summaries: &BTreeMap<String, BucketSummary>,
+    range: &DateRange,
+    currency: &str,
+) -> String {
+    let mut out = String::from("{\n");
+    let _ = writeln!(out, "  \"range\": \"{}\",", range.display());
+    let _ = writeln!(out, "  \"currency\": \"{}\",", currency);
+    let _ = writeln!(out, "  \"buckets\": [");
+    let entries: Vec<_> = summaries.iter().collect();
+    for (i, (bucket, summary)) in entries.iter().enumerate() {
+        let comma = if i + 1 < entries.len() { "," } else { "" };
+        let remain = summary.planned - summary.actual;
+        let _ = writeln!(out, "    {{\"name\":\"{}\",\"planned\":{},\"actual\":{},\"remain\":{},\"status\":\"{}\"}}{}",
+            bucket,
+            summary.planned.round_dp(2),
+            summary.actual.round_dp(2),
+            remain.round_dp(2),
+            if remain.is_sign_negative() { "超支" } else { "正常" },
+            comma,
+        );
+    }
+    let _ = writeln!(out, "  ]");
+    let _ = writeln!(out, "}}");
+    out
+}
 pub fn render_summary_csv(summaries: &BTreeMap<String, BucketSummary>) -> String {
     let mut out = String::from("bucket,planned,actual,remain,status\n");
     for (bucket, summary) in summaries {

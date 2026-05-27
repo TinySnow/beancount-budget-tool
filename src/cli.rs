@@ -99,6 +99,10 @@ pub struct Cli {
     #[arg(long = "csv-pivot")]
     pub csv_pivot: bool,
 
+    /// 额外生成 JSON 格式报告
+    #[arg(long = "out-json")]
+    pub out_json: bool,
+
     /// 同比/环比对比月份（YYYY-MM）：在同一表内对比当前区间与历史区间的数据
     #[arg(long = "compare")]
     pub compare: Option<String>,
@@ -213,6 +217,7 @@ pub struct ReportConfig {
     pub show_locations: bool,
     pub sort_by: Option<String>,
     pub csv_pivot: bool,
+    pub out_json: bool,
     pub bucket: Option<String>,
     pub expand: bool,
     pub strict: bool,
@@ -229,6 +234,7 @@ impl Cli {
             show_locations: self.show_locations,
             sort_by: self.sort_by.clone(),
             csv_pivot: self.csv_pivot,
+            out_json: self.out_json,
             bucket: self.bucket.clone(),
             expand: self.expand,
             strict: self.strict,
