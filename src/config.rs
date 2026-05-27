@@ -28,9 +28,9 @@ use serde::Deserialize;
 
 use crate::util::{default_expense_bucket, strip_bom, validate_month};
 
-/// 预算 key 解析正则：`YYYY-MM` 或 `YYYY-MM-DD` 或 `YYYY-MM 任意标签` 或 `YYYY-MM-DD 标签`
+/// 预算 key 解析正则：`YYYY-MM` / `YYYY.M.D` / `YYYY/M/D` 等格式，加可选标签
 static BUDGET_KEY_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<month>\d{4}-\d{2})(?:-(?P<day>\d{2}))?(?:\s+(?P<label>\S.*))?$").expect("valid budget key regex")
+    Regex::new(r"^(?P<year>\d{4})[-./](?P<month>\d{1,2})(?:[-./](?P<day>\d{1,2}))?(?:\s+(?P<label>\S.*))?$").expect("valid budget key regex")
 });
 
 // ---------------------------------------------------------------------------
@@ -221,23 +221,27 @@ pub fn load_budget_directives(path: &Path) -> Result<Vec<BudgetDirective>> {
 
 /// 解析预算 YAML 中的 key，提取月份和可选标签。
 ///
+/// 支持日期格式：`2026-06`, `2026.1.4`, `2026/01/03`。
+/// 日期部分自动规范化为 YYYY-MM，日部分附加到标签中。
+///
 /// 示例：
 /// - `"2026-06"` → `("2026-06", None)`
-/// - `"2026-06 绩效"` → `("2026-06", Some("绩效"))`
-/// - `"2000-08-20 对方还款"` → `("2000-08", Some("20日 对方还款"))`
+/// - `"2026.1.4 绩效"` → `("2026-01", Some("4日 绩效"))`
 pub fn parse_budget_key(raw: &str) -> Result<(String, Option<String>)> {
     let trimmed = raw.trim();
     let cap = BUDGET_KEY_RE.captures(trimmed).ok_or_else(|| {
         anyhow!(
-            "Invalid budget key '{}', expected 'YYYY-MM' or 'YYYY-MM-DD' or 'YYYY-MM <label>'",
+            "Invalid budget key '{}', expected 'YYYY-MM' / 'YYYY.M.D' / 'YYYY/M/D' with optional label",
             raw
         )
     })?;
 
-    let month = cap["month"].to_string();
+    let y: u32 = cap["year"].parse()?;
+    let m: u32 = cap["month"].parse()?;
+    let month = format!("{:04}-{:02}", y, m);
     validate_month(&month)?;
 
-    let day = cap.name("day").map(|m| m.as_str());
+    let day = cap.name("day").map(|m| m.as_str().trim_start_matches('0'));
     let text_label = cap
         .name("label")
         .map(|m| m.as_str().trim().to_string())

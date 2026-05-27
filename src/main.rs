@@ -184,18 +184,28 @@ fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
     }
 }
 
-/// 解析日期参数：YYYY-MM 展开为当月首日，YYYY-MM-DD 直接解析。
+/// 解析日期参数：支持 YYYY-MM, YYYY-MM-DD, YYYY.M.D, YYYY/M/D。
 fn parse_date_arg(raw: &str) -> Result<chrono::NaiveDate> {
-    if raw.len() == 7 {
-        util::validate_month(raw)?;
-        chrono::NaiveDate::parse_from_str(&format!("{}-01", raw), "%Y-%m-%d")
-            .with_context(|| format!("Invalid date: {}", raw))
-    } else if raw.len() == 10 {
-        chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-            .with_context(|| format!("Invalid date: {}", raw))
-    } else {
-        bail!("Expected YYYY-MM or YYYY-MM-DD, got: {}", raw)
+    let normalized = raw.replace('.', "-").replace('/', "-");
+    // YYYY-MM → YYYY-MM-01
+    if normalized.len() == 7 && normalized.chars().filter(|c| *c == '-').count() == 1 {
+        util::validate_month(&normalized)?;
+        return chrono::NaiveDate::parse_from_str(&format!("{}-01", normalized), "%Y-%m-%d")
+            .with_context(|| format!("Invalid date: {}", raw));
     }
+    // YYYY-M-D or YYYY-MM-DD
+    if normalized.chars().filter(|c| *c == '-').count() == 2 {
+        let parts: Vec<&str> = normalized.split('-').collect();
+        if parts.len() == 3 {
+            let y: i32 = parts[0].parse()?;
+            let m: u32 = parts[1].parse()?;
+            let d: u32 = parts[2].parse()?;
+            if let Some(date) = chrono::NaiveDate::from_ymd_opt(y, m, d) {
+                return Ok(date);
+            }
+        }
+    }
+    bail!("Expected YYYY-MM, YYYY-MM-DD, YYYY.M.D or YYYY/M/D, got: {}", raw)
 }
 
 /// 按时间范围过滤预算指令（日期级）。
