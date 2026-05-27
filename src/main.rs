@@ -81,10 +81,10 @@ fn main() -> Result<()> {
             DateRange::Range { .. } => DateRange::Range {
                 from: chrono::NaiveDate::from_ymd_opt(
                     compare_month[..4].parse()?, 1, 1,
-                ).unwrap(),
+                ).context("Invalid date")?,
                 to: chrono::NaiveDate::from_ymd_opt(
                     compare_month[..4].parse()?, compare_month[5..].parse()?, 28,
-                ).unwrap(),
+                ).context("Invalid date")?,
             },
         };
         let cmp_directives = filter_directives_by_range(config::load_budget_directives(&cli.budgets)
@@ -160,8 +160,8 @@ fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
         }
         let y: i32 = year.parse().context("--year must be a 4-digit number")?;
         return Ok(DateRange::Range {
-            from: chrono::NaiveDate::from_ymd_opt(y, 1, 1).unwrap(),
-            to: chrono::NaiveDate::from_ymd_opt(y, 12, 31).unwrap(),
+            from: chrono::NaiveDate::from_ymd_opt(y, 1, 1).context("Invalid date")?,
+            to: chrono::NaiveDate::from_ymd_opt(y, 12, 31).context("Invalid date")?,
         });
     }
     match (&cli.from, &cli.to, &cli.month) {
