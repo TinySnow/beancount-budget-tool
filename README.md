@@ -292,6 +292,7 @@ budget: "数码, 大额支出"   # 花费同时计入数码预算和大额支出
 | `--hide-asset-flows` | 明细视图中隐藏资产间转移，仅显示预算收入和实际支出 |
 | `--out-dir <DIR>` | 导出报告到目录 |
 | `--csv-pivot` | 额外生成横向月表 CSV（月 × 桶） |
+| `--out-json` | 额外生成 JSON 格式报告 |
 | `--currency <CODE>` | 统计币种，默认 `CNY` |
 | `--strict` | 严格模式：存在未知预算桶则非零退出 |
 
@@ -335,6 +336,7 @@ budget: "数码, 大额支出"   # 花费同时计入数码预算和大额支出
 | `bucket-{桶名}-{range}.md` | 某桶完整报告（分月 + 明细 + 资产位置） |
 | `asset-locations-{桶名}-{range}.md` | 资产桶资金位置 |
 | `pivot-{range}.csv`（需 `--csv-pivot`） | 横向月表（行=月，列=桶） |
+| `summary-{range}.json`（需 `--out-json`） | 每桶 planned/actual/remain JSON |
 
 ## 注意事项
 

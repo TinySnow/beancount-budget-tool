@@ -26,7 +26,7 @@ use regex::Regex;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use crate::util::{default_expense_bucket, validate_month};
+use crate::util::{default_expense_bucket, strip_bom, validate_month};
 
 /// 预算 key 解析正则：`YYYY-MM` 或 `YYYY-MM-DD` 或 `YYYY-MM 任意标签` 或 `YYYY-MM-DD 标签`
 static BUDGET_KEY_RE: Lazy<Regex> = Lazy::new(|| {
@@ -193,7 +193,7 @@ fn flatten_budget_map(
 /// 嵌套 YAML 会在加载时递归展平为点号分隔的全路径桶名。
 pub fn load_budget_directives(path: &Path) -> Result<Vec<BudgetDirective>> {
     let content = fs::read_to_string(path)?;
-    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+    let content = strip_bom(&content);
     let raw: BTreeMap<String, BTreeMap<String, BudgetValue>> =
         serde_yaml::from_str(content).context("Invalid budgets YAML")?;
 
@@ -256,7 +256,7 @@ pub fn parse_budget_key(raw: &str) -> Result<(String, Option<String>)> {
 /// 从 `mappings.yaml` 加载预算映射配置。
 pub fn load_mappings(path: &Path) -> Result<BudgetMappings> {
     let content = fs::read_to_string(path)?;
-    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+    let content = strip_bom(&content);
     serde_yaml::from_str(content).context("Invalid mappings YAML")
 }
 
