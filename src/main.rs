@@ -532,6 +532,7 @@ mod tests {
             show_locations: false,
             sort_by: None,
             csv_pivot: false,
+            out_json: false,
             bucket: None,
             expand: false,
             strict: false,
