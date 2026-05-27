@@ -138,6 +138,18 @@ fn parse_bucket_amount(raw: &str) -> (&str, Option<Decimal>) {
 ///
 /// 与普通资产桶不同：这里直接收录所有 Assets: 腿（正负均记录），
 /// 以便完整追踪转入方和转出方的位置变动。
+/// 按 cap 缩放 flow 和 location_deltas。
+fn apply_cap(flow: &mut Decimal, deltas: &mut BTreeMap<String, Decimal>, cap: Decimal, base: Decimal) {
+    if base.is_zero() {
+        *flow = cap;
+    } else {
+        let ratio = (cap / base).round_dp(6);
+        *flow = cap;
+        for (_, v) in deltas.iter_mut() { *v = (*v * ratio).round_dp(2); }
+        deltas.retain(|_, v| !v.is_zero());
+    }
+}
+
 fn process_as_asset(
     tx: &LedgerTransaction,
     bucket_name: &str,
@@ -168,18 +180,8 @@ fn process_as_asset(
     // flow 用正腿额做展示用（不为 0 才能在明细中显示存入/转出标签）
     // 净流 0 不影响 expense 汇总（summary 按类型过滤）
     let mut flow = positive_flow;
-    // 用 cap 缩放
     if let Some(cap) = cap_amount {
-        if !positive_flow.is_zero() {
-            let ratio = (cap / positive_flow).round_dp(6);
-            flow = cap;
-            for (_account, delta) in location_deltas.iter_mut() {
-                *delta = (*delta * ratio).round_dp(2);
-            }
-            location_deltas.retain(|_, v| !v.is_zero());
-        } else {
-            flow = cap;
-        }
+        apply_cap(&mut flow, &mut location_deltas, cap, positive_flow);
     }
 
     if !location_deltas.is_empty() {
@@ -296,14 +298,11 @@ pub fn collect_bucket_tx_flows(
                             continue;
                         }
                         if let Some(cap) = cap_amount {
+                            let cur_abs = flow.abs();
                             let cap_abs = cap.abs();
-                            if flow.abs() > cap_abs {
-                                let ratio = (cap_abs / flow.abs()).round_dp(6);
-                                flow = if flow.is_sign_negative() { -cap_abs } else { cap_abs };
-                                for (_account, delta) in asset_legs.iter_mut() {
-                                    *delta = (*delta * ratio).round_dp(2);
-                                }
-                                asset_legs.retain(|_, v| !v.is_zero());
+                            if cur_abs > cap_abs {
+                                let capped = if flow.is_sign_negative() { -cap_abs } else { cap_abs };
+                                apply_cap(&mut flow, &mut asset_legs, capped, cur_abs);
                             }
                         }
 
@@ -332,18 +331,8 @@ pub fn collect_bucket_tx_flows(
 
                         // 若指定了固定金额，按比例缩放 flow 和 location_deltas
                         if let Some(cap) = cap_amount {
-                            if flow.is_zero() {
-                                // 无自然 flow（如配置未匹配到但手动分配金额），创建虚拟 flow
-                                flow = cap;
-                                // location_deltas 保持为空或手动分配
-                            } else {
-                                let ratio = (cap / flow).round_dp(6);
-                                flow = cap;
-                                for (_account, delta) in location_deltas.iter_mut() {
-                                    *delta = (*delta * ratio).round_dp(2);
-                                }
-                                location_deltas.retain(|_, v| !v.is_zero());
-                            }
+                            let base = flow;
+                            apply_cap(&mut flow, &mut location_deltas, cap, base);
                         }
 
                         if !flow.is_zero() || !location_deltas.is_empty() {
