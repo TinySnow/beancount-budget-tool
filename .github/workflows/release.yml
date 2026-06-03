@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            suffix: linux-amd64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            suffix: macos-amd64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            suffix: macos-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            suffix: windows-amd64.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/beancount-budget-tool release/
+          cp examples/budgets.yaml release/
+          cp examples/mappings.yaml release/
+          tar czf beancount-budget-tool-${{ matrix.suffix }}.tar.gz -C release .
+
+      - name: Package (windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir release
+          cp target/${{ matrix.target }}/release/beancount-budget-tool.exe release/
+          cp examples/budgets.yaml release/
+          cp examples/mappings.yaml release/
+          Compress-Archive -Path release/* -DestinationPath beancount-budget-tool-${{ matrix.suffix }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.suffix }}
+          path: beancount-budget-tool-${{ matrix.suffix }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            beancount-budget-tool-linux-amd64.tar.gz
+            beancount-budget-tool-macos-amd64.tar.gz
+            beancount-budget-tool-macos-arm64.tar.gz
+            beancount-budget-tool-windows-amd64.exe.zip
+          generate_release_notes: true
