@@ -643,12 +643,21 @@ pub fn build_scoped_bucket_data(
     let planned = directives
         .iter()
         .fold(Decimal::ZERO, |acc, item| acc + item.amount);
-    // 仅汇总与桶配置类型匹配的流（exclude 退化 Asset 流 for expense 桶）
     let bucket_kind = mappings.bucket_kind(bucket);
-    let actual = flows
-        .iter()
-        .filter(|f| f.kind == bucket_kind)
-        .fold(Decimal::ZERO, |acc, flow| acc + flow.actual_amount());
+    // 纯资产追踪桶（Expense 桶下所有流均为 Asset 类型，不存在退化 Asset 流）：
+    // 此时不过滤种类，直接对所有流求和
+    let actual = if bucket_kind == BucketKind::Expense
+        && !flows.iter().any(|f| f.kind == BucketKind::Expense)
+    {
+        flows
+            .iter()
+            .fold(Decimal::ZERO, |acc, flow| acc + flow.actual_amount())
+    } else {
+        flows
+            .iter()
+            .filter(|f| f.kind == bucket_kind)
+            .fold(Decimal::ZERO, |acc, flow| acc + flow.actual_amount())
+    };
     let remain = planned - actual;
 
     ScopedBucketData {
