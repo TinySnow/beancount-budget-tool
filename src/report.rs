@@ -374,7 +374,9 @@ pub fn append_bucket_detail_view(
             .filter(|item| item.month == month)
             .collect::<Vec<_>>();
         for item in month_budgets {
-            // 当查询父桶（如 生活费）时，子桶指令（如 生活费.交通）的前缀追加桶名标签
+            if item.amount.is_zero() && item.bucket == bucket {
+                continue;
+            }
             let child_label = if item.bucket != bucket {
                 &item.bucket[bucket.len() + 1..]
             } else {

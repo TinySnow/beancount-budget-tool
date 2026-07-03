@@ -128,7 +128,7 @@ pub struct BudgetDirective {
 /// YAML 嵌套预算值：叶节点为金额，分支节点为子映射。
 ///
 /// 通过 `#[serde(untagged)]` 自动识别 YAML 中值是 Decimal 还是嵌套 Map。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
 enum BudgetValue {
     Amount(Decimal),
@@ -182,6 +182,57 @@ fn flatten_budget_map(
 }
 
 // ---------------------------------------------------------------------------
+// 模板支持
+// ---------------------------------------------------------------------------
+
+/// 递归合并两个预算桶映射。
+///
+/// 覆写层中的键优先：同名叶节点（Amount/Null）直接覆写；
+/// 同名 Group 递归合并子映射。
+fn merge_bucket_maps(
+    base: &BTreeMap<String, BudgetValue>,
+    override_map: &BTreeMap<String, BudgetValue>,
+) -> BTreeMap<String, BudgetValue> {
+    let mut merged = base.clone();
+    for (key, value) in override_map {
+        match value {
+            BudgetValue::Group(ov_group) => {
+                if let Some(BudgetValue::Group(base_group)) = merged.get(key) {
+                    merged.insert(key.clone(), BudgetValue::Group(merge_bucket_maps(base_group, ov_group)));
+                } else {
+                    merged.insert(key.clone(), BudgetValue::Group(ov_group.clone()));
+                }
+            }
+            _ => {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    merged
+}
+
+/// 为指定月份查找适用的模板映射。
+///
+/// 合并策略：
+/// 1. 以 `default_monthly` 为起点
+/// 2. 按日期顺序叠加上 label 含 "template" 的月度模板键
+///    （<https://github.com/TinySnow/template> 生效日期 <https://github.com/TinySnow/template> 月的模板才适用）
+/// 3. 同名键按上面顺序覆写（后面的盖前面的）
+fn resolve_template(
+    templates: &BTreeMap<String, BTreeMap<String, BudgetValue>>,
+    default_template: &Option<BTreeMap<String, BudgetValue>>,
+    target_month: &str,
+) -> BTreeMap<String, BudgetValue> {
+    let mut effective = default_template.clone().unwrap_or_default();
+    for (tmpl_month, tmpl_map) in templates {
+        if tmpl_month.as_str() <= target_month {
+            effective = merge_bucket_maps(&effective, tmpl_map);
+        }
+    }
+    effective
+}
+
+// ---------------------------------------------------------------------------
 // 配置加载函数
 // ---------------------------------------------------------------------------
 
@@ -191,23 +242,50 @@ fn flatten_budget_map(
 /// 其中外层 key 为 `YYYY-MM` 或 `YYYY-MM 标签`，
 /// 内层值可为 Decimal（叶节点）或嵌套 Map（分支节点）。
 /// 嵌套 YAML 会在加载时递归展平为点号分隔的全路径桶名。
+///
+/// 支持模板机制 (`default_monthly` 和 `YYYY-MM template` 键)：
+/// 月份键仅需写与模板不同的部分，其余金额自动从当前生效模板继承。
 pub fn load_budget_directives(path: &Path) -> Result<Vec<BudgetDirective>> {
     let content = fs::read_to_string(path)?;
     let content = strip_bom(&content);
     let raw: BTreeMap<String, BTreeMap<String, BudgetValue>> =
         serde_yaml::from_str(content).context("Invalid budgets YAML")?;
 
+    // --- 提取模板 ---
+    let default_monthly = raw.get("default_monthly").cloned();
+    let mut dated_templates: BTreeMap<String, BTreeMap<String, BudgetValue>> = BTreeMap::new();
+    for (raw_key, bucket_map) in &raw {
+        if raw_key == "default_monthly" { continue; }
+        if let Ok((month, label)) = parse_budget_key(raw_key) {
+            if let Some(ref l) = label {
+                if l.to_lowercase().contains("template") {
+                    dated_templates.insert(month, bucket_map.clone());
+                }
+            }
+        }
+    }
+
     let mut directives = Vec::new();
     for (raw_key, bucket_map) in raw {
-        let (month, label) = parse_budget_key(&raw_key)?;
-        flatten_budget_map(
-            "",
-            &bucket_map,
-            &month,
-            label.as_deref(),
-            &raw_key,
-            &mut directives,
-        );
+        if raw_key == "default_monthly" { continue; }
+
+        match parse_budget_key(&raw_key) {
+            Ok((month, label)) => {
+                // 跳过模板键本身
+                let is_template_key = label
+                    .as_deref()
+                    .map(|l| l.to_lowercase().contains("template"))
+                    .unwrap_or(false);
+                if is_template_key { continue; }
+
+                let base = resolve_template(&dated_templates, &default_monthly, &month);
+                let merged = merge_bucket_maps(&base, &bucket_map);
+                flatten_budget_map("", &merged, &month, label.as_deref(), &raw_key, &mut directives);
+            }
+            Err(_) => {
+                // 无法解析为日期的键（如 YAML 顶层意外值）直接跳过
+            }
+        }
     }
 
     directives.sort_by(|a, b| {
