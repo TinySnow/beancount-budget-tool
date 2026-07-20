@@ -548,7 +548,7 @@ pub fn summarize_buckets(
             .actual += flow.actual_amount();
     }
 
-    // 第二轮：子桶向上聚合到父桶
+    // 第二轮：子桶向上聚合到父桶（跳过跟踪桶 planned=0）
     let all_buckets: Vec<String> = summaries.keys().cloned().collect();
     for bucket in all_buckets {
         let mut parent = parent_bucket(&bucket);
@@ -556,6 +556,10 @@ pub fn summarize_buckets(
             let s = &summaries[&bucket];
             (s.planned, s.actual)
         };
+        // 跟踪桶 (planned=0) 不参与父桶聚合，避免虚增父桶实际支出
+        if planned.is_zero() {
+            continue;
+        }
         while let Some(p) = parent {
             let entry = summaries.entry(p.to_string()).or_default();
             entry.planned += planned;
