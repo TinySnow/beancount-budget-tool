@@ -13,6 +13,8 @@ use anyhow::{Context, Result, bail};
 use chrono::Datelike;
 use clap::{Parser, ValueEnum};
 
+use crate::util::ReportScope;
+
 /// CLI 参数集合，通过 `clap` derive 宏自动解析。
 #[derive(Parser, Debug)]
 #[command(name = "beancount-budget-tool")]
@@ -106,26 +108,6 @@ pub struct Cli {
     /// 同比/环比对比月份（YYYY-MM）：在同一表内对比当前区间与历史区间的数据
     #[arg(long = "compare")]
     pub compare: Option<String>,
-}
-
-/// 预算统计范围。
-///
-/// - `Month`: 仅统计目标月份的数据。
-/// - `Cumulative`: 统计从最早月份到目标月份的累计数据。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum ReportScope {
-    Month,
-    Cumulative,
-}
-
-impl ReportScope {
-    /// 返回范围的短标签，用于文件名和报告输出。
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Month => "month",
-            Self::Cumulative => "cumulative",
-        }
-    }
 }
 
 /// 预算桶的历史视图粒度。

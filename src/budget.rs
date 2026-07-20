@@ -20,7 +20,8 @@ use rust_decimal::Decimal;
 use crate::config::{BucketKind, BudgetDirective, BudgetMappings};
 use crate::ledger::{self, LedgerTransaction};
 use crate::util::{is_month_in_scope, is_target_currency, month_of_date, parent_bucket};
-use crate::cli::{ReportConfig, ReportScope};
+use crate::cli::{ReportConfig};
+use crate::util::ReportScope;
 
 // ---------------------------------------------------------------------------
 // 数据结构
@@ -122,14 +123,13 @@ fn parse_bucket_amount(raw: &str) -> (&str, Option<Decimal>) {
     {
         let number_start = pos + ch.len_utf8();
         let number_part = &trimmed[number_start..];
-        if !number_part.is_empty() {
-            if let Ok(amt) = Decimal::from_str(number_part) {
+        if !number_part.is_empty()
+            && let Ok(amt) = Decimal::from_str(number_part) {
                 let name_part = trimmed[..number_start].trim_end();
                 if !name_part.is_empty() {
                     return (name_part, Some(amt));
                 }
             }
-        }
     }
     (trimmed, None)
 }
@@ -424,8 +424,8 @@ pub fn derive_asset_bucket_flow(
     }
 
     // 优先使用显式配置的资产账户前缀做精确归因
-    if let Some(prefixes) = mappings.configured_asset_prefixes(bucket) {
-        if !prefixes.is_empty() {
+    if let Some(prefixes) = mappings.configured_asset_prefixes(bucket)
+        && !prefixes.is_empty() {
             let selected = asset_postings
                 .into_iter()
                 .filter(|(account, _)| prefixes.iter().any(|p| account.starts_with(p)))
@@ -449,7 +449,6 @@ pub fn derive_asset_bucket_flow(
             }
             return Some((flow, location_deltas));
         }
-    }
 
     // 无显式配置时：
     // 1) 若有正向资产腿，默认视为"流入该桶"的资产位置
