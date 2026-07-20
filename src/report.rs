@@ -457,8 +457,7 @@ pub fn append_bucket_detail_view(
 }
 
 /// 追加资产位置表格到输出缓冲区。
-/// 正数归入「持仓/已分配」，负数归入「超支/出金来源」。
-/// 超支时隐藏「持仓/已分配」段。
+/// 正数为资金存放账户，负数为支出来源账户。
 pub fn append_asset_locations_view(
     out: &mut String,
     target_month: &str,
@@ -471,15 +470,17 @@ pub fn append_asset_locations_view(
     let holdings: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_positive()).collect();
     let sources: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_negative()).collect();
 
+    // 资金存放 — 该桶计划预算当前存在哪些账户
     if !holdings.is_empty() && !remain.is_sign_negative() {
-        let _ = writeln!(out, "\n持仓/已分配（截至 {}）:", target_month);
+        let _ = writeln!(out, "\n资金存放（截至 {}）:", target_month);
         for (account, amount) in &holdings {
             let _ = writeln!(out, "{}: {} {}", shorten_account_label(account), fmt_decimal(**amount), currency);
         }
     }
 
+    // 支出来源 — 该桶实际支出从哪些账户转出
     if !sources.is_empty() {
-        let _ = writeln!(out, "\n超支/出金来源（截至 {}）:", target_month);
+        let _ = writeln!(out, "\n支出来源（截至 {}）:", target_month);
         for (account, amount) in &sources {
             let _ = writeln!(out, "{}: {} {}", shorten_account_label(account), fmt_decimal(**amount), currency);
         }
@@ -779,7 +780,7 @@ pub fn render_bucket_markdown(
             let holdings: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_positive()).collect();
             let negatives: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_negative()).collect();
             if !holdings.is_empty() {
-                let _ = writeln!(out, "**持仓/已分配**");
+                let _ = writeln!(out, "**资金存放**");
                 let _ = writeln!(out);
                 let _ = writeln!(out, "| 账户 | 金额 |");
                 let _ = writeln!(out, "|---|---:|");
@@ -789,7 +790,7 @@ pub fn render_bucket_markdown(
                 if !negatives.is_empty() { let _ = writeln!(out); }
             }
             if !negatives.is_empty() {
-                let _ = writeln!(out, "**超支/出金来源**");
+                let _ = writeln!(out, "**支出来源**");
                 let _ = writeln!(out);
                 let _ = writeln!(out, "| 账户 | 金额 |");
                 let _ = writeln!(out, "|---|---:|");
