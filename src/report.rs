@@ -458,6 +458,7 @@ pub fn append_bucket_detail_view(
 
 /// 追加资产位置表格到输出缓冲区。
 /// 正数为资金存放账户，负数为支出来源账户。
+/// 差额为已实际消费的金额（钱已花掉，不再存在于任何资产账户中）。
 pub fn append_asset_locations_view(
     out: &mut String,
     target_month: &str,
@@ -469,6 +470,9 @@ pub fn append_asset_locations_view(
 
     let holdings: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_positive()).collect();
     let sources: Vec<_> = locations.iter().filter(|(_, v)| v.is_sign_negative()).collect();
+
+    let holdings_total: Decimal = holdings.iter().map(|(_, v)| **v).sum();
+    let sources_total: Decimal = sources.iter().map(|(_, v)| **v).sum();
 
     // 资金存放 — 该桶计划预算当前存在哪些账户
     if !holdings.is_empty() && !remain.is_sign_negative() {
@@ -484,6 +488,12 @@ pub fn append_asset_locations_view(
         for (account, amount) in &sources {
             let _ = writeln!(out, "{}: {} {}", shorten_account_label(account), fmt_decimal(**amount), currency);
         }
+    }
+
+    // 已支出 = 支出来源 − 资金存放，即钱花到哪去了
+    let spent = sources_total + holdings_total; // sources 为负数
+    if !spent.is_zero() && !holdings.is_empty() && !sources.is_empty() {
+        let _ = writeln!(out, "\n已支出（截至 {}）: {} {} ← 资金存放与支出来源的差额", target_month, fmt_decimal(-spent), currency);
     }
 
     if holdings.is_empty() && sources.is_empty() {
