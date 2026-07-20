@@ -50,12 +50,14 @@ pub fn render_summary_report_text(
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
     for (bucket, summary) in &entries {
+        // 跟踪桶 (planned=0) 不显示在汇总表中
+        if summary.planned.is_zero() {
+            continue;
+        }
         let remain = summary.planned - summary.actual;
         let status = if remain.is_sign_negative() { "超支" } else { "正常" };
-        if !summary.planned.is_zero() {
-            total_planned += summary.planned;
-            total_actual += summary.actual;
-        }
+        total_planned += summary.planned;
+        total_actual += summary.actual;
         let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
             bucket, fmt_decimal(summary.planned), fmt_decimal(summary.actual),
             fmt_pct(summary.actual, summary.planned), fmt_decimal(remain), status);
@@ -597,12 +599,14 @@ pub fn render_summary_markdown(
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
     for (bucket, summary) in &entries {
+        // 跟踪桶 (planned=0) 不显示在汇总表中
+        if summary.planned.is_zero() {
+            continue;
+        }
         let remain = summary.planned - summary.actual;
         let status = if remain.is_sign_negative() { "超支" } else { "正常" };
-        if !summary.planned.is_zero() {
-            total_planned += summary.planned;
-            total_actual += summary.actual;
-        }
+        total_planned += summary.planned;
+        total_actual += summary.actual;
         let _ = writeln!(out, "| {} | {} | {} | {} | {} | {} |",
             bucket, fmt_decimal(summary.planned), fmt_decimal(summary.actual),
             fmt_pct(summary.actual, summary.planned), fmt_decimal(remain), status);
