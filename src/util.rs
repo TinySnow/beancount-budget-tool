@@ -1,11 +1,27 @@
-//! 工具函数模块。
-//!
-//! 提供跨模块共享的日期处理、货币匹配、数值格式化等基础函数。
+//! 工具函数与基础类型模块。
 
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
+use clap::ValueEnum;
 
-use crate::cli::ReportScope;
+/// 预算统计范围。
+///
+/// - `Month`: 仅统计目标月份的数据。
+/// - `Cumulative`: 统计从最早月份到目标月份的累计数据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ReportScope {
+    Month,
+    Cumulative,
+}
+
+impl ReportScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Month => "month",
+            Self::Cumulative => "cumulative",
+        }
+    }
+}
 
 /// 去除 UTF-8 BOM 前缀。
 pub fn strip_bom(content: &str) -> &str {

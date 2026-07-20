@@ -265,13 +265,11 @@ pub fn load_budget_directives(path: &Path) -> Result<Vec<BudgetDirective>> {
     let mut dated_templates: BTreeMap<String, BTreeMap<String, BudgetValue>> = BTreeMap::new();
     for (raw_key, bucket_map) in &raw {
         if raw_key == "default_monthly" { continue; }
-        if let Ok((month, label)) = parse_budget_key(raw_key) {
-            if let Some(ref l) = label {
-                if l.to_lowercase().contains("template") {
+        if let Ok((month, label)) = parse_budget_key(raw_key)
+            && let Some(ref l) = label
+                && l.to_lowercase().contains("template") {
                     dated_templates.insert(month, bucket_map.clone());
                 }
-            }
-        }
     }
 
     let mut directives = Vec::new();
@@ -351,13 +349,6 @@ pub fn load_config(path: &Path) -> Result<BudgetMappings> {
     let content = fs::read_to_string(path)?;
     let content = strip_bom(&content);
     serde_yaml::from_str(content).context("Invalid config YAML (expected keys: defaults, bucket_types, tracking_buckets, etc.)")
-}
-
-/// 旧名兼容，内部调用 `load_config`。
-#[deprecated(note = "use load_config instead")]
-#[allow(dead_code)]
-pub fn load_mappings(path: &Path) -> Result<BudgetMappings> {
-    load_config(path)
 }
 
 /// 收集所有已知的预算桶名称集合。

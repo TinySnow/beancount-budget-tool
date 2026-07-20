@@ -18,7 +18,8 @@ mod report;
 use anyhow::{Context, Result, bail};
 use chrono::Datelike;
 use clap::Parser;
-use cli::{Cli, DateRange, ReportScope};
+use cli::{Cli, DateRange};
+use util::ReportScope;
 
 use crate::util::fmt_decimal;
 
@@ -42,10 +43,9 @@ fn main() -> Result<()> {
 
     // 当使用 --from/--to 时，为了复用现有的 cumulative 汇总逻辑，
     // 将输入数据裁剪到 [from, to] 区间，并将 cli.month/scope 设为区间末月的累积模式
-    if let DateRange::Range { ref from, ref to } = date_range {
+    if let DateRange::Range { ref to, .. } = date_range {
         cli.month = Some(format!("{:04}-{:02}", to.year(), to.month()));
         cli.scope = ReportScope::Cumulative;
-        let _ = from;
     }
 
     let month_str = cli.month.as_deref().unwrap_or("?");
@@ -78,21 +78,23 @@ fn main() -> Result<()> {
                 target: compare_month.clone(),
                 scope: *scope,
             },
-            DateRange::Range { .. } => DateRange::Range {
-                from: chrono::NaiveDate::from_ymd_opt(
-                    compare_month[..4].parse()?, 1, 1,
-                ).context("Invalid date")?,
-                to: chrono::NaiveDate::from_ymd_opt(
-                    compare_month[..4].parse()?, compare_month[5..].parse()?, 28,
-                ).context("Invalid date")?,
+            DateRange::Range { .. } => {
+                let y: i32 = compare_month[..4].parse()?;
+                let m: u32 = compare_month[5..].parse()?;
+                let end_of_month = chrono::NaiveDate::from_ymd_opt(y, m, 1)
+                    .and_then(|d| d.checked_add_months(chrono::Months::new(1)))
+                    .and_then(|next| next.pred_opt())
+                    .context("Invalid date")?;
+                DateRange::Range {
+                    from: chrono::NaiveDate::from_ymd_opt(y, m, 1).context("Invalid date")?,
+                    to: end_of_month,
+                }
             },
         };
         let cmp_directives = filter_directives_by_range(config::load_budget_directives(&cli.budgets)
             .with_context(|| format!("Failed to load budgets: {}", cli.budgets.display()))?, &cmp_range);
-        let cmp_flows = filter_flows_by_range(
-            budget::collect_bucket_tx_flows(&ledger_files, &mappings, &target_currency, &all_known)?,
-            &cmp_range,
-        );
+        // 复用已解析的流水，不重复解析账本
+        let cmp_flows = filter_flows_by_range(tx_flows.clone(), &cmp_range);
         let cmp_target = cmp_range.end_month().to_string();
         let cmp_summaries = budget::summarize_buckets(&cmp_directives, &cmp_flows, &cmp_target, cli.scope, &mappings);
         let cmp_warnings = budget::collect_scope_warnings(&cmp_flows, &known_buckets, &cmp_target, cli.scope);
@@ -186,7 +188,7 @@ fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
 
 /// 解析日期参数：支持 YYYY-MM, YYYY-MM-DD, YYYY.M.D, YYYY/M/D。
 fn parse_date_arg(raw: &str) -> Result<chrono::NaiveDate> {
-    let normalized = raw.replace('.', "-").replace('/', "-");
+    let normalized = raw.replace(['.', '/'], "-");
     // YYYY-MM → YYYY-MM-01
     if normalized.len() == 7 && normalized.chars().filter(|c| *c == '-').count() == 1 {
         util::validate_month(&normalized)?;
@@ -250,7 +252,7 @@ mod tests {
         ledger::parse_ledger_content,
         ledger::parse_metadata_value,
         util::{default_expense_bucket, is_month_in_scope},
-        cli::ReportScope,
+        util::ReportScope,
     };
     use rust_decimal_macros::dec;
     use std::{
@@ -500,7 +502,7 @@ tracking_buckets: vec![],
 
     #[test]
     fn summarize_hierarchy_aggregates_children_into_parent() {
-        use crate::{budget::summarize_buckets, cli::ReportScope};
+        use crate::{budget::summarize_buckets, util::ReportScope};
         let directives = vec![
             BudgetDirective {
                 month: "2026-06".into(),
@@ -536,7 +538,8 @@ tracking_buckets: vec![],
     fn scoped_bucket_data_includes_children_for_parent() {
         use crate::{
             budget::build_scoped_bucket_data,
-            cli::{ReportConfig, ReportScope, BucketView},
+            cli::{ReportConfig, BucketView},
+            util::ReportScope,
             config::BudgetMappings,
         };
         let config = ReportConfig {
