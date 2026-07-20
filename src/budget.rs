@@ -527,10 +527,11 @@ pub fn summarize_buckets(
         if !is_month_in_scope(&item.month, target_month, scope) {
             continue;
         }
-        summaries
-            .entry(item.bucket.clone())
-            .or_default()
-            .planned += item.amount;
+        let summary = summaries.entry(item.bucket.clone()).or_default();
+        // 跟踪桶强制 planned=0，模板中写的 planned 值仅作文档参考
+        if !mappings.is_tracking_bucket(&item.bucket) {
+            summary.planned += item.amount;
+        }
     }
 
     for flow in flows {
@@ -548,16 +549,18 @@ pub fn summarize_buckets(
             .actual += flow.actual_amount();
     }
 
-    // 第二轮：子桶向上聚合到父桶（跳过跟踪桶 planned=0）
+    // 第二轮：子桶向上聚合到父桶（跳过跟踪桶）
     let all_buckets: Vec<String> = summaries.keys().cloned().collect();
     for bucket in all_buckets {
+        if mappings.is_tracking_bucket(&bucket) {
+            continue;
+        }
         let mut parent = parent_bucket(&bucket);
         let (planned, actual) = {
             let s = &summaries[&bucket];
             (s.planned, s.actual)
         };
-        // 跟踪桶 (planned=0) 不参与父桶聚合，避免虚增父桶实际支出
-        if planned.is_zero() {
+        if planned.is_zero() && actual.is_zero() {
             continue;
         }
         while let Some(p) = parent {

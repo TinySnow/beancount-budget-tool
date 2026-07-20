@@ -298,6 +298,7 @@ mod tests {
             default_expense_bucket: default_expense_bucket(),
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
+            tracking_buckets: vec![],
         };
 
         let bucket = config::resolve_bucket_by_account(&mappings, "Expenses:Consume:电子:配件")
@@ -327,6 +328,7 @@ mod tests {
             default_expense_bucket: "生活费".to_string(),
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
+            tracking_buckets: vec![],
         };
 
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
@@ -349,6 +351,7 @@ mod tests {
             default_expense_bucket: "生活费".to_string(),
             bucket_types: BTreeMap::from([("储蓄".to_string(), BucketKind::Asset)]),
             asset_bucket_accounts: BTreeMap::new(),
+            tracking_buckets: vec![],
         };
 
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
@@ -399,6 +402,7 @@ mod tests {
             default_expense_bucket: "生活费".to_string(),
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
+            tracking_buckets: vec![],
         };
 
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
@@ -443,6 +447,7 @@ mod tests {
                 ("储蓄".to_string(), vec!["Assets:Invest:货币基金".to_string()]),
                 ("投资".to_string(), vec!["Assets:Invest:货币基金".to_string()]),
             ]),
+tracking_buckets: vec![],
         };
 
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
@@ -518,6 +523,7 @@ mod tests {
             default_expense_bucket: "生活费".into(),
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
+            tracking_buckets: vec![],
         };
         let summaries = summarize_buckets(&directives, &flows, "2026-06", ReportScope::Month, &mappings);
 
@@ -568,6 +574,7 @@ mod tests {
             default_expense_bucket: "生活费".into(),
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
+            tracking_buckets: vec![],
         };
         let flows = vec![];
 

@@ -81,6 +81,10 @@ pub struct BudgetMappings {
     /// 若不配置，系统默认将资产桶交易中的正向资产腿视作"流入位置"。
     #[serde(default)]
     pub asset_bucket_accounts: BTreeMap<String, Vec<String>>,
+
+    /// 跟踪桶列表：仅追踪实际支出，不参与 plan 计算、不计入合计、不聚合到父桶。
+    #[serde(default)]
+    pub tracking_buckets: Vec<String>,
 }
 
 impl BudgetMappings {
@@ -100,6 +104,11 @@ impl BudgetMappings {
     /// 获取指定资产桶显式配置的账户前缀列表。
     pub fn configured_asset_prefixes(&self, bucket: &str) -> Option<&[String]> {
         self.asset_bucket_accounts.get(bucket).map(Vec::as_slice)
+    }
+
+    /// 判断指定桶是否为跟踪桶（仅追踪实际支出，不参与 plan 计算）。
+    pub fn is_tracking_bucket(&self, bucket: &str) -> bool {
+        self.tracking_buckets.iter().any(|b| b == bucket || bucket.starts_with(&format!("{}.", b)))
     }
 }
 
