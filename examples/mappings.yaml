@@ -16,6 +16,12 @@ defaults:
   "Expenses:Travel": 旅行
   "Expenses:Health": 应急
 
+# 可选：标记跟踪桶。跟踪桶仅追踪实际支出，不参与 plan 计算、
+# 不计入合计、不聚合到父桶。模板中写的 planned 值仅作文档参考。
+# tracking_buckets:
+#   - 基金.旅游
+#   - 投资.额外储蓄
+
 # 可选：用于精确定位资产类预算桶资金位置。
 # 若不配置，系统默认将资产桶交易中的正向资产腿视作"流入位置"。
 asset_bucket_accounts:
