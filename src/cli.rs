@@ -31,13 +31,13 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub month: Option<String>,
 
-    /// 预算配置文件
+    /// 预算配置文件（纯预算, 不含跟踪桶）
     #[arg(long, required = true)]
     pub budgets: PathBuf,
 
-    /// 映射配置文件
-    #[arg(long, required = true)]
-    pub mappings: PathBuf,
+    /// 全局配置文件（账户映射、桶类型、跟踪桶等），--mappings 为旧名，仍可用
+    #[arg(long = "config", short = 'c', visible_alias = "mappings", required = true)]
+    pub config_file: PathBuf,
 
     /// 统计币种（默认 CNY）
     #[arg(long, default_value = "CNY")]
