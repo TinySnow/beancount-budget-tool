@@ -345,6 +345,7 @@ pub fn append_bucket_monthly_view(
 /// 追加某个桶的交易明细视图到输出缓冲区。
 ///
 /// 按月份分组，每个月份下先列出预算收入指令，再列出实际交易流水。
+/// 每年末尾插入年度小结（本年合计 + 累计合计）。
 /// 消费桶交易标注"支出"，资产桶根据正负标注"存入/转出"。
 /// 资产桶末尾自动附带资产位置汇总。
 pub fn append_bucket_detail_view(
@@ -370,10 +371,39 @@ pub fn append_bucket_detail_view(
         months.insert(flow.month.clone());
     }
 
-    for month in months {
+    let income_label = match bucket_kind {
+        BucketKind::Expense => "预算收入",
+        BucketKind::Asset => "存入",
+    };
+    let expense_label = match bucket_kind {
+        BucketKind::Expense => "支出",
+        BucketKind::Asset => "转出",
+    };
+
+    let mut year_income = Decimal::ZERO;
+    let mut year_expense = Decimal::ZERO;
+    let mut cumulative_income = Decimal::ZERO;
+    let mut cumulative_expense = Decimal::ZERO;
+    let mut current_year = String::new();
+
+    for month in &months {
+        let year = &month[..4];
+
+        // 年份切换时打印上一年小结
+        if year != current_year {
+            if !current_year.is_empty() {
+                append_year_summary(out, &current_year, currency,
+                    year_income, year_expense, cumulative_income, cumulative_expense,
+                    income_label, expense_label);
+            }
+            current_year = year.to_string();
+            year_income = Decimal::ZERO;
+            year_expense = Decimal::ZERO;
+        }
+
         let month_budgets = directives
             .iter()
-            .filter(|item| item.month == month)
+            .filter(|item| item.month == *month)
             .collect::<Vec<_>>();
         for item in month_budgets {
             if item.amount.is_zero() && item.bucket == bucket {
@@ -389,12 +419,15 @@ pub fn append_bucket_detail_view(
             } else {
                 format!(" [{}]", child_label)
             };
+            year_income += item.amount;
+            cumulative_income += item.amount;
             if let Some(label) = item.label.as_ref() {
                 let _ = writeln!(
                     out,
-                    "{} {}：预算收入{} {} {}",
+                    "{} {}：{}{} {} {}",
                     item.month,
                     label,
+                    income_label,
                     child_tag,
                     fmt_decimal(item.amount),
                     currency
@@ -402,8 +435,9 @@ pub fn append_bucket_detail_view(
             } else {
                 let _ = writeln!(
                     out,
-                    "{}：预算收入{} {} {}",
+                    "{}：{}{} {} {}",
                     item.month,
+                    income_label,
                     child_tag,
                     fmt_decimal(item.amount),
                     currency
@@ -413,11 +447,14 @@ pub fn append_bucket_detail_view(
 
         let mut month_flows = flows
             .iter()
-            .filter(|flow| flow.month == month)
+            .filter(|flow| flow.month == *month)
             .collect::<Vec<_>>();
         month_flows.sort_by_key(|flow| flow.date);
 
         for flow in month_flows {
+            let actual = flow.actual_amount();
+            year_expense += actual;
+            cumulative_expense += actual;
             let action = match flow.kind {
                 BucketKind::Expense => {
                     if flow.flow.is_sign_negative() { "支出" } else { "入账" }
@@ -448,12 +485,41 @@ pub fn append_bucket_detail_view(
         }
     }
 
+    // 最后一年小结
+    if !current_year.is_empty() {
+        append_year_summary(out, &current_year, currency,
+            year_income, year_expense, cumulative_income, cumulative_expense,
+            income_label, expense_label);
+    }
+
     if (bucket_kind == BucketKind::Asset || all_flows.iter().any(|f| f.bucket == bucket && !f.location_deltas.is_empty()))
         && show_locations_in_detail
     {
         let locations = budget::collect_asset_locations(bucket, target_month, all_flows, scope);
         append_asset_locations_view(out, target_month, currency, &locations, remain);
     }
+}
+
+/// 打印年度小结。
+fn append_year_summary(
+    out: &mut String,
+    year: &str,
+    currency: &str,
+    year_income: Decimal,
+    year_expense: Decimal,
+    cumulative_income: Decimal,
+    cumulative_expense: Decimal,
+    income_label: &str,
+    expense_label: &str,
+) {
+    let _ = writeln!(out);
+    let _ = writeln!(out, "========== {} 年小结 ==========", year);
+    let _ = writeln!(out, "{} 本年合计: {} {}", income_label, fmt_decimal(year_income), currency);
+    let _ = writeln!(out, "{} 累计合计: {} {}", income_label, fmt_decimal(cumulative_income), currency);
+    let _ = writeln!(out, "{} 本年合计: {} {}", expense_label, fmt_decimal(year_expense), currency);
+    let _ = writeln!(out, "{} 累计合计: {} {}", expense_label, fmt_decimal(cumulative_expense), currency);
+    let _ = writeln!(out, "==============================");
+    let _ = writeln!(out);
 }
 
 /// 追加资产位置表格到输出缓冲区。
