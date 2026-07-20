@@ -54,8 +54,8 @@ fn main() -> Result<()> {
 
     let budget_directives = config::load_budget_directives(&cli.budgets)
         .with_context(|| format!("Failed to load budgets: {}", cli.budgets.display()))?;
-    let mappings = config::load_mappings(&cli.mappings)
-        .with_context(|| format!("Failed to load mappings: {}", cli.mappings.display()))?;
+    let mappings = config::load_config(&cli.config_file)
+        .with_context(|| format!("Failed to load config: {}", cli.config_file.display()))?;
 
     let target_currency = cli.currency.to_ascii_uppercase();
     // known_buckets 基于全量预算指令（未裁剪），供 bucket 名自动补全

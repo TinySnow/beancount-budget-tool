@@ -344,11 +344,20 @@ pub fn parse_budget_key(raw: &str) -> Result<(String, Option<String>)> {
     Ok((month, label))
 }
 
-/// 从 `mappings.yaml` 加载预算映射配置。
-pub fn load_mappings(path: &Path) -> Result<BudgetMappings> {
+/// 从 YAML 配置文件加载预算映射与跟踪桶配置。
+///
+/// 对应文件通常命名为 `config.yml`（旧名 `mappings.yml` 仍支持）。
+pub fn load_config(path: &Path) -> Result<BudgetMappings> {
     let content = fs::read_to_string(path)?;
     let content = strip_bom(&content);
-    serde_yaml::from_str(content).context("Invalid mappings YAML")
+    serde_yaml::from_str(content).context("Invalid config YAML (expected keys: defaults, bucket_types, tracking_buckets, etc.)")
+}
+
+/// 旧名兼容，内部调用 `load_config`。
+#[deprecated(note = "use load_config instead")]
+#[allow(dead_code)]
+pub fn load_mappings(path: &Path) -> Result<BudgetMappings> {
+    load_config(path)
 }
 
 /// 收集所有已知的预算桶名称集合。
