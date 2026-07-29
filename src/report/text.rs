@@ -487,7 +487,6 @@ fn append_year_summary(
     let _ = writeln!(out, "{} 累计合计: {} {}", income_label, fmt_decimal(cumulative_income), currency);
     // expense 桶下可能有 Asset 类型存入，单独列一行
     if bucket_kind == BucketKind::Expense && !year_deposits.is_zero() {
-        let deposit_label = match bucket_kind { BucketKind::Expense => "存入", BucketKind::Asset => "转出" };
         let _ = writeln!(out, "存入 本年合计: {} {}", fmt_decimal(year_deposits), currency);
         let _ = writeln!(out, "存入 累计合计: {} {}", fmt_decimal(cumulative_deposits), currency);
     }
