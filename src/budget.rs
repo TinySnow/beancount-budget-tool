@@ -386,17 +386,15 @@ pub fn collect_bucket_tx_flows(
         }
     }
 
-    // Asset 流去重：同 bucket + 同日 + 同金额的 Asset 流只保留第一条
-    dedup_asset_flows(&mut flows);
-
     Ok(flows)
 }
 
 /// Asset 流去重：同 bucket + 同日期 + 同金额只保留第一条。
-/// 解决中间转账链（工行→建行→基金）被重复计数的问题。
-fn dedup_asset_flows(flows: &mut Vec<BucketTxFlow>) {
+/// 用于汇总场景（summary / yearly），明细仍展示全部资金流向。
+pub fn dedup_asset_flows(flows: &[BucketTxFlow]) -> Vec<&BucketTxFlow> {
+    use std::collections::HashMap;
     let mut seen: HashMap<(String, chrono::NaiveDate, Decimal), ()> = HashMap::new();
-    flows.retain(|f| {
+    flows.iter().filter(|f| {
         if f.kind != BucketKind::Asset {
             return true;
         }
@@ -404,9 +402,8 @@ fn dedup_asset_flows(flows: &mut Vec<BucketTxFlow>) {
         if actual.is_zero() {
             return true;
         }
-        let key = (f.bucket.clone(), f.date, actual.round_dp(2));
-        seen.insert(key, ()).is_none()
-    });
+        seen.insert((f.bucket.clone(), f.date, actual.round_dp(2)), ()).is_none()
+    }).collect()
 }
 
 /// 从一笔资产转移交易中提取目标资产桶的资金流动和位置变化。
@@ -553,7 +550,7 @@ pub fn summarize_buckets(
         }
     }
 
-    for flow in flows {
+    for flow in dedup_asset_flows(flows) {
         if !is_month_in_scope(&flow.month, target_month, scope) {
             continue;
         }
