@@ -389,10 +389,11 @@ pub fn collect_bucket_tx_flows(
     Ok(flows)
 }
 
-/// Asset 流去重：同 bucket + 相近日期(±3天) + 同金额只保留第一条。
+/// Asset 流去重：同 bucket + 相近日期(±3天) + 同金额 + 同叙述只保留第一条。
+/// 叙述不同（如"买入" vs "买入退款"）视为独立事件，不去重。
 /// 用于汇总场景（summary / yearly），明细仍展示全部资金流向。
 pub fn dedup_asset_flows(flows: &[BucketTxFlow]) -> Vec<&BucketTxFlow> {
-    let mut seen: Vec<(String, chrono::NaiveDate, Decimal)> = Vec::new();
+    let mut seen: Vec<(String, chrono::NaiveDate, Decimal, String)> = Vec::new();
     flows.iter().filter(|f| {
         if f.kind != BucketKind::Asset {
             return true;
@@ -402,12 +403,13 @@ pub fn dedup_asset_flows(flows: &[BucketTxFlow]) -> Vec<&BucketTxFlow> {
             return true;
         }
         let amount = actual.round_dp(2);
-        let is_dup = seen.iter().any(|(b, d, a)| {
-            *b == f.bucket && *a == amount &&
+        let narration_key = f.narration.as_deref().unwrap_or("").to_string();
+        let is_dup = seen.iter().any(|(b, d, a, n)| {
+            *b == f.bucket && *a == amount && *n == narration_key &&
             (*d - f.date).num_days().abs() <= 3
         });
         if !is_dup {
-            seen.push((f.bucket.clone(), f.date, amount));
+            seen.push((f.bucket.clone(), f.date, amount, narration_key));
         }
         !is_dup
     }).collect()
