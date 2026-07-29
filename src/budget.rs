@@ -389,11 +389,11 @@ pub fn collect_bucket_tx_flows(
     Ok(flows)
 }
 
-/// Asset 流去重：同 bucket + 同日期 + 同金额只保留第一条。
+/// Asset 流去重：同 bucket + 相近日期(±3天) + 同金额只保留第一条。
 /// 用于汇总场景（summary / yearly），明细仍展示全部资金流向。
 pub fn dedup_asset_flows(flows: &[BucketTxFlow]) -> Vec<&BucketTxFlow> {
-    use std::collections::HashMap;
-    let mut seen: HashMap<(String, chrono::NaiveDate, Decimal), ()> = HashMap::new();
+    use std::collections::HashSet;
+    let mut seen: Vec<(String, chrono::NaiveDate, Decimal)> = Vec::new();
     flows.iter().filter(|f| {
         if f.kind != BucketKind::Asset {
             return true;
@@ -402,7 +402,15 @@ pub fn dedup_asset_flows(flows: &[BucketTxFlow]) -> Vec<&BucketTxFlow> {
         if actual.is_zero() {
             return true;
         }
-        seen.insert((f.bucket.clone(), f.date, actual.round_dp(2)), ()).is_none()
+        let amount = actual.round_dp(2);
+        let is_dup = seen.iter().any(|(b, d, a)| {
+            *b == f.bucket && *a == amount &&
+            (*d - f.date).num_days().abs() <= 3
+        });
+        if !is_dup {
+            seen.push((f.bucket.clone(), f.date, amount));
+        }
+        !is_dup
     }).collect()
 }
 
