@@ -324,8 +324,10 @@ pub fn append_bucket_detail_view(
 
     let mut year_income = Decimal::ZERO;
     let mut year_expense = Decimal::ZERO;
+    let mut year_deposits = Decimal::ZERO;
     let mut cumulative_income = Decimal::ZERO;
     let mut cumulative_expense = Decimal::ZERO;
+    let mut cumulative_deposits = Decimal::ZERO;
     let mut current_year = String::new();
 
     for month in &months {
@@ -335,12 +337,14 @@ pub fn append_bucket_detail_view(
         if year != current_year {
             if !current_year.is_empty() {
                 append_year_summary(out, &current_year, currency,
-                    year_income, year_expense, cumulative_income, cumulative_expense,
-                    income_label, expense_label);
+                    year_income, year_expense, year_deposits,
+                    cumulative_income, cumulative_expense, cumulative_deposits,
+                    income_label, expense_label, bucket_kind);
             }
             current_year = year.to_string();
             year_income = Decimal::ZERO;
             year_expense = Decimal::ZERO;
+            year_deposits = Decimal::ZERO;
         }
 
         let month_budgets = directives
@@ -395,8 +399,16 @@ pub fn append_bucket_detail_view(
 
         for flow in month_flows {
             let actual = flow.actual_amount();
-            year_expense += actual;
-            cumulative_expense += actual;
+            match flow.kind {
+                BucketKind::Expense => {
+                    year_expense += actual;
+                    cumulative_expense += actual;
+                }
+                BucketKind::Asset => {
+                    year_deposits += actual;
+                    cumulative_deposits += actual;
+                }
+            }
             let action = match flow.kind {
                 BucketKind::Expense => {
                     if flow.flow.is_sign_negative() { "支出" } else { "入账" }
@@ -430,8 +442,9 @@ pub fn append_bucket_detail_view(
     // 最后一年小结
     if !current_year.is_empty() {
         append_year_summary(out, &current_year, currency,
-            year_income, year_expense, cumulative_income, cumulative_expense,
-            income_label, expense_label);
+            year_income, year_expense, year_deposits,
+            cumulative_income, cumulative_expense, cumulative_deposits,
+            income_label, expense_label, bucket_kind);
     }
 
     if (bucket_kind == BucketKind::Asset || all_flows.iter().any(|f| f.bucket == bucket && !f.location_deltas.is_empty()))
@@ -449,15 +462,24 @@ fn append_year_summary(
     currency: &str,
     year_income: Decimal,
     year_expense: Decimal,
+    year_deposits: Decimal,
     cumulative_income: Decimal,
     cumulative_expense: Decimal,
+    cumulative_deposits: Decimal,
     income_label: &str,
     expense_label: &str,
+    bucket_kind: BucketKind,
 ) {
     let _ = writeln!(out);
     let _ = writeln!(out, "========== {} 年小结 ==========", year);
     let _ = writeln!(out, "{} 本年合计: {} {}", income_label, fmt_decimal(year_income), currency);
     let _ = writeln!(out, "{} 累计合计: {} {}", income_label, fmt_decimal(cumulative_income), currency);
+    // expense 桶下可能有 Asset 类型存入，单独列一行
+    if bucket_kind == BucketKind::Expense && !year_deposits.is_zero() {
+        let deposit_label = match bucket_kind { BucketKind::Expense => "存入", BucketKind::Asset => "转出" };
+        let _ = writeln!(out, "存入 本年合计: {} {}", fmt_decimal(year_deposits), currency);
+        let _ = writeln!(out, "存入 累计合计: {} {}", fmt_decimal(cumulative_deposits), currency);
+    }
     let _ = writeln!(out, "{} 本年合计: {} {}", expense_label, fmt_decimal(year_expense), currency);
     let _ = writeln!(out, "{} 累计合计: {} {}", expense_label, fmt_decimal(cumulative_expense), currency);
     let _ = writeln!(out, "==============================");
