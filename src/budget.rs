@@ -392,7 +392,6 @@ pub fn collect_bucket_tx_flows(
 /// Asset 流去重：同 bucket + 相近日期(±3天) + 同金额只保留第一条。
 /// 用于汇总场景（summary / yearly），明细仍展示全部资金流向。
 pub fn dedup_asset_flows(flows: &[BucketTxFlow]) -> Vec<&BucketTxFlow> {
-    use std::collections::HashSet;
     let mut seen: Vec<(String, chrono::NaiveDate, Decimal)> = Vec::new();
     flows.iter().filter(|f| {
         if f.kind != BucketKind::Asset {
