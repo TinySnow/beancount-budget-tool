@@ -386,7 +386,27 @@ pub fn collect_bucket_tx_flows(
         }
     }
 
+    // Asset 流去重：同 bucket + 同日 + 同金额的 Asset 流只保留第一条
+    dedup_asset_flows(&mut flows);
+
     Ok(flows)
+}
+
+/// Asset 流去重：同 bucket + 同日期 + 同金额只保留第一条。
+/// 解决中间转账链（工行→建行→基金）被重复计数的问题。
+fn dedup_asset_flows(flows: &mut Vec<BucketTxFlow>) {
+    let mut seen: HashMap<(String, chrono::NaiveDate, Decimal), ()> = HashMap::new();
+    flows.retain(|f| {
+        if f.kind != BucketKind::Asset {
+            return true;
+        }
+        let actual = f.actual_amount();
+        if actual.is_zero() {
+            return true;
+        }
+        let key = (f.bucket.clone(), f.date, actual.round_dp(2));
+        seen.insert(key, ()).is_none()
+    });
 }
 
 /// 从一笔资产转移交易中提取目标资产桶的资金流动和位置变化。
