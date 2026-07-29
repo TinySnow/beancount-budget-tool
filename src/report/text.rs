@@ -397,8 +397,8 @@ pub fn append_bucket_detail_view(
             .collect::<Vec<_>>();
         month_flows.sort_by_key(|flow| flow.date);
 
-        // Asset 流去重：同 bucket+相近日期(±3天)+同金额只计入一次合计
-        let mut seen_assets: Vec<(String, chrono::NaiveDate, Decimal)> = Vec::new();
+        // Asset 流去重：同 bucket+相近日期(±3天)+同金额+同叙述只计入一次合计
+        let mut seen_assets: Vec<(String, chrono::NaiveDate, Decimal, String)> = Vec::new();
 
         for flow in month_flows {
             let actual = flow.actual_amount();
@@ -409,12 +409,13 @@ pub fn append_bucket_detail_view(
                 }
                 BucketKind::Asset => {
                     let amount = actual.round_dp(2);
-                    let is_dup = seen_assets.iter().any(|(b, d, a)| {
-                        *b == flow.bucket && *a == amount &&
+                    let narration_key = flow.narration.as_deref().unwrap_or("").to_string();
+                    let is_dup = seen_assets.iter().any(|(b, d, a, n)| {
+                        *b == flow.bucket && *a == amount && *n == narration_key &&
                         (*d - flow.date).num_days().abs() <= 3
                     });
                     if !is_dup {
-                        seen_assets.push((flow.bucket.clone(), flow.date, amount));
+                        seen_assets.push((flow.bucket.clone(), flow.date, amount, narration_key));
                         year_deposits += actual;
                         cumulative_deposits += actual;
                     }
