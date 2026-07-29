@@ -1,7 +1,7 @@
 //! 终端文本报告渲染。
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Write as FmtWrite,
 };
 
@@ -397,6 +397,9 @@ pub fn append_bucket_detail_view(
             .collect::<Vec<_>>();
         month_flows.sort_by_key(|flow| flow.date);
 
+        // Asset 流去重：同 bucket+同日+同金额只计入一次合计
+        let mut seen_assets: HashMap<(String, chrono::NaiveDate, Decimal), ()> = HashMap::new();
+
         for flow in month_flows {
             let actual = flow.actual_amount();
             match flow.kind {
@@ -405,8 +408,11 @@ pub fn append_bucket_detail_view(
                     cumulative_expense += actual;
                 }
                 BucketKind::Asset => {
-                    year_deposits += actual;
-                    cumulative_deposits += actual;
+                    let key = (flow.bucket.clone(), flow.date, actual.round_dp(2));
+                    if seen_assets.insert(key, ()).is_none() {
+                        year_deposits += actual;
+                        cumulative_deposits += actual;
+                    }
                 }
             }
             let action = match flow.kind {
