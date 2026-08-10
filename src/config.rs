@@ -26,7 +26,7 @@ use regex::Regex;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use crate::util::{default_expense_bucket, strip_bom, validate_month};
+use crate::util::{default_expense_bucket, parent_bucket, strip_bom, validate_month};
 
 /// 预算 key 解析正则：`YYYY-MM` / `YYYY.M.D` / `YYYY/M/D` 等格式，加可选标签
 static BUDGET_KEY_RE: Lazy<Regex> = Lazy::new(|| {
@@ -383,6 +383,15 @@ pub fn collect_known_buckets(
     }
 
     buckets.insert(mappings.default_expense_bucket.clone());
+
+    // 从点号桶名推断所有中间父桶也视为已知
+    let child_buckets: Vec<String> = buckets.iter().cloned().collect();
+    for bucket in child_buckets {
+        if let Some(parent) = parent_bucket(&bucket) {
+            buckets.insert(parent.to_string());
+        }
+    }
+
     buckets
 }
 
