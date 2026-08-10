@@ -50,7 +50,10 @@ pub(crate) fn filter_top_level<'a>(
     let parent_keys: BTreeSet<&String> = summaries.keys().filter(|k| {
         all_entries.iter().any(|(bucket, _)| parent_bucket(bucket) == Some(k.as_str()))
     }).collect();
-    all_entries.into_iter().filter(|(bucket, _)| !parent_keys.contains(bucket)).collect()
+    all_entries.into_iter().filter(|(bucket, _)| {
+        // 子桶不显示（父桶已汇总其数据）
+        parent_bucket(bucket).map(|p| !parent_keys.iter().any(|k| k.as_str() == p)).unwrap_or(true)
+    }).collect()
 }
 
 pub fn export_reports(
