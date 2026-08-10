@@ -438,15 +438,25 @@ pub fn append_bucket_detail_view(
             } else {
                 String::new()
             };
+            // 非 CNY 交易显示原币种 + CNY 等价
+            let (display_amount, display_currency, cny_note) = if flow.original_currency.as_deref() == Some("CNY") || flow.original_currency.is_none() {
+                (fmt_decimal(flow.flow), currency.to_string(), String::new())
+            } else {
+                let oa = flow.original_amount.unwrap_or(flow.flow.abs());
+                let oc = flow.original_currency.as_deref().unwrap_or("?");
+                let ca = flow.cny_amount.unwrap_or(flow.flow.abs());
+                (fmt_decimal(if flow.kind == BucketKind::Expense && flow.flow.is_sign_negative() { -oa } else { oa }), oc.to_string(), format!(" (≈{} CNY)", fmt_decimal(ca)))
+            };
             let _ = writeln!(
                 out,
-                "{}：{}{} {} {} {}",
+                "{}：{}{} {} {} {}{}",
                 flow.date.format("%Y-%m-%d"),
                 format_tx_title(flow.payee.as_deref(), flow.narration.as_deref()),
                 child_tag,
                 action,
-                fmt_decimal(flow.flow),
-                currency
+                display_amount,
+                display_currency,
+                cny_note,
             );
         }
     }
