@@ -85,6 +85,11 @@ pub struct BudgetMappings {
     /// 跟踪桶列表：仅追踪实际支出，不参与 plan 计算、不计入合计、不聚合到父桶。
     #[serde(default)]
     pub tracking_buckets: Vec<String>,
+
+    /// 非 CNY 币种 → CNY 汇率（1 单位外币 = X CNY）。
+    /// 用于无 @@ 注释的非 CNY 交易自动换算。
+    #[serde(default)]
+    pub currency_rates: BTreeMap<String, Decimal>,
 }
 
 impl BudgetMappings {

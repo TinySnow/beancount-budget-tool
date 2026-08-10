@@ -301,6 +301,7 @@ mod tests {
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
             tracking_buckets: vec![],
+            currency_rates: BTreeMap::new(),
         };
 
         let bucket = config::resolve_bucket_by_account(&mappings, "Expenses:Consume:电子:配件")
@@ -331,6 +332,7 @@ mod tests {
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
             tracking_buckets: vec![],
+            currency_rates: BTreeMap::new(),
         };
 
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
@@ -354,6 +356,7 @@ mod tests {
             bucket_types: BTreeMap::from([("储蓄".to_string(), BucketKind::Asset)]),
             asset_bucket_accounts: BTreeMap::new(),
             tracking_buckets: vec![],
+            currency_rates: BTreeMap::new(),
         };
 
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
@@ -405,6 +408,7 @@ mod tests {
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
             tracking_buckets: vec![],
+            currency_rates: BTreeMap::new(),
         };
 
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
@@ -450,6 +454,7 @@ mod tests {
                 ("投资".to_string(), vec!["Assets:Invest:货币基金".to_string()]),
             ]),
 tracking_buckets: vec![],
+currency_rates: BTreeMap::new(),
         };
 
         let flows = collect_bucket_tx_flows(&[tmp.clone()], &mappings, "CNY", &BTreeSet::new()).expect("flows");
@@ -526,6 +531,7 @@ tracking_buckets: vec![],
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
             tracking_buckets: vec![],
+            currency_rates: BTreeMap::new(),
         };
         let summaries = summarize_buckets(&directives, &flows, "2026-06", ReportScope::Month, &mappings);
 
@@ -578,6 +584,7 @@ tracking_buckets: vec![],
             bucket_types: BTreeMap::new(),
             asset_bucket_accounts: BTreeMap::new(),
             tracking_buckets: vec![],
+            currency_rates: BTreeMap::new(),
         };
         let flows = vec![];
 

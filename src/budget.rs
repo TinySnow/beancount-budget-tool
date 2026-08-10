@@ -83,13 +83,10 @@ impl BucketTxFlow {
     /// 若存在 `@@` CNY 转换，使用转换后的 CNY 值。
     pub fn actual_amount(&self) -> Decimal {
         let base = match self.kind {
-            BucketKind::Expense => {
-                if self.flow_kind == FlowKind::Refund {
-                    self.flow
-                } else {
-                    -self.flow
-                }
-            }
+            BucketKind::Expense => match self.flow_kind {
+                FlowKind::Refund => self.flow,   // 正 flow → 负值，减少 "已支出"
+                _ => -self.flow,                  // 负 flow → 正值，增加 "已支出"
+            },
             BucketKind::Asset => self.flow,
         };
         self.cny_amount.unwrap_or(base)
@@ -323,10 +320,9 @@ pub fn collect_bucket_tx_flows(
                                 let Some(amount) = posting.amount else { continue; };
                                 let currency = posting.currency.as_deref().unwrap_or(target_currency);
                                 if !is_target_currency(Some(currency), target_currency) {
-                                    // 非目标币种：检查是否有 @@ 价格注释
+                                    // 非目标币种：优先用 @@，其次用汇率表
                                     if let (Some(pa), Some(pc)) = (posting.price_amount, posting.price_currency.as_deref()) {
                                         if is_target_currency(Some(pc), target_currency) {
-                                            // 使用 @@ 总价作为 CNY 等价（取绝对值，方向由 flow 决定）
                                             if original_currency.is_none() {
                                                 original_currency = Some(currency.to_string());
                                                 original_amount = Some(amount.abs());
@@ -339,7 +335,19 @@ pub fn collect_bucket_tx_flows(
                                             continue;
                                         }
                                     }
-                                    // 无 @@ 的非目标币种：跳过（避免误计）
+                                    // 回退到 config.yml 中配置的汇率
+                                    if let Some(rate) = mappings.currency_rates.get(currency) {
+                                        let cny = (amount * rate).round_dp(2);
+                                        if original_currency.is_none() {
+                                            original_currency = Some(currency.to_string());
+                                            original_amount = Some(amount.abs());
+                                            cny_amount = Some(cny.abs());
+                                            cny_rate = Some(*rate);
+                                        }
+                                        flow -= cny;
+                                        continue;
+                                    }
+                                    // 无 @@ 无汇率：跳过
                                     continue;
                                 }
                                 flow -= amount;
