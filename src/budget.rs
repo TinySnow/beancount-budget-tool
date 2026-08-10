@@ -71,8 +71,6 @@ pub struct BucketTxFlow {
     pub original_currency: Option<String>,
     /// `@@` 转换后的 CNY 等价金额
     pub cny_amount: Option<Decimal>,
-    /// `@@` 转换汇率
-    pub cny_rate: Option<Decimal>,
 }
 
 impl BucketTxFlow {
@@ -227,7 +225,6 @@ fn process_as_asset(
             original_amount: Some(flow.abs()),
             original_currency: None,
             cny_amount: None,
-            cny_rate: None,
         });
     }
 }
@@ -314,7 +311,6 @@ pub fn collect_bucket_tx_flows(
                         let mut original_currency: Option<String> = None;
                         let mut original_amount: Option<Decimal> = None;
                         let mut cny_amount: Option<Decimal> = None;
-                        let mut cny_rate: Option<Decimal> = None;
                         for posting in &tx.postings {
                             if posting.account.starts_with("Expenses:") || posting.account.starts_with("Income:") {
                                 let Some(amount) = posting.amount else { continue; };
@@ -327,9 +323,6 @@ pub fn collect_bucket_tx_flows(
                                                 original_currency = Some(currency.to_string());
                                                 original_amount = Some(amount.abs());
                                                 cny_amount = Some(pa.abs());
-                                                if !amount.is_zero() {
-                                                    cny_rate = Some((pa.abs() / amount.abs()).round_dp(6));
-                                                }
                                             }
                                             flow -= pa;
                                             continue;
@@ -342,7 +335,6 @@ pub fn collect_bucket_tx_flows(
                                             original_currency = Some(currency.to_string());
                                             original_amount = Some(amount.abs());
                                             cny_amount = Some(cny.abs());
-                                            cny_rate = Some(*rate);
                                         }
                                         flow -= cny;
                                         continue;
@@ -386,7 +378,6 @@ pub fn collect_bucket_tx_flows(
                             original_amount,
                             original_currency,
                             cny_amount,
-                            cny_rate,
                         });
                     }
                     BucketKind::Asset => {
@@ -419,10 +410,9 @@ pub fn collect_bucket_tx_flows(
                                 location_deltas,
                                 metadata: tx.metadata.clone(),
                                 original_amount: Some(flow.abs()),
-                                original_currency: None,
-                                cny_amount: None,
-                                cny_rate: None,
-                            });
+                            original_currency: None,
+                            cny_amount: None,
+                        });
                         }
                     }
                 }
@@ -462,7 +452,6 @@ pub fn collect_bucket_tx_flows(
                 original_amount: Some(flow.abs()),
                 original_currency: None,
                 cny_amount: None,
-                cny_rate: None,
             });
         }
     }
@@ -696,6 +685,12 @@ pub fn collect_scope_warnings(
 
         if known_buckets.contains(&flow.bucket) {
             continue;
+        }
+        // 若父桶已知（如生活费.餐饮 的父桶 生活费 在已知列表中），视为已知
+        if let Some(parent) = parent_bucket(&flow.bucket) {
+            if known_buckets.contains(parent) {
+                continue;
+            }
         }
 
         warnings.unknown_bucket_names.insert(flow.bucket.clone());
