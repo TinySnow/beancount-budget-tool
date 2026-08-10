@@ -49,6 +49,12 @@ static POSTING_RE: Lazy<Regex> = Lazy::new(|| {
     .expect("valid posting regex")
 });
 
+/// `@@` 总价注释正则：`@@ 830.30 CNY`
+static POSTING_PRICE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"@@\s+(?P<price_number>[+-]?\d+(?:\.\d+)?)\s+(?P<price_currency>[A-Za-z]+)")
+        .expect("valid price regex")
+});
+
 /// Beancount 原生标签：交易头行中的 `#tag` 或 `^link`（支持非 ASCII 字符）
 static TAG_LINK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"[#^](\S+)").expect("valid tag/link regex"));
@@ -81,6 +87,10 @@ pub struct LedgerPosting {
     pub amount: Option<Decimal>,
     /// 币种代码（如 `CNY`、`USD`），None 时视为目标币种
     pub currency: Option<String>,
+    /// `@@` 总价金额（None 表示无总价注释）
+    pub price_amount: Option<Decimal>,
+    /// `@@` 总价币种（与 price_amount 配对）
+    pub price_currency: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -193,10 +203,24 @@ pub fn parse_ledger_content(content: &str) -> Result<Vec<LedgerTransaction>> {
                 .map(|raw| raw.as_str().trim().to_string())
                 .filter(|value| !value.is_empty());
 
+            // 解析 @@ 总价注释
+            let (price_amount, price_currency) = POSTING_PRICE_RE
+                .captures(line)
+                .map(|cap| {
+                    let pa = cap.name("price_number")
+                        .and_then(|raw| Decimal::from_str(raw.as_str()).ok());
+                    let pc = cap.name("price_currency")
+                        .map(|raw| raw.as_str().trim().to_string());
+                    (pa, pc)
+                })
+                .unwrap_or((None, None));
+
             builder.postings.push(LedgerPosting {
                 account,
                 amount,
                 currency,
+                price_amount,
+                price_currency,
             });
             continue;
         }

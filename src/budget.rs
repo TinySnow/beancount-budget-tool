@@ -27,6 +27,19 @@ use crate::util::ReportScope;
 // 数据结构
 // ---------------------------------------------------------------------------
 
+/// 资金流类型：区分支出、存入、退款、资产间转移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowKind {
+    /// 外部消费（Expense）
+    Spending,
+    /// 外部存入（Income / 银行存款转入预算桶）
+    Deposit,
+    /// 消费退款（Expense 反向）
+    Refund,
+    /// 资产间转移（Asset ↔ Asset，需去重）
+    Transfer,
+}
+
 /// 某笔交易对特定预算桶的资金流动记录。
 #[derive(Debug, Clone)]
 pub struct BucketTxFlow {
@@ -38,6 +51,8 @@ pub struct BucketTxFlow {
     pub bucket: String,
     /// 桶类型
     pub kind: BucketKind,
+    /// 资金流类型
+    pub flow_kind: FlowKind,
     /// 流向桶余额的有符号值：
     /// - expense 桶：消费为负数（减少可用预算）
     /// - asset 桶：存入为正数（增加该桶资产）
@@ -50,18 +65,34 @@ pub struct BucketTxFlow {
     pub location_deltas: BTreeMap<String, Decimal>,
     /// 原始交易的 metadata 键值对（用于 --filter 关键词搜索）
     pub metadata: HashMap<String, String>,
+    /// 原始金额（交易币种，非 CNY 时有效）
+    pub original_amount: Option<Decimal>,
+    /// 原始币种
+    pub original_currency: Option<String>,
+    /// `@@` 转换后的 CNY 等价金额
+    pub cny_amount: Option<Decimal>,
+    /// `@@` 转换汇率
+    pub cny_rate: Option<Decimal>,
 }
 
 impl BucketTxFlow {
-    /// 计算对桶余额的实际影响（绝对值）。
+    /// 计算对桶余额的实际影响（绝对值，优先使用 CNY 等价金额）。
     ///
     /// - expense 桶：`actual = -flow`（消费额转为正数）
     /// - asset 桶：`actual = flow`（存入额保持正数）
+    /// 若存在 `@@` CNY 转换，使用转换后的 CNY 值。
     pub fn actual_amount(&self) -> Decimal {
-        match self.kind {
-            BucketKind::Expense => -self.flow,
+        let base = match self.kind {
+            BucketKind::Expense => {
+                if self.flow_kind == FlowKind::Refund {
+                    self.flow
+                } else {
+                    -self.flow
+                }
+            }
             BucketKind::Asset => self.flow,
-        }
+        };
+        self.cny_amount.unwrap_or(base)
     }
 }
 
@@ -190,11 +221,16 @@ fn process_as_asset(
             month: month.to_string(),
             bucket: bucket_name.to_string(),
             kind: BucketKind::Asset,
+            flow_kind: FlowKind::Transfer,
             flow,
             payee: tx.payee.clone(),
             narration: tx.narration.clone(),
             location_deltas,
             metadata: tx.metadata.clone(),
+            original_amount: Some(flow.abs()),
+            original_currency: None,
+            cny_amount: None,
+            cny_rate: None,
         });
     }
 }
@@ -278,12 +314,34 @@ pub fn collect_bucket_tx_flows(
                     BucketKind::Expense => {
                         let mut flow = Decimal::ZERO;
                         let mut asset_legs: BTreeMap<String, Decimal> = BTreeMap::new();
+                        let mut original_currency: Option<String> = None;
+                        let mut original_amount: Option<Decimal> = None;
+                        let mut cny_amount: Option<Decimal> = None;
+                        let mut cny_rate: Option<Decimal> = None;
                         for posting in &tx.postings {
                             if posting.account.starts_with("Expenses:") || posting.account.starts_with("Income:") {
                                 let Some(amount) = posting.amount else { continue; };
-                                if !is_target_currency(posting.currency.as_deref(), target_currency) { continue; }
-                                // 借贷平衡：Expense 为正数（支出），Income 为负数（入账）
-                                // 统一用 flow -= amount，Income 的负数自动变为正向入账
+                                let currency = posting.currency.as_deref().unwrap_or(target_currency);
+                                if !is_target_currency(Some(currency), target_currency) {
+                                    // 非目标币种：检查是否有 @@ 价格注释
+                                    if let (Some(pa), Some(pc)) = (posting.price_amount, posting.price_currency.as_deref()) {
+                                        if is_target_currency(Some(pc), target_currency) {
+                                            // 使用 @@ 总价作为 CNY 等价（取绝对值，方向由 flow 决定）
+                                            if original_currency.is_none() {
+                                                original_currency = Some(currency.to_string());
+                                                original_amount = Some(amount.abs());
+                                                cny_amount = Some(pa.abs());
+                                                if !amount.is_zero() {
+                                                    cny_rate = Some((pa.abs() / amount.abs()).round_dp(6));
+                                                }
+                                            }
+                                            flow -= pa;
+                                            continue;
+                                        }
+                                    }
+                                    // 无 @@ 的非目标币种：跳过（避免误计）
+                                    continue;
+                                }
                                 flow -= amount;
                             } else if posting.account.starts_with("Assets:") {
                                 let Some(amount) = posting.amount else { continue; };
@@ -311,11 +369,16 @@ pub fn collect_bucket_tx_flows(
                             month: month.clone(),
                             bucket: bucket_name.to_string(),
                             kind,
+                            flow_kind: if flow.is_sign_negative() { FlowKind::Spending } else { FlowKind::Refund },
                             flow,
                             payee: tx.payee.clone(),
                             narration: tx.narration.clone(),
                             location_deltas: asset_legs,
                             metadata: tx.metadata.clone(),
+                            original_amount,
+                            original_currency,
+                            cny_amount,
+                            cny_rate,
                         });
                     }
                     BucketKind::Asset => {
@@ -341,11 +404,16 @@ pub fn collect_bucket_tx_flows(
                                 month: month.clone(),
                                 bucket: bucket_name.to_string(),
                                 kind,
+                                flow_kind: FlowKind::Deposit,
                                 flow,
                                 payee: tx.payee.clone(),
                                 narration: tx.narration.clone(),
                                 location_deltas,
                                 metadata: tx.metadata.clone(),
+                                original_amount: Some(flow.abs()),
+                                original_currency: None,
+                                cny_amount: None,
+                                cny_rate: None,
                             });
                         }
                     }
@@ -377,11 +445,16 @@ pub fn collect_bucket_tx_flows(
                 month: month.clone(),
                 bucket,
                 kind: BucketKind::Expense,
+                flow_kind: if flow.is_sign_positive() { FlowKind::Refund } else { FlowKind::Spending },
                 flow,
                 payee: tx.payee.clone(),
                 narration: tx.narration.clone(),
                 location_deltas: BTreeMap::new(),
                 metadata: tx.metadata.clone(),
+                original_amount: Some(flow.abs()),
+                original_currency: None,
+                cny_amount: None,
+                cny_rate: None,
             });
         }
     }
