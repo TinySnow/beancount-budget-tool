@@ -432,6 +432,14 @@ fn run_report(app: &mut App) {
 
     let month_str = cli.month.as_deref().unwrap_or("?");
 
+    // 范围模式下 scope 强制 Cumulative, month 设为 to
+    let report_scope = if cli.from.is_some() { ReportScope::Cumulative } else { cli.scope };
+    let report_month = if cli.from.is_some() {
+        cli.to.clone().unwrap_or_else(|| month_str.to_string())
+    } else {
+        month_str.to_string()
+    };
+
     let range = if cli.from.is_some() && cli.to.is_some() {
         let from = chrono::NaiveDate::parse_from_str(
             &format!("{}-01", cli.from.as_deref().unwrap()), "%Y-%m-%d"
@@ -445,8 +453,8 @@ fn run_report(app: &mut App) {
         crate::cli::DateRange::Range { from, to: to_end }
     } else {
         crate::cli::DateRange::Month {
-            target: month_str.to_string(),
-            scope: cli.scope,
+            target: report_month.to_string(),
+            scope: report_scope,
         }
     };
 
@@ -464,14 +472,16 @@ fn run_report(app: &mut App) {
     };
 
     let summaries = crate::budget::summarize_buckets(
-        &budget_directives, &tx_flows, month_str, cli.scope, &mappings,
+        &budget_directives, &tx_flows, &report_month, report_scope, &mappings,
     );
     let known = crate::config::collect_known_buckets(&budget_directives, &mappings);
     let warnings = crate::budget::collect_scope_warnings(
-        &tx_flows, &known, month_str, cli.scope,
+        &tx_flows, &known, &report_month, report_scope,
     );
 
-    let config = cli.report_config();
+    let mut config = cli.report_config();
+    config.scope = report_scope;
+    config.month = report_month;
 
     let mut captured = Vec::new();
     {
