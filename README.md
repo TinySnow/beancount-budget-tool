@@ -2,19 +2,20 @@
 
 Beancount 预算分析工具。输入账本 + 预算配置，自动生成预算统计与多格式报告。
 
+支持 **TUI 交互模式**（无参数启动）和 **CLI 批处理模式**（传参运行）。
+
 ## 快速开始
 
 > 详细功能清单与用法见 **[QUICKSTART.md](QUICKSTART.md)**
 
-**三样东西：**
+**TUI 模式 — 推荐日常使用：**
 
-| 文件 | 职责 | 写什么 |
-|---|---|---|
-| `budgets.yml` | **纯预算** | `default_monthly` 模板 + 按月覆盖 |
-| `config.yml` | **全局配置** | 账户映射、桶类型、跟踪桶、资产账户 |
-| Beancount 账本 | **实际支出** | `budget:` metadata 标注交易所属桶 |
+```bash
+# 直接启动，全键盘操作
+cargo run
+```
 
-**一行命令：**
+**CLI 模式 — 脚本/自动化：**
 
 ```bash
 beancount-budget-tool -m 2026-06 \
@@ -22,11 +23,18 @@ beancount-budget-tool -m 2026-06 \
   --ledger-dir ./transactions/ --scope cumulative
 ```
 
+**三样东西：**
+
+| 文件 | 职责 | 写什么 |
+|---|---|---|
+| `budgets.yml` | **纯预算** | `default_monthly` 模板 + 按月覆盖 |
+| `config.yml` | **全局配置** | 账户映射、桶类型、跟踪桶、资产账户、汇率表 |
+| Beancount 账本 | **实际支出** | `budget:` metadata 标注交易所属桶 |
+
 ## 构建
 
 ```bash
 cargo build --release
-# 二进制在 target/release/beancount-budget-tool
 ```
 
 ## 核心概念
@@ -59,11 +67,15 @@ default_expense_bucket: 生活费
 defaults:                              # 账户 → 桶（最长前缀匹配）
   "Expenses:Consume:饮食": 生活费.饮食
   "Expenses:Consume:交通": 生活费.交通
-  "Expenses:Consume:电子": 数码
 
 tracking_buckets:                      # 跟踪桶：只追踪不预算
   - 基金.旅游
   - 大额支出
+
+# 多币种汇率（无 @@ 注释的纯外币交易自动换算）
+currency_rates:
+  JPY: 0.04327
+  USD: 6.77
 
 asset_bucket_accounts:                 # 资产桶（可选）
   储蓄:
@@ -73,28 +85,23 @@ asset_bucket_accounts:                 # 资产桶（可选）
 ### Beancount 标注
 
 ```beancount
-; 基本用法：budget metadata
+; 基本用法
 2026-06-17 * "京东" "买耳机"
   budget: "数码"
   Expenses:Consume:电子  2000 CNY
   Assets:Bank:工行       -2000 CNY
 
-; 多桶归属（逗号分隔）
-2026-06-20 * "京东" "耳机+游戏"
-  budget: "数码, 爱好"
-  Expenses:Consume:电子  2000 CNY
-  Assets:Bank:工行       -2000 CNY
-
-; 金额拆分（budget "桶名900" 尾部数字自动识别）
+; 多桶 + 金额拆分
 2026-06-25 * "基金定投"
   budget: "电子产品900, 旅游900"
   Assets:Invest:基金  1800 CNY
   Assets:Bank:工行    -1800 CNY
 
-; 不写 budget → 自动匹配 defaults 前缀 → 回退 default_expense_bucket
-2026-06-16 * "工行" "地铁"
-  Expenses:Consume:交通  6 CNY
-  Assets:Bank:工行      -6 CNY
+; 多币种：@@ 自动转换，或配 currency_rates
+2026-07-16 * "Hotel" "日本旅行住宿"
+  budget: "宁波日本之旅"
+  Expenses:Travel  158.12 USD @@ 1070.16 CNY
+  Liabilities:CreditCard  -158.12 USD @@ 1070.16 CNY
 ```
 
 ## CLI
@@ -104,29 +111,19 @@ asset_bucket_accounts:                 # 资产桶（可选）
 | `-m, --month <YYYY-MM>` | 目标月份 |
 | `--from/--to <YYYY-MM>` | 时间范围 |
 | `--year <YYYY>` | 全年快捷方式 |
-| `--budgets <FILE>` | 预算文件（必需） |
-| `--config, -c <FILE>` | 配置文件（必需，旧名 `--mappings` 仍可用） |
-| `--scope <month\|cumulative>` | 统计范围（默认 month） |
+| `--budgets <FILE>` | 预算文件 |
+| `--config, -c <FILE>` | 配置文件 |
+| `--scope <month\|cumulative>` | 统计范围 |
 | `--bucket <NAME>` | 指定桶明细 |
-| `--bucket-view <summary\|monthly\|detail>` | 桶视图粒度 |
+| `--bucket-view <s\|m\|d>` | 桶视图粒度 |
 | `--sort-by <name\|planned\|actual\|remain>` | 排序 |
 | `--expand` | 展开子桶 |
 | `--compare <YYYY-MM>` | 同比对比 |
-| `--filter <KEYWORD>` | 按关键词过滤交易 |
+| `--filter <KEYWORD>` | 关键词过滤 |
 | `--out-dir <DIR>` | 导出报告 |
 | `--csv-pivot` | 横向月表 CSV |
 | `--out-json` | JSON 导出 |
-| `--strict` | 未知桶报错退出 |
-
-常用：
-
-```bash
---year 2026 --expand                         # 展开看全年
---year 2026 --sort-by remain                 # 按结余排序
---bucket 基金.旅游 --bucket-view detail      # 单桶明细
---year 2026 --compare 2025-12               # 同比
---year 2026 --out-dir ./reports --csv-pivot # 导出
-```
+| `--currency <CODE>` | 币种（默认 CNY） |
 
 ## 项目结构
 
@@ -134,10 +131,11 @@ asset_bucket_accounts:                 # 资产桶（可选）
 src/
   cli.rs            CLI 参数
   config.rs         budgets.yml + config.yml 加载
-  ledger.rs         Beancount 账本解析
-  budget.rs         预算引擎（映射、聚合、资产追踪）
-  util.rs           基础类型与工具
-  main.rs           入口 + 集成测试
+  ledger.rs         Beancount 账本解析（含 @@ 价格注释）
+  budget.rs         预算引擎（FlowKind 分类 + 多币种转换）
+  util.rs           基础类型（ReportScope）+ CJK 对齐
+  tui.rs            TUI 交互界面
+  main.rs           入口 + CLI/TUI 路由 + 集成测试
   report/
     mod.rs          重导出
     shared.rs       共享工具 + 文件导出
@@ -155,5 +153,5 @@ src/
 | `buckets-{range}.csv` | 桶级 planned/actual CSV |
 | `bucket-{桶名}-{range}.md` | 单桶完整报告 |
 | `asset-locations-{桶名}-{range}.md` | 资产桶资金位置 |
-| `pivot-{range}.csv`（`--csv-pivot`） | 月×桶 横向透视 |
-| `summary-{range}.json`（`--out-json`） | JSON 导出 |
+| `pivot-{range}.csv` | 月×桶 横向透视 |
+| `summary-{range}.json` | JSON 导出 |
