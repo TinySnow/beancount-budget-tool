@@ -72,6 +72,7 @@ struct App {
     filter_editing: bool,
     filter_buf: String,
     bucket_picker: bool,
+    date_picker: Option<String>, // Some("from") / Some("to") / None
 
     // 界面
     running: bool,
@@ -121,6 +122,7 @@ impl App {
             filter_editing: false,
             filter_buf: String::new(),
             bucket_picker: false,
+            date_picker: None,
             running: true,
         })
     }
@@ -242,10 +244,12 @@ fn draw(f: &mut Frame, app: &App) {
         format!(" 输入过滤关键词: {}_ (回车确认, Esc取消) ", app.filter_buf)
     } else if app.bucket_picker {
         format!(" 输入桶名: {}_ (回车确认, Esc取消) ", app.filter_buf)
+    } else if let Some(ref which) = app.date_picker {
+        format!(" 输入{}日期 (YYYY-MM): {}_ (回车确认, Esc取消) ", which, app.filter_buf)
     } else if app.range_mode {
-        format!(" {} ←→调整日期 Tab切From/To t:月模式 | s排序 e展开 f过滤 r运行 q退出 ", if app.adjusting_from { "调整 FROM" } else { "调整 TO" })
+        format!(" {} ←→调整日期 d输入 Tab切From/To t:月模式 | s排序 e展开 f过滤 r运行 q退出 ", if app.adjusting_from { "调整 FROM" } else { "调整 TO" })
     } else {
-        " ←→ 月 | Tab scope | t 范围 | s 排序 | e 展开 | f 过滤 | b 桶 | v 视图 | c 对比 | o 导出 | ↑↓滚 | r 运行 | q 退出 ".to_string()
+        " ←→ 月 | d 跳转 | Tab scope | t 范围 | s 排序 | e 展开 | f 过滤 | b 桶 | v 视图 | ↑↓滚 | r 运行 | q 退出 ".to_string()
     };
     let help_block = Paragraph::new(help)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
@@ -297,6 +301,35 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                 return Ok(());
             }
 
+            if app.date_picker.is_some() {
+                match key.code {
+                    KeyCode::Enter => {
+                        if let Ok(d) = chrono::NaiveDate::parse_from_str(
+                            &format!("{}-01", app.filter_buf), "%Y-%m-%d",
+                        ) {
+                            if app.date_picker.as_deref() == Some("from") {
+                                app.from_date = d;
+                            } else if app.date_picker.as_deref() == Some("to") {
+                                app.to_date = d;
+                            } else {
+                                // month mode: jump directly
+                                app.month = d;
+                            }
+                        }
+                        app.date_picker = None;
+                        app.filter_buf.clear();
+                    }
+                    KeyCode::Esc => {
+                        app.date_picker = None;
+                        app.filter_buf.clear();
+                    }
+                    KeyCode::Backspace => { app.filter_buf.pop(); }
+                    KeyCode::Char(c) => { app.filter_buf.push(c); }
+                    _ => {}
+                }
+                return Ok(());
+            }
+
             match key.code {
                 KeyCode::Char('q') => app.running = false,
                 KeyCode::Char('r') => run_report(app),
@@ -305,6 +338,28 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                     if app.range_mode {
                         app.adjusting_from = true;
                     }
+                }
+                KeyCode::Char('d') if !app.range_mode => {
+                    app.date_picker = Some("month".to_string());
+                    app.filter_buf = app.month_str();
+                }
+                KeyCode::Char('d') if app.range_mode => {
+                    let which = if app.adjusting_from { "from" } else { "to" };
+                    app.date_picker = Some(which.to_string());
+                    app.filter_buf = match which {
+                        "from" => format!("{:04}-{:02}", app.from_date.year(), app.from_date.month()),
+                        "to" => format!("{:04}-{:02}", app.to_date.year(), app.to_date.month()),
+                        _ => String::new(),
+                    };
+                }
+                KeyCode::Enter if app.range_mode => {
+                    let which = if app.adjusting_from { "from" } else { "to" };
+                    app.date_picker = Some(which.to_string());
+                    app.filter_buf = match which {
+                        "from" => format!("{:04}-{:02}", app.from_date.year(), app.from_date.month()),
+                        "to" => format!("{:04}-{:02}", app.to_date.year(), app.to_date.month()),
+                        _ => String::new(),
+                    };
                 }
                 KeyCode::Left => {
                     if app.range_mode {
