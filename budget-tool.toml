@@ -1,0 +1,7 @@
+# beancount-budget-tool 默认配置
+# 启动 TUI 时自动加载，免去每次输参数
+
+budgets = "../Beancount/budget/budgets.yml"
+config  = "../Beancount/budget/config.yml"
+ledger_dir = "../Beancount/src/transactions/"
+currency = "CNY"

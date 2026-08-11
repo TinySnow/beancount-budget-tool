@@ -14,6 +14,7 @@ mod config;
 mod ledger;
 mod budget;
 mod report;
+mod tui;
 
 use anyhow::{Context, Result, bail};
 use chrono::Datelike;
@@ -34,8 +35,21 @@ fn write_stdout(text: &str) {
     let _ = handle.flush();
 }
 
-/// 程序入口。
+/// 程序入口。无参数时启动 TUI，有参数时走 CLI。
 fn main() -> Result<()> {
+    // 无参数或仅有默认路径时 → TUI
+    let args: Vec<String> = std::env::args().collect();
+    let has_explicit_args = args.len() > 1;
+    // --help / --version 走 CLI
+    let is_help = args.iter().any(|a| a == "--help" || a == "-h");
+    let is_version = args.iter().any(|a| a == "--version" || a == "-V");
+
+    if !has_explicit_args || is_help || is_version {
+        if !is_help && !is_version && !has_explicit_args {
+            return tui::run_tui(&std::env::current_dir()?);
+        }
+    }
+
     let mut cli = Cli::parse();
 
     // 解析时间范围：--from/--to 与 --month 互斥
@@ -155,7 +169,7 @@ fn main() -> Result<()> {
 }
 
 /// 从 CLI 参数解析统计时间范围。
-fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
+pub fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
     if let Some(year) = &cli.year {
         if cli.month.is_some() || cli.from.is_some() || cli.to.is_some() {
             bail!("--year is mutually exclusive with --month/--from/--to");
@@ -211,7 +225,7 @@ fn parse_date_arg(raw: &str) -> Result<chrono::NaiveDate> {
 }
 
 /// 按时间范围过滤预算指令（日期级）。
-fn filter_directives_by_range(
+pub fn filter_directives_by_range(
     directives: Vec<config::BudgetDirective>,
     range: &DateRange,
 ) -> Vec<config::BudgetDirective> {
@@ -229,7 +243,7 @@ fn filter_directives_by_range(
 }
 
 /// 按时间范围过滤资金流动记录（日期级）。
-fn filter_flows_by_range(
+pub fn filter_flows_by_range(
     flows: Vec<budget::BucketTxFlow>,
     range: &DateRange,
 ) -> Vec<budget::BucketTxFlow> {
