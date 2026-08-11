@@ -11,7 +11,7 @@ use crate::cli::{BucketView, DateRange, ReportConfig};
 use crate::util::ReportScope;
 use crate::config::{BucketKind, BudgetDirective};
 use crate::budget::{self, BucketSummary, BucketTxFlow, ScopedBucketData, WarningStats};
-use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, parent_bucket, shorten_account_label};
+use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, pad_display, parent_bucket, shorten_account_label};
 
 use super::shared::{fmt_pct, sort_entries, filter_top_level};
 /// 渲染汇总报告的终端文本格式。
@@ -29,7 +29,7 @@ pub fn render_summary_report_text(
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "预算报告 ({}) [{}]", range.display(), currency);
-    let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}", "预算桶", "月预算", "已支出", "使用率", "结余", "状态");
+    let _ = writeln!(out, "{}  {}  {}  {}  {}  {}", pad_display("预算桶", 20, true), pad_display("月预算", 12, false), pad_display("已支出", 12, false), pad_display("使用率", 7, false), pad_display("结余", 12, false), pad_display("状态", 6, false));
     let _ = writeln!(out, "{}", "-".repeat(76));
 
     let mut entries = if expand {
@@ -42,7 +42,6 @@ pub fn render_summary_report_text(
     let mut total_planned = Decimal::ZERO;
     let mut total_actual = Decimal::ZERO;
     for (bucket, summary) in &entries {
-        // 跟踪桶 (planned=0) 不显示在汇总表中
         if summary.planned.is_zero() {
             continue;
         }
@@ -50,17 +49,25 @@ pub fn render_summary_report_text(
         let status = if remain.is_sign_negative() { "超支" } else { "正常" };
         total_planned += summary.planned;
         total_actual += summary.actual;
-        let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
-            bucket, fmt_decimal(summary.planned), fmt_decimal(summary.actual),
-            fmt_pct(summary.actual, summary.planned), fmt_decimal(remain), status);
+        let _ = writeln!(out, "{}  {}  {}  {}  {}  {}",
+            pad_display(bucket, 20, true),
+            pad_display(&fmt_decimal(summary.planned), 12, false),
+            pad_display(&fmt_decimal(summary.actual), 12, false),
+            pad_display(&fmt_pct(summary.actual, summary.planned), 7, false),
+            pad_display(&fmt_decimal(remain), 12, false),
+            pad_display(status, 6, false));
     }
 
     let _ = writeln!(out, "{}", "-".repeat(76));
     let total_remain = total_planned - total_actual;
     let total_status = if total_remain.is_sign_negative() { "超支" } else { "正常" };
-    let _ = writeln!(out, "{:<20} {:>12} {:>12} {:>7} {:>12} {:>7}",
-        "合计", fmt_decimal(total_planned), fmt_decimal(total_actual),
-        fmt_pct(total_actual, total_planned), fmt_decimal(total_remain), total_status);
+    let _ = writeln!(out, "{}  {}  {}  {}  {}  {}",
+        pad_display("合计", 20, true),
+        pad_display(&fmt_decimal(total_planned), 12, false),
+        pad_display(&fmt_decimal(total_actual), 12, false),
+        pad_display(&fmt_pct(total_actual, total_planned), 7, false),
+        pad_display(&fmt_decimal(total_remain), 12, false),
+        pad_display(total_status, 6, false));
 
     if !warnings.unknown_bucket_amount.is_zero() {
         let names = warnings

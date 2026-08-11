@@ -62,6 +62,12 @@ struct App {
     run_error: Option<String>,
     status: String,
 
+    // 日期范围模式
+    range_mode: bool,     // true = from/to, false = single month
+    adjusting_from: bool, // in range mode, which date to adjust
+    from_date: chrono::NaiveDate,
+    to_date: chrono::NaiveDate,
+
     // 选择
     filter_editing: bool,
     filter_buf: String,
@@ -76,6 +82,8 @@ impl App {
         let cfg = load_config().unwrap_or_default();
         let now = chrono::Local::now().naive_local().date();
         let month = NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+        let from_date = NaiveDate::from_ymd_opt(now.year(), 1, 1).unwrap_or(month);
+        let to_date = month;
 
         let budgets_path = cfg.budgets.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("budgets.yml"));
         let config_path = cfg.config.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("config.yml"));
@@ -106,6 +114,10 @@ impl App {
             scroll: 0,
             run_error: None,
             status: String::from("按 r 运行"),
+            range_mode: false,
+            adjusting_from: true,
+            from_date,
+            to_date,
             filter_editing: false,
             filter_buf: String::new(),
             bucket_picker: false,
@@ -118,10 +130,15 @@ impl App {
     }
 
     fn build_cli(&self, ledgers: Vec<PathBuf>) -> Cli {
+        let (month, from, to) = if self.range_mode {
+            (None, Some(format!("{:04}-{:02}", self.from_date.year(), self.from_date.month())), Some(format!("{:04}-{:02}", self.to_date.year(), self.to_date.month())))
+        } else {
+            (Some(self.month_str()), None, None)
+        };
         Cli {
             ledgers,
             ledger_dirs: vec![self.ledger_dir.clone()],
-            month: Some(self.month_str()),
+            month,
             budgets: self.budgets_path.clone(),
             config_file: self.config_path.clone(),
             currency: self.currency.clone(),
@@ -138,8 +155,8 @@ impl App {
             csv_pivot: self.csv_pivot,
             out_json: self.out_json,
             strict: self.strict,
-            from: None,
-            to: None,
+            from,
+            to,
             year: None,
         }
     }
@@ -198,9 +215,16 @@ fn draw(f: &mut Frame, app: &App) {
     let expand_label = if app.expand { "展开" } else { "折叠" };
     let filter_label = if app.filter.is_some() { "🔍" } else { "" };
 
+    let date_label = if app.range_mode {
+        let adj = if app.adjusting_from { "←FROM→" } else { "←TO→" };
+        format!("{}_{} [Tab:{}]", app.from_date.format("%Y-%m-%d"), app.to_date.format("%Y-%m-%d"), adj)
+    } else {
+        app.month_str()
+    };
+
     let status = format!(
         " {} ({}) | 桶: {} | 排序: {} | {} {} | {} ",
-        app.month_str(), scope_label, bucket_label, sort_label, expand_label, filter_label, app.status,
+        date_label, scope_label, bucket_label, sort_label, expand_label, filter_label, app.status,
     );
     let status_block = Paragraph::new(status)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White))
@@ -218,8 +242,10 @@ fn draw(f: &mut Frame, app: &App) {
         format!(" 输入过滤关键词: {}_ (回车确认, Esc取消) ", app.filter_buf)
     } else if app.bucket_picker {
         format!(" 输入桶名: {}_ (回车确认, Esc取消) ", app.filter_buf)
+    } else if app.range_mode {
+        format!(" {} ←→调整日期 Tab切From/To t:月模式 | s排序 e展开 f过滤 r运行 q退出 ", if app.adjusting_from { "调整 FROM" } else { "调整 TO" })
     } else {
-        " ←→ 月 | Tab scope | s 排序 | e 展开 | f 过滤 | v 视图 | b 桶 | l 位置 | c 对比 | o 导出 | p 透视 | r 运行 | q 退出 ".to_string()
+        " ←→ 月 | Tab scope | t 范围 | s 排序 | e 展开 | f 过滤 | b 桶 | v 视图 | c 对比 | o 导出 | ↑↓滚 | r 运行 | q 退出 ".to_string()
     };
     let help_block = Paragraph::new(help)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
@@ -274,22 +300,48 @@ fn handle_input(app: &mut App) -> io::Result<()> {
             match key.code {
                 KeyCode::Char('q') => app.running = false,
                 KeyCode::Char('r') => run_report(app),
+                KeyCode::Char('t') => {
+                    app.range_mode = !app.range_mode;
+                    if app.range_mode {
+                        app.adjusting_from = true;
+                    }
+                }
                 KeyCode::Left => {
-                    app.month = app.month.pred_opt().unwrap_or(app.month);
-                    app.status = format!("← {}", app.month_str());
+                    if app.range_mode {
+                        if app.adjusting_from {
+                            app.from_date = app.from_date.pred_opt().unwrap_or(app.from_date);
+                        } else {
+                            app.to_date = app.to_date.pred_opt().unwrap_or(app.to_date);
+                        }
+                    } else {
+                        app.month = app.month.pred_opt().unwrap_or(app.month);
+                    }
                 }
                 KeyCode::Right => {
-                    let next = app.month.succ_opt().unwrap_or(app.month);
-                    if next <= chrono::Local::now().naive_local().date() {
-                        app.month = next;
+                    if app.range_mode {
+                        if app.adjusting_from {
+                            let next = app.from_date.succ_opt().unwrap_or(app.from_date);
+                            if next <= app.to_date { app.from_date = next; }
+                        } else {
+                            let next = app.to_date.succ_opt().unwrap_or(app.to_date);
+                            if next <= chrono::Local::now().naive_local().date() { app.to_date = next; }
+                        }
+                    } else {
+                        let next = app.month.succ_opt().unwrap_or(app.month);
+                        if next <= chrono::Local::now().naive_local().date() {
+                            app.month = next;
+                        }
                     }
-                    app.status = format!("→ {}", app.month_str());
                 }
                 KeyCode::Tab => {
-                    app.scope = match app.scope {
-                        ReportScope::Month => ReportScope::Cumulative,
-                        ReportScope::Cumulative => ReportScope::Month,
-                    };
+                    if app.range_mode {
+                        app.adjusting_from = !app.adjusting_from;
+                    } else {
+                        app.scope = match app.scope {
+                            ReportScope::Month => ReportScope::Cumulative,
+                            ReportScope::Cumulative => ReportScope::Month,
+                        };
+                    }
                 }
                 KeyCode::Char('s') => {
                     app.sort_by = match app.sort_by.as_deref() {
@@ -379,9 +431,23 @@ fn run_report(app: &mut App) {
     };
 
     let month_str = cli.month.as_deref().unwrap_or("?");
-    let range = crate::cli::DateRange::Month {
-        target: month_str.to_string(),
-        scope: cli.scope,
+
+    let range = if cli.from.is_some() && cli.to.is_some() {
+        let from = chrono::NaiveDate::parse_from_str(
+            &format!("{}-01", cli.from.as_deref().unwrap()), "%Y-%m-%d"
+        ).unwrap_or(chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap());
+        let to_end = chrono::NaiveDate::parse_from_str(
+            &format!("{}-01", cli.to.as_deref().unwrap()), "%Y-%m-%d"
+        ).ok()
+        .and_then(|d| d.checked_add_months(chrono::Months::new(1)))
+        .and_then(|n| n.pred_opt())
+        .unwrap_or(chrono::Local::now().naive_local().date());
+        crate::cli::DateRange::Range { from, to: to_end }
+    } else {
+        crate::cli::DateRange::Month {
+            target: month_str.to_string(),
+            scope: cli.scope,
+        }
     };
 
     let budget_directives = crate::filter_directives_by_range(budget_directives, &range);
