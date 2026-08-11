@@ -117,6 +117,23 @@ pub fn fmt_decimal(v: Decimal) -> String {
     format!("{:.2}", v.round_dp(2))
 }
 
+/// 计算字符串在终端中的显示宽度（中文字符占 2 列）。
+pub fn display_width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
+}
+
+/// 将字符串填充到指定显示宽度（不足补空格，超过截断）。
+pub fn pad_display(s: &str, width: usize, left_align: bool) -> String {
+    let dw = display_width(s);
+    if dw >= width {
+        s.to_string()
+    } else if left_align {
+        format!("{}{}", s, " ".repeat(width - dw))
+    } else {
+        format!("{}{}", " ".repeat(width - dw), s)
+    }
+}
+
 /// 格式化交易标题，组合 `payee` 和 `narration`。
 ///
 /// 两者都用双引号包裹，若无则显示 `"(无标题)"`。
