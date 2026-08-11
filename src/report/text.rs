@@ -417,23 +417,19 @@ pub fn append_bucket_detail_view(
                 }
                 BucketKind::Asset => {
                     let amount = actual.round_dp(2);
-                    // 中转流不计入合计，仅展示
-                    if flow.flow_kind == FlowKind::Intermediate {
-                        continue;
-                    }
-                    // 退款不参与存入合计，且不去重
-                    if flow.flow_kind == FlowKind::Refund {
-                        year_deposits += actual;
-                        cumulative_deposits += actual;
-                        continue;
-                    }
-                    let is_dup = seen_assets.iter().any(|(b, d, a)| {
-                        *b == flow.bucket && *a == amount &&
-                        (*d - flow.date).num_days().abs() <= 3
-                    });
-                    if !is_dup {
-                        seen_assets.push((flow.bucket.clone(), flow.date, amount));
-                        year_deposits += actual;
+                    // 中转流/退款 不计入存入合计，但继续渲染显示
+                    if flow.flow_kind != FlowKind::Intermediate && flow.flow_kind != FlowKind::Refund {
+                        let is_dup = seen_assets.iter().any(|(b, d, a)| {
+                            *b == flow.bucket && *a == amount &&
+                            (*d - flow.date).num_days().abs() <= 3
+                        });
+                        if !is_dup {
+                            seen_assets.push((flow.bucket.clone(), flow.date, amount));
+                            year_deposits += actual;
+                            cumulative_deposits += actual;
+                        }
+                    } else if flow.flow_kind == FlowKind::Refund {
+                        year_deposits += actual;  // Refund actual 为负值，扣减
                         cumulative_deposits += actual;
                     }
                 }
