@@ -131,8 +131,9 @@ pub fn render_compare_report_text(
     let _ = writeln!(out, "本期: {}  对比: {}  [{}]", cur_range.display(), cmp_range.display(), currency);
     let _ = writeln!(
         out,
-        "{:<16} {:>10} {:>10} {:>10} | {:>10} {:>10} {:>10}",
-        "预算桶", "月预算", "已支出", "结余", "月预算", "已支出", "结余"
+        "{}  {}  {}  {} | {}  {}  {}",
+        pad_display("预算桶", 16, true), pad_display("月预算", 10, false), pad_display("已支出", 10, false), pad_display("结余", 10, false),
+        pad_display("月预算", 10, false), pad_display("已支出", 10, false), pad_display("结余", 10, false),
     );
     let _ = writeln!(out, "{}", "-".repeat(74));
 
@@ -141,10 +142,10 @@ pub fn render_compare_report_text(
         let cmp_remain = cmp.planned - cmp.actual;
         let _ = writeln!(
             out,
-            "{:<16} {:>10} {:>10} {:>10} | {:>10} {:>10} {:>10}",
-            bucket,
-            fmt_decimal(cur.planned), fmt_decimal(cur.actual), fmt_decimal(cur_remain),
-            fmt_decimal(cmp.planned), fmt_decimal(cmp.actual), fmt_decimal(cmp_remain),
+            "{}  {}  {}  {} | {}  {}  {}",
+            pad_display(bucket, 16, true),
+            pad_display(&fmt_decimal(cur.planned), 10, false), pad_display(&fmt_decimal(cur.actual), 10, false), pad_display(&fmt_decimal(cur_remain), 10, false),
+            pad_display(&fmt_decimal(cmp.planned), 10, false), pad_display(&fmt_decimal(cmp.actual), 10, false), pad_display(&fmt_decimal(cmp_remain), 10, false),
         );
     }
 
