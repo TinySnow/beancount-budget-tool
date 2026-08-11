@@ -446,7 +446,7 @@ pub fn append_bucket_detail_view(
                     if flow.flow_kind == FlowKind::Intermediate {
                         "→ 中转"
                     } else if flow.flow.is_sign_positive() {
-                        "存入①"
+                        "存入"
                     } else {
                         "转出"
                     }
