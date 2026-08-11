@@ -1,6 +1,38 @@
 # QUICKSTART — 功能清单与用法速查
 
-> 本文档是完整的功能速查表。初次使用看前半部分（配置怎么写），忘了怎么用看后半部分（场景速查）。
+> 日常使用推荐 **TUI 模式**（直接 `cargo run`），无需记参数。
+
+---
+
+## 零、TUI 交互模式
+
+直接启动，全键盘操作：
+
+```bash
+cargo run
+# 或
+./beancount-budget-tool
+```
+
+首次使用配好 `budget-tool.toml` 里的默认路径，之后启动自动加载。
+
+| 键 | 功能 |
+|---|---|
+| `←→` | 切换月份 |
+| `d` | 输入 YYYY-MM 直接跳转 |
+| `Tab` | 切换当月 / 累计 |
+| `t` | 日期范围模式（from → to） |
+| `s` | 排序 name → planned → actual → remain |
+| `e` | 展开/折叠子桶 |
+| `f` | 过滤关键词 |
+| `b` | 选择桶 |
+| `v` | 视图：汇总 / 分月 / 明细 |
+| `c` | 同比对比 |
+| `o` | 导出报告 |
+| `r` | 运行/刷新 |
+| `q` | 退出 |
+
+有参数启动 → 原 CLI 行为不变。
 
 ---
 
@@ -173,12 +205,15 @@ beancount-budget-tool --year 2026 --budgets budgets.yml --config config.yml --le
 --bucket 基金.旅游 --bucket-view detail
 ```
 
-明细视图中每年末尾自动打印：
+明细视图中每年末尾自动打印（expense 桶下有 Asset 流时额外显示存入行）：
+
 ```
 ========== 2025 年小结 ==========
 预算收入 本年合计: xxx
 预算收入 累计合计: xxx
-支出 本年合计: xxx
+存入 本年合计: xxx          ← Asset 流（基金申购等）
+存入 累计合计: xxx
+支出 本年合计: xxx          ← Expense 流（实际消费）
 支出 累计合计: xxx
 ==============================
 ```
@@ -277,7 +312,42 @@ asset_bucket_accounts:
 
 ---
 
-## 五、CLI 参数速查
+## 五、多币种
+
+记账中有 JPY / USD 等外币时，两种方式自动换算为 CNY：
+
+### 方式一：`@@` 总价注释（精确，推荐）
+
+```beancount
+2026-07-16 * "Hotel" "日本旅行住宿"
+  budget: "旅游"
+  Expenses:Travel  158.12 USD @@ 1070.16 CNY
+  Liabilities:CreditCard  -158.12 USD @@ 1070.16 CNY
+```
+
+`@@ 1070.16 CNY` = 这 158.12 USD 折合 1070.16 CNY，工具直接使用此值。
+
+### 方式二：`config.yml` 汇率表（兜底）
+
+```yaml
+currency_rates:
+  JPY: 0.04327
+  USD: 6.77
+```
+
+纯外币账户（如 `Expenses:Food  5990 JPY` 无 `@@`）时使用此汇率。
+
+**优先级**：`@@ 总价` > `currency_rates` > 跳过
+
+明细视图中非 CNY 交易显示原币种 + CNY 等价：
+
+```
+2026-08-04："SAPPORO SOUP CURRY" 支出 5990.00 JPY (≈259.18 CNY)
+```
+
+---
+
+## 六、CLI 参数速查
 
 ```
 -m, --month <YYYY-MM>      目标月份
@@ -310,7 +380,7 @@ asset_bucket_accounts:
 
 ---
 
-## 六、常见场景
+## 七、常见场景
 
 ```bash
 # 本月花了多少 -- 只看当月预算执行
