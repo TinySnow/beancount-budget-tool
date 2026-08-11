@@ -417,9 +417,13 @@ pub fn append_bucket_detail_view(
                 }
                 BucketKind::Asset => {
                     let amount = actual.round_dp(2);
+                    // 中转流不计入合计，仅展示
+                    if flow.flow_kind == FlowKind::Intermediate {
+                        continue;
+                    }
                     // 退款不参与存入合计，且不去重
                     if flow.flow_kind == FlowKind::Refund {
-                        year_deposits += actual; // actual 为负值，自动扣减
+                        year_deposits += actual;
                         cumulative_deposits += actual;
                         continue;
                     }
@@ -439,8 +443,10 @@ pub fn append_bucket_detail_view(
                     if flow.flow.is_sign_negative() { "支出" } else { "入账" }
                 }
                 BucketKind::Asset => {
-                    if flow.flow.is_sign_positive() {
-                        "存入"
+                    if flow.flow_kind == FlowKind::Intermediate {
+                        "→ 中转"
+                    } else if flow.flow.is_sign_positive() {
+                        "存入①"
                     } else {
                         "转出"
                     }
