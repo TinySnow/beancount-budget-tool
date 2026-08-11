@@ -36,8 +36,10 @@ pub enum FlowKind {
     Deposit,
     /// 消费退款（Expense 反向）
     Refund,
-    /// 资产间转移（Asset ↔ Asset，需去重）
+    /// 资产间转移，最终进入投资账户（计入合计）
     Transfer,
+    /// 资产间转移，仅中转（不计入合计，仅展示）
+    Intermediate,
 }
 
 /// 某笔交易对特定预算桶的资金流动记录。
@@ -214,20 +216,17 @@ fn process_as_asset(
     }
 
     if !location_deltas.is_empty() {
-        // 退款/纯转账检测：正腿全流向银行/钱包 → 资金未入桶，不生成流
-        let is_pure_transfer = !positive_flow.is_zero()
-            && asset_legs.iter().all(|(acct, _)| {
-                acct.starts_with("Assets:Bank") || acct.starts_with("Assets:Wallet")
-            });
-        if is_pure_transfer {
-            return;
-        }
+        // 终端检测：正腿流向投资/基金账户 = 最终位置，否则仅中转
+        let is_terminal = asset_legs.iter().any(|(acct, _)| {
+            acct.starts_with("Assets:Invest") || acct.starts_with("Assets:Broker")
+        });
+        let flow_kind = if is_terminal { FlowKind::Transfer } else { FlowKind::Intermediate };
         flows.push(BucketTxFlow {
             date: tx.date,
             month: month.to_string(),
             bucket: bucket_name.to_string(),
             kind: BucketKind::Asset,
-            flow_kind: FlowKind::Transfer,
+            flow_kind,
             flow,
             payee: tx.payee.clone(),
             narration: tx.narration.clone(),
@@ -479,7 +478,7 @@ pub fn dedup_asset_flows(flows: &[BucketTxFlow]) -> Vec<&BucketTxFlow> {
         if f.kind != BucketKind::Asset {
             return true;
         }
-        // 退款/转出不参与去重（需要与存入抵消）
+        // 退款/转出/中转不参与去重
         if f.flow_kind != FlowKind::Deposit && f.flow_kind != FlowKind::Transfer {
             return true;
         }
@@ -647,9 +646,9 @@ pub fn summarize_buckets(
         if !is_month_in_scope(&flow.month, target_month, scope) {
             continue;
         }
-        // 只计入与桶配置类型匹配的流
+        // 只计入与桶配置类型匹配的流，且跳过中转
         let bucket_kind = mappings.bucket_kind(&flow.bucket);
-        if flow.kind != bucket_kind {
+        if flow.kind != bucket_kind || flow.flow_kind == FlowKind::Intermediate {
             continue;
         }
         summaries
