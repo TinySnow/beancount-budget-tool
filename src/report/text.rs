@@ -10,7 +10,7 @@ use rust_decimal::Decimal;
 use crate::cli::{BucketView, DateRange, ReportConfig};
 use crate::util::ReportScope;
 use crate::config::{BucketKind, BudgetDirective};
-use crate::budget::{self, BucketSummary, BucketTxFlow, ScopedBucketData, WarningStats};
+use crate::budget::{self, BucketSummary, BucketTxFlow, FlowKind, ScopedBucketData, WarningStats};
 use crate::util::{fmt_decimal, format_tx_title, is_month_in_scope, pad_display, parent_bucket, shorten_account_label};
 
 use super::shared::{fmt_pct, sort_entries, filter_top_level};
@@ -406,7 +406,7 @@ pub fn append_bucket_detail_view(
         month_flows.sort_by_key(|flow| flow.date);
 
         // Asset 流去重：同 bucket+相近日期(±3天)+同金额+同叙述只计入一次合计
-        let mut seen_assets: Vec<(String, chrono::NaiveDate, Decimal, String)> = Vec::new();
+        let mut seen_assets: Vec<(String, chrono::NaiveDate, Decimal)> = Vec::new();
 
         for flow in month_flows {
             let actual = flow.actual_amount();
@@ -417,13 +417,18 @@ pub fn append_bucket_detail_view(
                 }
                 BucketKind::Asset => {
                     let amount = actual.round_dp(2);
-                    let narration_key = flow.narration.as_deref().unwrap_or("").to_string();
-                    let is_dup = seen_assets.iter().any(|(b, d, a, n)| {
-                        *b == flow.bucket && *a == amount && *n == narration_key &&
+                    // 退款不参与存入合计，且不去重
+                    if flow.flow_kind == FlowKind::Refund {
+                        year_deposits += actual; // actual 为负值，自动扣减
+                        cumulative_deposits += actual;
+                        continue;
+                    }
+                    let is_dup = seen_assets.iter().any(|(b, d, a)| {
+                        *b == flow.bucket && *a == amount &&
                         (*d - flow.date).num_days().abs() <= 3
                     });
                     if !is_dup {
-                        seen_assets.push((flow.bucket.clone(), flow.date, amount, narration_key));
+                        seen_assets.push((flow.bucket.clone(), flow.date, amount));
                         year_deposits += actual;
                         cumulative_deposits += actual;
                     }
