@@ -85,7 +85,10 @@ impl BucketTxFlow {
                 FlowKind::Refund => self.flow,   // 正 flow → 负值，减少 "已支出"
                 _ => -self.flow,                  // 负 flow → 正值，增加 "已支出"
             },
-            BucketKind::Asset => self.flow,
+            BucketKind::Asset => match self.flow_kind {
+                FlowKind::Refund => -self.flow,   // 退款/转出: 负值，减少 "存入"
+                _ => self.flow,                    // 存入: 正值
+            },
         };
         self.cny_amount.unwrap_or(base)
     }
@@ -211,18 +214,20 @@ fn process_as_asset(
     }
 
     if !location_deltas.is_empty() {
-        // 退款检测：正腿都流向银行/钱包账户 = 资金退出 → Refund
-        let is_refund = !positive_flow.is_zero()
+        // 退款/纯转账检测：正腿全流向银行/钱包 → 资金未入桶，不生成流
+        let is_pure_transfer = !positive_flow.is_zero()
             && asset_legs.iter().all(|(acct, _)| {
                 acct.starts_with("Assets:Bank") || acct.starts_with("Assets:Wallet")
             });
-        let flow_kind = if is_refund { FlowKind::Refund } else { FlowKind::Transfer };
+        if is_pure_transfer {
+            return;
+        }
         flows.push(BucketTxFlow {
             date: tx.date,
             month: month.to_string(),
             bucket: bucket_name.to_string(),
             kind: BucketKind::Asset,
-            flow_kind,
+            flow_kind: FlowKind::Transfer,
             flow,
             payee: tx.payee.clone(),
             narration: tx.narration.clone(),
