@@ -22,13 +22,34 @@ use ratatui::{
 use crate::cli::{BucketView, Cli};
 use crate::util::ReportScope;
 
-/// 运行时保存的 TUI 配置
+/// 运行时保存的 TUI 配置（来自 budget-tool.toml 或 --tui 命令行参数）
 #[derive(serde::Deserialize, serde::Serialize, Default)]
-struct TuiConfig {
-    budgets: Option<String>,
-    config: Option<String>,
-    ledger_dir: Option<String>,
-    currency: Option<String>,
+pub struct TuiConfig {
+    pub budgets: Option<String>,
+    pub config: Option<String>,
+    pub ledger_dir: Option<String>,
+    pub currency: Option<String>,
+    /// 启动时显式指定的账本文件（--tui 组合 --ledger 时使用）
+    #[serde(default)]
+    pub ledgers: Vec<String>,
+}
+
+/// TUI 设置编辑的可选字段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsField {
+    Budgets,
+    Config,
+    LedgerDir,
+    Currency,
+}
+
+fn settings_field_label(field: SettingsField) -> &'static str {
+    match field {
+        SettingsField::Budgets => "预算文件",
+        SettingsField::Config => "配置文件",
+        SettingsField::LedgerDir => "账本目录",
+        SettingsField::Currency => "币种",
+    }
 }
 
 /// TUI 状态
@@ -53,6 +74,7 @@ struct App {
     budgets_path: PathBuf,
     config_path: PathBuf,
     ledger_dir: PathBuf,
+    ledgers: Vec<PathBuf>,
     currency: String,
 
     // 报告
@@ -74,22 +96,42 @@ struct App {
     bucket_picker: bool,
     date_picker: Option<String>, // Some("from") / Some("to") / None
 
+    // 设置编辑（z 键打开）
+    settings_field: Option<SettingsField>,
+    settings_editing: bool,
+    settings_buf: String,
+
     // 界面
     running: bool,
 }
 
 impl App {
-    fn new() -> io::Result<Self> {
+    fn new(overrides: Option<TuiConfig>) -> io::Result<Self> {
         let cfg = load_config().unwrap_or_default();
+        let over = overrides.unwrap_or_default();
         let now = chrono::Local::now().naive_local().date();
         let month = NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
         let from_date = NaiveDate::from_ymd_opt(now.year(), 1, 1).unwrap_or(month);
         let to_date = month;
 
-        let budgets_path = cfg.budgets.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("budgets.yml"));
-        let config_path = cfg.config.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("config.yml"));
-        let ledger_dir = cfg.ledger_dir.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        let currency = cfg.currency.unwrap_or_else(|| "CNY".to_string());
+        // 优先级：--tui 命令行参数 > budget-tool.toml > 内置默认
+        let budgets_path = over.budgets
+            .clone().map(PathBuf::from)
+            .or_else(|| cfg.budgets.clone().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("budgets.yml"));
+        let config_path = over.config
+            .clone().map(PathBuf::from)
+            .or_else(|| cfg.config.clone().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("config.yml"));
+        let ledger_dir = over.ledger_dir
+            .clone().map(PathBuf::from)
+            .or_else(|| cfg.ledger_dir.clone().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let ledgers = over.ledgers.iter().map(PathBuf::from).collect();
+        let currency = over.currency
+            .clone()
+            .or_else(|| cfg.currency.clone())
+            .unwrap_or_else(|| "CNY".to_string());
 
         Ok(App {
             month,
@@ -109,6 +151,7 @@ impl App {
             budgets_path,
             config_path,
             ledger_dir,
+            ledgers,
             currency,
             report_text: String::new(),
             report_lines: Vec::new(),
@@ -123,6 +166,9 @@ impl App {
             filter_buf: String::new(),
             bucket_picker: false,
             date_picker: None,
+            settings_field: None,
+            settings_editing: false,
+            settings_buf: String::new(),
             running: true,
         })
     }
@@ -131,18 +177,19 @@ impl App {
         format!("{:04}-{:02}", self.month.year(), self.month.month())
     }
 
-    fn build_cli(&self, ledgers: Vec<PathBuf>) -> Cli {
+    fn build_cli(&self) -> Cli {
         let (month, from, to) = if self.range_mode {
             (None, Some(format!("{:04}-{:02}", self.from_date.year(), self.from_date.month())), Some(format!("{:04}-{:02}", self.to_date.year(), self.to_date.month())))
         } else {
             (Some(self.month_str()), None, None)
         };
         Cli {
-            ledgers,
+            ledgers: self.ledgers.clone(),
             ledger_dirs: vec![self.ledger_dir.clone()],
             month,
-            budgets: self.budgets_path.clone(),
-            config_file: self.config_path.clone(),
+            tui: false,
+            budgets: Some(self.budgets_path.clone()),
+            config_file: Some(self.config_path.clone()),
             currency: self.currency.clone(),
             scope: self.scope,
             bucket: self.bucket.clone(),
@@ -162,6 +209,34 @@ impl App {
             year: None,
         }
     }
+}
+
+fn start_settings_edit(app: &mut App, field: SettingsField) {
+    let current = match field {
+        SettingsField::Budgets => app.budgets_path.to_string_lossy().into_owned(),
+        SettingsField::Config => app.config_path.to_string_lossy().into_owned(),
+        SettingsField::LedgerDir => app.ledger_dir.to_string_lossy().into_owned(),
+        SettingsField::Currency => app.currency.clone(),
+    };
+    app.settings_buf = current;
+    app.settings_editing = true;
+}
+
+fn apply_settings_field(app: &mut App, field: SettingsField) {
+    let value = app.settings_buf.trim().to_string();
+    match field {
+        SettingsField::Budgets => app.budgets_path = PathBuf::from(&value),
+        SettingsField::Config => app.config_path = PathBuf::from(&value),
+        SettingsField::LedgerDir => app.ledger_dir = PathBuf::from(&value),
+        SettingsField::Currency => {
+            app.currency = if value.is_empty() { "CNY".to_string() } else { value.to_ascii_uppercase() }
+        }
+    }
+    app.status = if value.is_empty() {
+        "设置已清除（按 r 重跑）".to_string()
+    } else {
+        "设置已更新（按 r 重跑）".to_string()
+    };
 }
 
 fn load_config() -> Option<TuiConfig> {
@@ -184,6 +259,10 @@ fn dirs_next() -> Option<PathBuf> {
 }
 
 pub fn run_tui(base_dir: &Path) -> anyhow::Result<()> {
+    run_tui_with(base_dir, None)
+}
+
+pub fn run_tui_with(base_dir: &Path, overrides: Option<TuiConfig>) -> anyhow::Result<()> {
     std::env::set_current_dir(base_dir)?;
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -191,7 +270,7 @@ pub fn run_tui(base_dir: &Path) -> anyhow::Result<()> {
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new()?;
+    let mut app = App::new(overrides)?;
 
     while app.running {
         terminal.draw(|f| draw(f, &app))?;
@@ -246,10 +325,19 @@ fn draw(f: &mut Frame, app: &App) {
         format!(" 输入桶名: {}_ (回车确认, Esc取消) ", app.filter_buf)
     } else if let Some(ref which) = app.date_picker {
         format!(" 输入{}日期 (YYYY-MM): {}_ (回车确认, Esc取消) ", which, app.filter_buf)
+    } else if let Some(field) = app.settings_field {
+        if app.settings_editing {
+            format!(" 输入{}新值: {}_ (回车确认, Esc取消) ", settings_field_label(field), app.settings_buf)
+        } else {
+            format!(
+                " 设置: 1预算[{}]  2配置[{}]  3账本[{}]  4币种[{}] | 1-4选择 Esc取消 ",
+                app.budgets_path.display(), app.config_path.display(), app.ledger_dir.display(), app.currency
+            )
+        }
     } else if app.range_mode {
         format!(" {} ←→调整日期 d输入 Tab切From/To t:月模式 | s排序 e展开 f过滤 r运行 q退出 ", if app.adjusting_from { "调整 FROM" } else { "调整 TO" })
     } else {
-        " ←→ 月 | d 跳转 | Tab scope | t 范围 | s 排序 | e 展开 | f 过滤 | b 桶 | v 视图 | ↑↓滚 | r 运行 | q 退出 ".to_string()
+        " ←→ 月 | d 跳转 | Tab scope | t 范围 | s 排序 | e 展开 | f 过滤 | b 桶 | v 视图 | z 设置 | ↑↓滚 | r 运行 | q 退出 ".to_string()
     };
     let help_block = Paragraph::new(help)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
@@ -325,6 +413,37 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                     }
                     KeyCode::Backspace => { app.filter_buf.pop(); }
                     KeyCode::Char(c) => { app.filter_buf.push(c); }
+                    _ => {}
+                }
+                return Ok(());
+            }
+
+            if let Some(field) = app.settings_field {
+                if app.settings_editing {
+                    match key.code {
+                        KeyCode::Enter => {
+                            apply_settings_field(app, field);
+                            app.settings_field = None;
+                            app.settings_editing = false;
+                            app.settings_buf.clear();
+                        }
+                        KeyCode::Esc => {
+                            app.settings_field = None;
+                            app.settings_editing = false;
+                            app.settings_buf.clear();
+                        }
+                        KeyCode::Backspace => { app.settings_buf.pop(); }
+                        KeyCode::Char(c) => { app.settings_buf.push(c); }
+                        _ => {}
+                    }
+                    return Ok(());
+                }
+                match key.code {
+                    KeyCode::Char('1') => start_settings_edit(app, SettingsField::Budgets),
+                    KeyCode::Char('2') => start_settings_edit(app, SettingsField::Config),
+                    KeyCode::Char('3') => start_settings_edit(app, SettingsField::LedgerDir),
+                    KeyCode::Char('4') => start_settings_edit(app, SettingsField::Currency),
+                    KeyCode::Esc => { app.settings_field = None; }
                     _ => {}
                 }
                 return Ok(());
@@ -438,6 +557,11 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                         app.out_dir = Some("./reports".to_string());
                     }
                 }
+                KeyCode::Char('z') => {
+                    app.settings_field = Some(SettingsField::Budgets);
+                    app.settings_editing = false;
+                    app.settings_buf.clear();
+                }
                 KeyCode::Char('p') => app.csv_pivot = !app.csv_pivot,
                 KeyCode::Char('j') => app.out_json = !app.out_json,
                 KeyCode::Up => { if app.scroll > 0 { app.scroll -= 1; } }
@@ -456,19 +580,24 @@ fn run_report(app: &mut App) {
     app.run_error = None;
 
     // Resolve ledgers first
-    let cli = app.build_cli(vec![]);
-    let ledgers = match crate::cli::resolve_ledger_inputs(&cli) {
-        Ok(l) => l,
+    let cli = app.build_cli();
+    match crate::cli::resolve_ledger_inputs(&cli) {
+        Ok(l) => app.ledgers = l,
         Err(e) => {
             app.run_error = Some(format!("{}", e));
             app.status = format!("错误: {}", e);
             return;
         }
+    }
+
+    let cli = app.build_cli();
+
+    let Some(budget_path) = cli.budgets.as_deref() else {
+        app.run_error = Some("预算文件未配置（按 z 设置）".into());
+        app.status = "错误: budgets".into();
+        return;
     };
-
-    let cli = app.build_cli(ledgers);
-
-    let budget_directives = match crate::config::load_budget_directives(&cli.budgets) {
+    let budget_directives = match crate::config::load_budget_directives(budget_path) {
         Ok(d) => d,
         Err(e) => {
             app.run_error = Some(format!("加载预算失败: {}", e));
@@ -476,7 +605,13 @@ fn run_report(app: &mut App) {
             return;
         }
     };
-    let mappings = match crate::config::load_config(&cli.config_file) {
+
+    let Some(config_path) = cli.config_file.as_deref() else {
+        app.run_error = Some("配置文件未配置（按 z 设置）".into());
+        app.status = "错误: config".into();
+        return;
+    };
+    let mappings = match crate::config::load_config(config_path) {
         Ok(m) => m,
         Err(e) => {
             app.run_error = Some(format!("加载配置失败: {}", e));

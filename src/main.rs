@@ -35,22 +35,33 @@ fn write_stdout(text: &str) {
     let _ = handle.flush();
 }
 
-/// 程序入口。无参数时启动 TUI，有参数时走 CLI。
+/// 程序入口。模式划分：
+/// - 无任何参数 → TUI（路径从 budget-tool.toml 加载）
+/// - 带 --tui → 强制 TUI，命令行路径作为初始值传入
+/// - 其余带参数 → 纯 CLI
+/// - --help / --version 由 clap 处理
 fn main() -> Result<()> {
-    // 无参数或仅有默认路径时 → TUI
     let args: Vec<String> = std::env::args().collect();
-    let has_explicit_args = args.len() > 1;
-    // --help / --version 走 CLI
-    let is_help = args.iter().any(|a| a == "--help" || a == "-h");
-    let is_version = args.iter().any(|a| a == "--version" || a == "-V");
-
-    if !has_explicit_args || is_help || is_version {
-        if !is_help && !is_version && !has_explicit_args {
-            return tui::run_tui(&std::env::current_dir()?);
-        }
+    if args.len() <= 1 {
+        return tui::run_tui(&std::env::current_dir()?);
     }
 
     let mut cli = Cli::parse();
+
+    if cli.tui {
+        let overrides = tui::TuiConfig {
+            budgets: cli.budgets.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            config: cli.config_file.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            ledger_dir: cli.ledger_dirs.first().map(|p| p.to_string_lossy().into_owned()),
+            ledgers: cli.ledgers.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+            currency: (cli.currency != "CNY").then(|| cli.currency.clone()),
+        };
+        return tui::run_tui_with(&std::env::current_dir()?, Some(overrides));
+    }
+
+    // 纯 CLI 模式：clap 已保证 --budgets/--config 存在（除非 --tui）
+    let budget_path = cli.budgets.as_ref().context("--budgets is required")?;
+    let config_path = cli.config_file.as_ref().context("--config is required")?;
 
     // 解析时间范围：--from/--to 与 --month 互斥
     let date_range = resolve_date_range(&cli)?;
@@ -66,10 +77,10 @@ fn main() -> Result<()> {
     let config = cli.report_config();
     let ledger_files = cli::resolve_ledger_inputs(&cli)?;
 
-    let budget_directives = config::load_budget_directives(&cli.budgets)
-        .with_context(|| format!("Failed to load budgets: {}", cli.budgets.display()))?;
-    let mappings = config::load_config(&cli.config_file)
-        .with_context(|| format!("Failed to load config: {}", cli.config_file.display()))?;
+    let budget_directives = config::load_budget_directives(budget_path)
+        .with_context(|| format!("Failed to load budgets: {}", budget_path.display()))?;
+    let mappings = config::load_config(config_path)
+        .with_context(|| format!("Failed to load config: {}", config_path.display()))?;
 
     let target_currency = cli.currency.to_ascii_uppercase();
     // known_buckets 基于全量预算指令（未裁剪），供 bucket 名自动补全
@@ -105,8 +116,8 @@ fn main() -> Result<()> {
                 }
             },
         };
-        let cmp_directives = filter_directives_by_range(config::load_budget_directives(&cli.budgets)
-            .with_context(|| format!("Failed to load budgets: {}", cli.budgets.display()))?, &cmp_range);
+        let cmp_directives = filter_directives_by_range(config::load_budget_directives(budget_path)
+            .with_context(|| format!("Failed to load budgets: {}", budget_path.display()))?, &cmp_range);
         // 复用已解析的流水，不重复解析账本
         let cmp_flows = filter_flows_by_range(tx_flows.clone(), &cmp_range);
         let cmp_target = cmp_range.end_month().to_string();

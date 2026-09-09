@@ -2,7 +2,7 @@
 
 Beancount 预算分析工具。输入账本 + 预算配置，自动生成预算统计与多格式报告。
 
-支持 **TUI 交互模式**（无参数启动）和 **CLI 批处理模式**（传参运行）。
+支持 **TUI 交互模式**（无参数或 `--tui` 启动）和 **CLI 批处理模式**（带参数运行）。
 
 ## 快速开始
 
@@ -11,9 +11,24 @@ Beancount 预算分析工具。输入账本 + 预算配置，自动生成预算�
 **TUI 模式 — 推荐日常使用：**
 
 ```bash
-# 直接启动，全键盘操作
+# 直接启动，全键盘操作（路径从 budget-tool.toml 加载）
 cargo run
+
+# 显式 TUI：命令行路径作为初始值（TUI 内按 z 可再改）
+beancount-budget-tool --tui \
+  --budgets budgets.yml --config config.yml --ledger-dir ./transactions/
 ```
+
+**模式划分：**
+
+| 启动方式 | 进入的模式 |
+|---|---|
+| 无参数 | TUI（路径来自 `budget-tool.toml`） |
+| `--tui [--budgets X --config Y --ledger-dir Z --ledger F]` | TUI（命令行路径优先） |
+| 其余带参数（`-m`/`--year`/`--compare` 等） | 纯 CLI，一次性输出 |
+| `--help` / `--version` | 帮助 / 版本 |
+
+TUI 内按 `z` 可修改预算文件 / 配置文件 / 账本目录 / 币种，修改后按 `r` 重跑；改动仅本次会话生效（不写回 toml）。
 
 **CLI 模式 — 脚本/自动化：**
 
