@@ -29,17 +29,21 @@ pub struct Cli {
     #[arg(long = "ledger-dir")]
     pub ledger_dirs: Vec<PathBuf>,
 
+    /// 强制以 TUI 交互模式启动；可组合 --budgets/--config/--ledger-dir/--ledger/--currency 作为初始路径
+    #[arg(long)]
+    pub tui: bool,
+
     /// 统计月份（YYYY-MM）。与 --from/--to 互斥
     #[arg(long, short = 'm')]
     pub month: Option<String>,
 
     /// 预算配置文件（纯预算, 不含跟踪桶）
-    #[arg(long, required = true)]
-    pub budgets: PathBuf,
+    #[arg(long, required_unless_present = "tui")]
+    pub budgets: Option<PathBuf>,
 
     /// 全局配置文件（账户映射、桶类型、跟踪桶等），--mappings 为旧名，仍可用
-    #[arg(long = "config", short = 'c', visible_alias = "mappings", required = true)]
-    pub config_file: PathBuf,
+    #[arg(long = "config", short = 'c', visible_alias = "mappings", required_unless_present = "tui")]
+    pub config_file: Option<PathBuf>,
 
     /// 统计币种（默认 CNY）
     #[arg(long, default_value = "CNY")]
