@@ -212,7 +212,7 @@ pub fn resolve_date_range(cli: &Cli) -> Result<DateRange> {
 }
 
 /// 解析日期参数：支持 YYYY-MM, YYYY-MM-DD, YYYY.M.D, YYYY/M/D。
-fn parse_date_arg(raw: &str) -> Result<chrono::NaiveDate> {
+pub(crate) fn parse_date_arg(raw: &str) -> Result<chrono::NaiveDate> {
     let normalized = raw.replace(['.', '/'], "-");
     // YYYY-MM → YYYY-MM-01
     if normalized.len() == 7 && normalized.chars().filter(|c| *c == '-').count() == 1 {

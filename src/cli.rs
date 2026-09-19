@@ -85,11 +85,11 @@ pub struct Cli {
     #[arg(long)]
     pub expand: bool,
 
-    /// 统计起始月份（YYYY-MM）。与 --month 互斥，配合 --to 使用
+    /// 统计起始日期（YYYY-MM 或 YYYY-MM-DD）。与 --month 互斥，配合 --to 使用
     #[arg(long = "from")]
     pub from: Option<String>,
 
-    /// 统计结束月份（YYYY-MM）。与 --month 互斥，配合 --from 使用
+    /// 统计结束日期（YYYY-MM 或 YYYY-MM-DD）。与 --month 互斥，配合 --from 使用
     #[arg(long = "to")]
     pub to: Option<String>,
 

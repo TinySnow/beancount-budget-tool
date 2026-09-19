@@ -20,7 +20,7 @@ use ratatui::{
 };
 
 use crate::cli::{BucketView, Cli};
-use crate::util::ReportScope;
+use crate::util::{display_width, ReportScope};
 
 /// 运行时保存的 TUI 配置（来自 budget-tool.toml 或 --tui 命令行参数）
 #[derive(serde::Deserialize, serde::Serialize, Default)]
@@ -93,6 +93,8 @@ struct App {
     // 选择
     filter_editing: bool,
     filter_buf: String,
+    /// 当前文本输入框中的光标位置（按 Unicode 字符计，而非 UTF-8 字节）。
+    input_cursor: usize,
     bucket_picker: bool,
     date_picker: Option<String>, // Some("from") / Some("to") / None
 
@@ -164,6 +166,7 @@ impl App {
             to_date,
             filter_editing: false,
             filter_buf: String::new(),
+            input_cursor: 0,
             bucket_picker: false,
             date_picker: None,
             settings_field: None,
@@ -179,7 +182,11 @@ impl App {
 
     fn build_cli(&self) -> Cli {
         let (month, from, to) = if self.range_mode {
-            (None, Some(format!("{:04}-{:02}", self.from_date.year(), self.from_date.month())), Some(format!("{:04}-{:02}", self.to_date.year(), self.to_date.month())))
+            (
+                None,
+                Some(self.from_date.format("%Y-%m-%d").to_string()),
+                Some(self.to_date.format("%Y-%m-%d").to_string()),
+            )
         } else {
             (Some(self.month_str()), None, None)
         };
@@ -219,7 +226,51 @@ fn start_settings_edit(app: &mut App, field: SettingsField) {
         SettingsField::Currency => app.currency.clone(),
     };
     app.settings_buf = current;
+    app.input_cursor = app.settings_buf.chars().count();
     app.settings_editing = true;
+}
+
+/// 对单行文本执行编辑操作。光标按 Unicode 字符计数，避免中文字符被截断。
+/// 返回值表示该按键是否已被文本编辑器消费。
+fn edit_text(text: &mut String, cursor: &mut usize, key: KeyCode) -> bool {
+    let len = text.chars().count();
+    *cursor = (*cursor).min(len);
+    match key {
+        KeyCode::Left => *cursor = cursor.saturating_sub(1),
+        KeyCode::Right => *cursor = (*cursor + 1).min(len),
+        KeyCode::Home => *cursor = 0,
+        KeyCode::End => *cursor = len,
+        KeyCode::Backspace if *cursor > 0 => {
+            let start = char_byte_index(text, *cursor - 1);
+            let end = char_byte_index(text, *cursor);
+            text.replace_range(start..end, "");
+            *cursor -= 1;
+        }
+        KeyCode::Delete if *cursor < len => {
+            let start = char_byte_index(text, *cursor);
+            let end = char_byte_index(text, *cursor + 1);
+            text.replace_range(start..end, "");
+        }
+        KeyCode::Char(c) => {
+            let byte = char_byte_index(text, *cursor);
+            text.insert(byte, c);
+            *cursor += 1;
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// 返回第 `char_index` 个字符的 UTF-8 字节偏移；超出结尾时返回字符串结尾。
+fn char_byte_index(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len())
+}
+
+fn reset_text_input(app: &mut App) {
+    app.input_cursor = 0;
 }
 
 fn apply_settings_field(app: &mut App, field: SettingsField) {
@@ -319,15 +370,21 @@ fn draw(f: &mut Frame, app: &App) {
     f.render_widget(report_block, chunks[1]);
 
     // Help bar
+    let mut input_cursor_x = None;
     let help = if app.filter_editing {
-        format!(" 输入过滤关键词: {}_ (回车确认, Esc取消) ", app.filter_buf)
+        render_input_help(&mut input_cursor_x, chunks[2], " 输入过滤关键词: ", &app.filter_buf, app.input_cursor)
     } else if app.bucket_picker {
-        format!(" 输入桶名: {}_ (回车确认, Esc取消) ", app.filter_buf)
+        render_input_help(&mut input_cursor_x, chunks[2], " 输入桶名: ", &app.filter_buf, app.input_cursor)
     } else if let Some(ref which) = app.date_picker {
-        format!(" 输入{}日期 (YYYY-MM): {}_ (回车确认, Esc取消) ", which, app.filter_buf)
+        let prefix = if which == "month" {
+            " 输入月份 (YYYY-MM): ".to_string()
+        } else {
+            format!(" 输入{}日期 (YYYY-MM-DD): ", which)
+        };
+        render_input_help(&mut input_cursor_x, chunks[2], &prefix, &app.filter_buf, app.input_cursor)
     } else if let Some(field) = app.settings_field {
         if app.settings_editing {
-            format!(" 输入{}新值: {}_ (回车确认, Esc取消) ", settings_field_label(field), app.settings_buf)
+            render_input_help(&mut input_cursor_x, chunks[2], &format!(" 输入{}新值: ", settings_field_label(field)), &app.settings_buf, app.input_cursor)
         } else {
             format!(
                 " 设置: 1预算[{}]  2配置[{}]  3账本[{}]  4币种[{}] | 1-4选择 Esc取消 ",
@@ -335,13 +392,28 @@ fn draw(f: &mut Frame, app: &App) {
             )
         }
     } else if app.range_mode {
-        format!(" {} ←→调整日期 d输入 Tab切From/To t:月模式 | s排序 e展开 f过滤 r运行 q退出 ", if app.adjusting_from { "调整 FROM" } else { "调整 TO" })
+        format!(
+            " 日期范围：←→调整{}  d/Enter编辑  Tab切换起止  t回到月模式\n 通用：s排序  e展开  f筛选  b桶  v视图  z设置  ↑↓滚动  r运行  q退出 ",
+            if app.adjusting_from { "起始日" } else { "结束日" },
+        )
     } else {
-        " ←→ 月 | d 跳转 | Tab scope | t 范围 | s 排序 | e 展开 | f 过滤 | b 桶 | v 视图 | z 设置 | ↑↓滚 | r 运行 | q 退出 ".to_string()
+        " 月模式：←→切月  d跳转  Tab当月/累计  t日期范围\n 通用：s排序  e展开  f筛选  b桶  v视图  z设置  ↑↓滚动  r运行  q退出 ".to_string()
     };
     let help_block = Paragraph::new(help)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     f.render_widget(help_block, chunks[2]);
+    if let Some(x) = input_cursor_x {
+        f.set_cursor_position((x, chunks[2].y));
+    }
+}
+
+/// 渲染单行输入提示，并记录真实终端光标的位置。
+fn render_input_help(cursor_x: &mut Option<u16>, area: Rect, prefix: &str, value: &str, cursor: usize) -> String {
+    let cursor_prefix: String = value.chars().take(cursor).collect();
+    let x = area.x.saturating_add((display_width(prefix) + display_width(&cursor_prefix)) as u16);
+    // 光标不能落在当前区域右边界之外；文本仍由 Paragraph 自然裁剪。
+    *cursor_x = Some(x.min(area.right().saturating_sub(1)));
+    format!("{}{}  (←→移动, Home/End跳转, Backspace/Delete删除, 回车确认, Esc取消) ", prefix, value)
 }
 
 fn handle_input(app: &mut App) -> io::Result<()> {
@@ -357,15 +429,15 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                         app.filter = if app.filter_buf.is_empty() { None } else { Some(app.filter_buf.clone()) };
                         app.filter_editing = false;
                         app.filter_buf.clear();
+                        reset_text_input(app);
                     }
                     KeyCode::Esc => {
                         app.filter = None;
                         app.filter_editing = false;
                         app.filter_buf.clear();
+                        reset_text_input(app);
                     }
-                    KeyCode::Backspace => { app.filter_buf.pop(); }
-                    KeyCode::Char(c) => { app.filter_buf.push(c); }
-                    _ => {}
+                    code => { edit_text(&mut app.filter_buf, &mut app.input_cursor, code); }
                 }
                 return Ok(());
             }
@@ -376,15 +448,15 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                         app.bucket = if app.filter_buf.is_empty() { None } else { Some(app.filter_buf.clone()) };
                         app.bucket_picker = false;
                         app.filter_buf.clear();
+                        reset_text_input(app);
                     }
                     KeyCode::Esc => {
                         app.bucket = None;
                         app.bucket_picker = false;
                         app.filter_buf.clear();
+                        reset_text_input(app);
                     }
-                    KeyCode::Backspace => { app.filter_buf.pop(); }
-                    KeyCode::Char(c) => { app.filter_buf.push(c); }
-                    _ => {}
+                    code => { edit_text(&mut app.filter_buf, &mut app.input_cursor, code); }
                 }
                 return Ok(());
             }
@@ -392,9 +464,13 @@ fn handle_input(app: &mut App) -> io::Result<()> {
             if app.date_picker.is_some() {
                 match key.code {
                     KeyCode::Enter => {
-                        if let Ok(d) = chrono::NaiveDate::parse_from_str(
-                            &format!("{}-01", app.filter_buf), "%Y-%m-%d",
-                        ) {
+                        let parsed = if app.date_picker.as_deref() == Some("month") {
+                            crate::util::validate_month(&app.filter_buf)
+                                .and_then(|_| crate::parse_date_arg(&app.filter_buf))
+                        } else {
+                            crate::parse_date_arg(&app.filter_buf)
+                        };
+                        if let Ok(d) = parsed {
                             if app.date_picker.as_deref() == Some("from") {
                                 app.from_date = d;
                             } else if app.date_picker.as_deref() == Some("to") {
@@ -406,14 +482,14 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                         }
                         app.date_picker = None;
                         app.filter_buf.clear();
+                        reset_text_input(app);
                     }
                     KeyCode::Esc => {
                         app.date_picker = None;
                         app.filter_buf.clear();
+                        reset_text_input(app);
                     }
-                    KeyCode::Backspace => { app.filter_buf.pop(); }
-                    KeyCode::Char(c) => { app.filter_buf.push(c); }
-                    _ => {}
+                    code => { edit_text(&mut app.filter_buf, &mut app.input_cursor, code); }
                 }
                 return Ok(());
             }
@@ -426,15 +502,15 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                             app.settings_field = None;
                             app.settings_editing = false;
                             app.settings_buf.clear();
+                            reset_text_input(app);
                         }
                         KeyCode::Esc => {
                             app.settings_field = None;
                             app.settings_editing = false;
                             app.settings_buf.clear();
+                            reset_text_input(app);
                         }
-                        KeyCode::Backspace => { app.settings_buf.pop(); }
-                        KeyCode::Char(c) => { app.settings_buf.push(c); }
-                        _ => {}
+                        code => { edit_text(&mut app.settings_buf, &mut app.input_cursor, code); }
                     }
                     return Ok(());
                 }
@@ -461,24 +537,27 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                 KeyCode::Char('d') if !app.range_mode => {
                     app.date_picker = Some("month".to_string());
                     app.filter_buf = app.month_str();
+                    app.input_cursor = app.filter_buf.chars().count();
                 }
                 KeyCode::Char('d') if app.range_mode => {
                     let which = if app.adjusting_from { "from" } else { "to" };
                     app.date_picker = Some(which.to_string());
                     app.filter_buf = match which {
-                        "from" => format!("{:04}-{:02}", app.from_date.year(), app.from_date.month()),
-                        "to" => format!("{:04}-{:02}", app.to_date.year(), app.to_date.month()),
+                        "from" => app.from_date.format("%Y-%m-%d").to_string(),
+                        "to" => app.to_date.format("%Y-%m-%d").to_string(),
                         _ => String::new(),
                     };
+                    app.input_cursor = app.filter_buf.chars().count();
                 }
                 KeyCode::Enter if app.range_mode => {
                     let which = if app.adjusting_from { "from" } else { "to" };
                     app.date_picker = Some(which.to_string());
                     app.filter_buf = match which {
-                        "from" => format!("{:04}-{:02}", app.from_date.year(), app.from_date.month()),
-                        "to" => format!("{:04}-{:02}", app.to_date.year(), app.to_date.month()),
+                        "from" => app.from_date.format("%Y-%m-%d").to_string(),
+                        "to" => app.to_date.format("%Y-%m-%d").to_string(),
                         _ => String::new(),
                     };
+                    app.input_cursor = app.filter_buf.chars().count();
                 }
                 KeyCode::Left => {
                     if app.range_mode {
@@ -529,10 +608,12 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                 KeyCode::Char('f') => {
                     app.filter_editing = true;
                     app.filter_buf = app.filter.as_deref().unwrap_or("").to_string();
+                    app.input_cursor = app.filter_buf.chars().count();
                 }
                 KeyCode::Char('b') => {
                     app.bucket_picker = true;
                     app.filter_buf = app.bucket.as_deref().unwrap_or("").to_string();
+                    app.input_cursor = app.filter_buf.chars().count();
                 }
                 KeyCode::Char('l') => app.show_locations = !app.show_locations,
                 KeyCode::Char('h') => app.hide_asset_flows = !app.hide_asset_flows,
@@ -625,22 +706,16 @@ fn run_report(app: &mut App) {
     // 范围模式下 scope 强制 Cumulative, month 设为 to
     let report_scope = if cli.from.is_some() { ReportScope::Cumulative } else { cli.scope };
     let report_month = if cli.from.is_some() {
-        cli.to.clone().unwrap_or_else(|| month_str.to_string())
+        format!("{:04}-{:02}", app.to_date.year(), app.to_date.month())
     } else {
         month_str.to_string()
     };
 
     let range = if cli.from.is_some() && cli.to.is_some() {
-        let from = chrono::NaiveDate::parse_from_str(
-            &format!("{}-01", cli.from.as_deref().unwrap()), "%Y-%m-%d"
-        ).unwrap_or(chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap());
-        let to_end = chrono::NaiveDate::parse_from_str(
-            &format!("{}-01", cli.to.as_deref().unwrap()), "%Y-%m-%d"
-        ).ok()
-        .and_then(|d| d.checked_add_months(chrono::Months::new(1)))
-        .and_then(|n| n.pred_opt())
-        .unwrap_or(chrono::Local::now().naive_local().date());
-        crate::cli::DateRange::Range { from, to: to_end }
+        crate::cli::DateRange::Range {
+            from: app.from_date,
+            to: app.to_date,
+        }
     } else {
         crate::cli::DateRange::Month {
             target: report_month.to_string(),
@@ -714,5 +789,43 @@ fn run_report(app: &mut App) {
         app.status = format!("{} ({})", bucket_label, bucket_view_label);
     } else {
         app.status = format!("{} ✓", app.month_str());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_editor_inserts_and_deletes_at_unicode_cursor() {
+        let mut text = "预算工具".to_string();
+        let mut cursor = 2;
+
+        assert!(edit_text(&mut text, &mut cursor, KeyCode::Char('表')));
+        assert_eq!(text, "预算表工具");
+        assert_eq!(cursor, 3);
+
+        assert!(edit_text(&mut text, &mut cursor, KeyCode::Backspace));
+        assert_eq!(text, "预算工具");
+        assert_eq!(cursor, 2);
+
+        assert!(edit_text(&mut text, &mut cursor, KeyCode::Delete));
+        assert_eq!(text, "预算具");
+        assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn text_editor_moves_to_boundaries_without_overflowing() {
+        let mut text = "abc".to_string();
+        let mut cursor = 1;
+
+        edit_text(&mut text, &mut cursor, KeyCode::End);
+        assert_eq!(cursor, 3);
+        edit_text(&mut text, &mut cursor, KeyCode::Right);
+        assert_eq!(cursor, 3);
+        edit_text(&mut text, &mut cursor, KeyCode::Home);
+        assert_eq!(cursor, 0);
+        edit_text(&mut text, &mut cursor, KeyCode::Left);
+        assert_eq!(cursor, 0);
     }
 }
