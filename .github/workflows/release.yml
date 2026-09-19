@@ -39,7 +39,7 @@ jobs:
           mkdir -p release
           cp target/${{ matrix.target }}/release/beancount-budget-tool release/
           cp examples/budgets.yaml release/
-          cp examples/mappings.yaml release/
+          cp examples/config.yml release/
           tar czf beancount-budget-tool-${{ matrix.suffix }}.tar.gz -C release .
 
       - name: Package (windows)
@@ -48,7 +48,7 @@ jobs:
           mkdir release
           cp target/${{ matrix.target }}/release/beancount-budget-tool.exe release/
           cp examples/budgets.yaml release/
-          cp examples/mappings.yaml release/
+          cp examples/config.yml release/
           Compress-Archive -Path release/* -DestinationPath beancount-budget-tool-${{ matrix.suffix }}.zip
 
       - name: Upload artifact
