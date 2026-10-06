@@ -74,6 +74,7 @@ struct App {
     budgets_path: PathBuf,
     config_path: PathBuf,
     ledger_dir: PathBuf,
+    // 仅保存启动时通过 --ledger 显式传入的文件；目录扫描结果不写回这里。
     ledgers: Vec<PathBuf>,
     currency: String,
 
@@ -219,6 +220,7 @@ impl App {
 }
 
 fn start_settings_edit(app: &mut App, field: SettingsField) {
+    app.settings_field = Some(field);
     let current = match field {
         SettingsField::Budgets => app.budgets_path.to_string_lossy().into_owned(),
         SettingsField::Config => app.config_path.to_string_lossy().into_owned(),
@@ -283,11 +285,19 @@ fn apply_settings_field(app: &mut App, field: SettingsField) {
             app.currency = if value.is_empty() { "CNY".to_string() } else { value.to_ascii_uppercase() }
         }
     }
-    app.status = if value.is_empty() {
-        "设置已清除（按 r 重跑）".to_string()
-    } else {
-        "设置已更新（按 r 重跑）".to_string()
-    };
+}
+
+fn finish_settings_edit(app: &mut App, field: SettingsField, save: bool) {
+    if save {
+        apply_settings_field(app, field);
+    }
+    app.settings_editing = false;
+    app.settings_buf.clear();
+    reset_text_input(app);
+    // 保留 settings_field，让编辑结束后回到设置字段选择页。
+    if save {
+        run_report(app);
+    }
 }
 
 fn load_config() -> Option<TuiConfig> {
@@ -387,7 +397,7 @@ fn draw(f: &mut Frame, app: &App) {
             render_input_help(&mut input_cursor_x, chunks[2], &format!(" 输入{}新值: ", settings_field_label(field)), &app.settings_buf, app.input_cursor)
         } else {
             format!(
-                " 设置: 1预算[{}]  2配置[{}]  3账本[{}]  4币种[{}] | 1-4选择 Esc取消 ",
+                " 设置: 1预算[{}]  2配置[{}]  3账本[{}]  4币种[{}] | 1-4选择 Esc返回主界面 ",
                 app.budgets_path.display(), app.config_path.display(), app.ledger_dir.display(), app.currency
             )
         }
@@ -498,17 +508,10 @@ fn handle_input(app: &mut App) -> io::Result<()> {
                 if app.settings_editing {
                     match key.code {
                         KeyCode::Enter => {
-                            apply_settings_field(app, field);
-                            app.settings_field = None;
-                            app.settings_editing = false;
-                            app.settings_buf.clear();
-                            reset_text_input(app);
+                            finish_settings_edit(app, field, true);
                         }
                         KeyCode::Esc => {
-                            app.settings_field = None;
-                            app.settings_editing = false;
-                            app.settings_buf.clear();
-                            reset_text_input(app);
+                            finish_settings_edit(app, field, false);
                         }
                         code => { edit_text(&mut app.settings_buf, &mut app.input_cursor, code); }
                     }
@@ -660,43 +663,36 @@ fn run_report(app: &mut App) {
     app.status = "运行中...".into();
     app.run_error = None;
 
-    // Resolve ledgers first
+    // 每次重新扫描当前账本目录，不把扫描结果混入显式传入的文件列表。
     let cli = app.build_cli();
-    match crate::cli::resolve_ledger_inputs(&cli) {
-        Ok(l) => app.ledgers = l,
+    let ledger_files = match crate::cli::resolve_ledger_inputs(&cli) {
+        Ok(files) => files,
         Err(e) => {
-            app.run_error = Some(format!("{}", e));
-            app.status = format!("错误: {}", e);
+            show_run_error(app, format!("账本输入错误: {}", e));
             return;
         }
-    }
-
-    let cli = app.build_cli();
+    };
 
     let Some(budget_path) = cli.budgets.as_deref() else {
-        app.run_error = Some("预算文件未配置（按 z 设置）".into());
-        app.status = "错误: budgets".into();
+        show_run_error(app, "预算文件未配置（按 z 设置）".into());
         return;
     };
     let budget_directives = match crate::config::load_budget_directives(budget_path) {
         Ok(d) => d,
         Err(e) => {
-            app.run_error = Some(format!("加载预算失败: {}", e));
-            app.status = "错误: budgets".into();
+            show_run_error(app, format!("加载预算失败: {}", e));
             return;
         }
     };
 
     let Some(config_path) = cli.config_file.as_deref() else {
-        app.run_error = Some("配置文件未配置（按 z 设置）".into());
-        app.status = "错误: config".into();
+        show_run_error(app, "配置文件未配置（按 z 设置）".into());
         return;
     };
     let mappings = match crate::config::load_config(config_path) {
         Ok(m) => m,
         Err(e) => {
-            app.run_error = Some(format!("加载配置失败: {}", e));
-            app.status = "错误: config".into();
+            show_run_error(app, format!("加载配置失败: {}", e));
             return;
         }
     };
@@ -726,12 +722,11 @@ fn run_report(app: &mut App) {
     let budget_directives = crate::filter_directives_by_range(budget_directives, &range);
     let all_known = crate::config::collect_known_buckets(&budget_directives, &mappings);
     let tx_flows = match crate::budget::collect_bucket_tx_flows(
-        &cli.ledgers, &mappings, &cli.currency, &all_known,
+        &ledger_files, &mappings, &cli.currency, &all_known,
     ) {
         Ok(f) => crate::filter_flows_by_range(f, &range),
         Err(e) => {
-            app.run_error = Some(format!("解析账本失败: {}", e));
-            app.status = "错误: ledger".into();
+            show_run_error(app, format!("解析账本失败: {}", e));
             return;
         }
     };
@@ -792,6 +787,14 @@ fn run_report(app: &mut App) {
     }
 }
 
+fn show_run_error(app: &mut App, message: String) {
+    app.status = "运行失败（详见报告区）".into();
+    app.run_error = Some(message.clone());
+    app.report_text = message;
+    app.report_lines = app.report_text.lines().map(str::to_string).collect();
+    app.scroll = 0;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -827,5 +830,54 @@ mod tests {
         assert_eq!(cursor, 0);
         edit_text(&mut text, &mut cursor, KeyCode::Left);
         assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn changing_settings_reloads_inputs_and_replaces_stale_report() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut app = App::new(Some(TuiConfig {
+            budgets: Some(root.join("examples/budgets.yaml").to_string_lossy().into_owned()),
+            config: Some(root.join("examples/config.yml").to_string_lossy().into_owned()),
+            ledger_dir: Some(root.join("examples").to_string_lossy().into_owned()),
+            ..TuiConfig::default()
+        })).unwrap();
+        app.month = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+
+        run_report(&mut app);
+        assert!(app.run_error.is_none());
+        assert!(app.report_text.contains("数码"));
+
+        // src 没有账本文件；若旧目录扫描结果被缓存，这里会错误地继续成功。
+        app.settings_buf = root.join("src").to_string_lossy().into_owned();
+        apply_settings_field(&mut app, SettingsField::LedgerDir);
+        run_report(&mut app);
+        assert!(app.run_error.is_some());
+        assert!(app.report_text.contains("账本输入错误"));
+        assert!(!app.report_text.contains("数码"));
+
+        app.settings_buf = root.join("examples").to_string_lossy().into_owned();
+        apply_settings_field(&mut app, SettingsField::LedgerDir);
+        run_report(&mut app);
+        assert!(app.run_error.is_none());
+
+        app.settings_buf = root.join("examples/missing-config.yml").to_string_lossy().into_owned();
+        apply_settings_field(&mut app, SettingsField::Config);
+        run_report(&mut app);
+        assert!(app.report_text.contains("加载配置失败"));
+        assert!(!app.report_text.contains("数码"));
+
+        start_settings_edit(&mut app, SettingsField::Config);
+        app.settings_buf = root.join("examples/config.yml").to_string_lossy().into_owned();
+        finish_settings_edit(&mut app, SettingsField::Config, true);
+        assert_eq!(app.settings_field, Some(SettingsField::Config));
+        assert!(!app.settings_editing);
+        assert!(app.run_error.is_none());
+
+        start_settings_edit(&mut app, SettingsField::LedgerDir);
+        app.settings_buf = root.join("src").to_string_lossy().into_owned();
+        finish_settings_edit(&mut app, SettingsField::LedgerDir, false);
+        assert_eq!(app.settings_field, Some(SettingsField::LedgerDir));
+        assert!(!app.settings_editing);
+        assert_eq!(app.ledger_dir, root.join("examples"));
     }
 }
