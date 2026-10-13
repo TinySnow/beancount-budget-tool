@@ -41,6 +41,14 @@ class PurposeProgressTests(unittest.TestCase):
         self.assertIsNone(rows["savings"]["remaining_q_minus_g"])
         self.assertEqual(report["pending_actual_events"], [{"reason": "H_OWNER_PENDING"}])
 
+    def test_all_not_assessed_does_not_hide_pending_actual_flows(self):
+        values = {**targets(), "missing_target_ids": [], "owners": [
+            {"owner_id": owner, "status": "NOT_ASSESSED", "target": None}
+            for owner in ("savings", "investment", "travel", "emergency")]}
+        report = compare_purpose_progress(values, flows(False))
+        self.assertEqual(report["status"], "NEEDS_REVIEW")
+        self.assertEqual(report["actual_status"], "NEEDS_REVIEW")
+
     def test_mismatched_period_or_owner_registry_rejected(self):
         bad = flows()
         bad["month"] = "2026-10"

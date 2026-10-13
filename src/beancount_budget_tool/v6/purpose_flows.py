@@ -20,6 +20,7 @@ from .h_gains import audit_h_income_gains
 from .h_transfers import audit_h_transfers
 from .holdings import audit_h_holdings
 from .k_events import audit_k_events
+from .obligations import audit_simple_obligations
 from .ownership import _owners, audit_ownership
 from .purpose_targets import _month
 from .purpose_pools import audit_purpose_pools
@@ -30,12 +31,15 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                                 h_transfers: Path | None = None,
                                 k_events: Path | None = None,
                                 h_fx: Path | None = None,
-                                purpose_pools: Path | None = None) -> dict:
+                                purpose_pools: Path | None = None,
+                                obligations: Path | None = None) -> dict:
     """Sign G only when every named H change has a certified event protocol.
 
     Free H claims alone do not create G. Unknown H claims can conceal a named
     purpose change, so the monthly total stays null until ownership closes.
-    Event legs are claimed once across transfer, K, FX and simple gain audits.
+    Event legs are claimed once across transfer, K, FX, gain and reviewed
+    liability-settlement audits. A repayment or third-party reimbursement
+    consumes or restores an asset but creates no purpose allocation G.
     """
     _month(month)
     first = date.fromisoformat(month + "-01")
@@ -48,8 +52,11 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     books = audit_k_events(root, cutover, accounts, ownership, k_events)
     exchange = audit_h_fx(root, cutover, accounts, ownership, h_fx)
     gains = audit_h_income_gains(root, cutover, accounts, ownership)
-    snapshots = {report["ledger_snapshot"] for report in
-                 (owner_audit, holdings, transfers, books, exchange, gains)}
+    debt = audit_simple_obligations(root, cutover, obligations, last) if obligations else None
+    reports = [owner_audit, holdings, transfers, books, exchange, gains]
+    if debt is not None:
+        reports.append(debt)
+    snapshots = {report["ledger_snapshot"] for report in reports}
     require(len(snapshots) == 1, "PURPOSE_SNAPSHOT_MISMATCH",
             "用途事件证据不属于同一账本快照")
     owner_document = load_yaml(ownership)
@@ -100,6 +107,15 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
         else:
             pending.append({"kind": "h_gain", "ref": event["h_ref"],
                             "reason": event["status"]})
+    if debt is not None:
+        claimed_h = {_key(row["ref"]) for row in owner_audit["ownership"]}
+        for event in debt["events"]:
+            if event["date"][:7] != month or event["status"] != "CERTIFIED" or event["kind"] not in (
+                    "payment", "advance_outflow", "advance_reimbursement"):
+                continue
+            ref = event["counterpart_ref"]
+            if ref is not None and _key(ref) in claimed_h:
+                add("liability_" + event["kind"], event, [ref], {})
     for event in transfers["events"]:
         if event["date"][:7] != month or event["status"] == "CERTIFIED":
             continue
@@ -177,9 +193,16 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                    if not (row["kind"] in ("h_fx", "h_transfer") and
                            row.get("ref") is not None and
                            _key(row["ref"]) in pool_internal_keys)]
-    ref_months = {_key(facts.for_posting(posting).as_dict()): entry.date.strftime("%Y-%m")
-                  for entry in fin.entries if isinstance(entry, data.Transaction)
-                  for posting in entry.postings}
+    ref_months = {}
+    ref_sources = {}
+    for entry in fin.entries:
+        if not isinstance(entry, data.Transaction):
+            continue
+        for posting in entry.postings:
+            key = _key(facts.for_posting(posting).as_dict())
+            ref_months[key] = entry.date.strftime("%Y-%m")
+            meta = posting.meta or {}
+            ref_sources[key] = f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
     for row in owner_audit["ownership"]:
         key = _key(row["ref"])
         if ref_months[key] != month or key in used_h:
@@ -224,6 +247,9 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                     pending.append({"kind": "pool_external_without_protocol",
                                     "ref": ref, "reason": "POOL_BOUNDARY_PENDING"})
     complete = not pending
+    for row in pending:
+        if row.get("ref") is not None:
+            row["source"] = ref_sources.get(_key(row["ref"]))
     return {"mode": "v6_monthly_purpose_flow_audit", "cutover": cutover.isoformat(),
             "month": month, "report_currency": load_yaml(accounts)["report_currency"],
             "ledger_snapshot": owner_audit["ledger_snapshot"],

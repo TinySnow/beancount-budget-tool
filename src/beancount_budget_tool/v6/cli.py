@@ -67,7 +67,7 @@ def main(argv=None) -> int:
     parser.add_argument("--k-events", type=Path, help="schema 6 已审简单 K 申赎事件；须配合 --k-event-audit")
     parser.add_argument("--h-transfers", type=Path, help="schema 6 已审简单 H 转账事件；须配合 --h-transfer-audit")
     parser.add_argument("--h-fx", type=Path, help="schema 6 已审单用途购汇事件；须配合 --h-fx-audit")
-    parser.add_argument("--obligations", type=Path, help="schema 6 已审简单消费责任事件；须配合 --obligation-audit")
+    parser.add_argument("--obligations", type=Path, help="schema 6 已审简单消费责任、还款或代垫事件")
     parser.add_argument("--completeness", type=Path, help="schema 6 报告日末未入账责任与在途付款完整性声明；须配合 --actual-audit")
     parser.add_argument("--classifications", type=Path, help="schema 6 分类侧文件；供分类、计价、收益或月度审计使用")
     parser.add_argument("--benefit-groups", type=Path, help="schema 6 已审复杂收益来源组；供收益或月度审计使用")
@@ -132,8 +132,9 @@ def main(argv=None) -> int:
         parser.error("--h-fx-audit 必须提供账户和 H 归属声明")
     if args.h_fx and not (args.h_fx_audit or args.purpose_flow_audit or args.purpose_progress_audit or args.target_audit):
         parser.error("--h-fx 只能与 H 购汇或用途净划拨审计一起使用")
-    if args.obligations and not (args.obligation_audit or args.actual_audit or args.target_audit):
-        parser.error("--obligations 只能与责任或实际可花审计一起使用")
+    if args.obligations and not (args.obligation_audit or args.actual_audit or args.target_audit or
+                                 args.purpose_flow_audit or args.purpose_progress_audit):
+        parser.error("--obligations 只能与责任、实际可花或用途划拨审计一起使用")
     if args.completeness and not args.actual_audit:
         parser.error("--completeness 只能与 --actual-audit 一起使用")
     if args.classifications and not (args.classification_audit or args.valuation_audit or
@@ -220,12 +221,14 @@ def main(argv=None) -> int:
             result = audit_monthly_purpose_flows(
                 args.ledger, cutover, args.month, args.accounts, args.opening,
                 args.ownership,
-                args.h_transfers, args.k_events, args.h_fx, args.purpose_pools)
+                args.h_transfers, args.k_events, args.h_fx, args.purpose_pools,
+                args.obligations)
         elif args.purpose_progress_audit:
             result = audit_monthly_purpose_progress(
                 args.ledger, cutover, args.month, args.accounts, args.opening,
                 args.ownership, args.plans, args.report_currency,
-                args.h_transfers, args.k_events, args.h_fx, args.purpose_pools)
+                args.h_transfers, args.k_events, args.h_fx, args.purpose_pools,
+                args.obligations)
         elif args.purpose_pool_audit:
             result = audit_purpose_pools(args.ledger, cutover, as_of, args.purpose_pools)
         elif args.ownership_audit:

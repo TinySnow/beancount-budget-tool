@@ -70,6 +70,34 @@ def summarize_account_purposes(holdings: dict, pools: dict) -> dict:
             "note": "仅为 H 账户原币用途份额；证券池单独按账面成本展示，K 与市值不在此合计"}
 
 
+def summarize_max_spendable(actual: dict, expense: dict) -> dict:
+    """Cap certified payable living funds by a declared consumption subtree goal."""
+    category_id = expense.get("spendable_cap_category_id")
+    if category_id is None:
+        return {"status": "NOT_CONFIGURED", "category_id": None,
+                "max_spendable": None, "reason_codes": ["SPENDABLE_CAP_NOT_CONFIGURED"]}
+    category = next((row for row in expense["categories"] if row["id"] == category_id), None)
+    require(category is not None, "MONTH_REPORT_MISMATCH", "最多能花的上限类别不在消费报表中")
+    if category["subtree_target_kind"] != "explicit":
+        return {"status": "NEEDS_REVIEW", "category_id": category_id,
+                "max_spendable": None, "reason_codes": ["SPENDABLE_CAP_TARGET_MISSING"]}
+    if (actual["status"] != "CERTIFIED" or expense["status"] != "CERTIFIED" or
+            category["subtree_remaining_status"] != "CERTIFIED"):
+        return {"status": "NEEDS_REVIEW", "category_id": category_id,
+                "max_spendable": None, "reason_codes": sorted(set(
+                    actual.get("reason_codes", []) + expense.get("reason_codes", []) +
+                    (["SPENDABLE_CAP_PENDING"] if category["subtree_remaining_status"] != "CERTIFIED" else [])))}
+    payable = Fraction(actual["actual_spendable"])
+    remaining = Fraction(category["subtree_remaining"])
+    return {"status": "CERTIFIED", "category_id": category_id,
+            "category_name": category["name"],
+            "payable_after_obligations": exact_text(payable),
+            "consumption_target_remaining": exact_text(remaining),
+            "max_spendable": exact_text(min(payable, remaining)),
+            "reason_codes": [],
+            "note": "最多能花取已审可支付能力与指定消费目标子树差额的较小值；负数表示超支或资金缺口"}
+
+
 def audit_reviewed_month(config: Path) -> dict:
     """Run existing audits without promoting a partial metric to a complete home."""
     document = load_yaml(config)
@@ -124,7 +152,8 @@ def audit_reviewed_month(config: Path) -> dict:
             currency, path("benefit_groups"), accounts, ownership, obligations, h_fx)
         purpose = audit_monthly_purpose_progress(
             root, cutover, month, accounts, opening, ownership, path("purpose_plans"),
-            currency, path("h_transfers"), path("k_events"), h_fx, path("purpose_pools"))
+            currency, path("h_transfers"), path("k_events"), h_fx, path("purpose_pools"),
+            obligations)
         pool = audit_purpose_pools(root, cutover, as_of, path("purpose_pools"))
         k_book = audit_k_book_purposes(root, cutover, as_of, accounts, opening,
                                        ownership, path("k_events"))
@@ -141,10 +170,12 @@ def audit_reviewed_month(config: Path) -> dict:
                  tracking["ledger_snapshot"]}) == 1 and
             all(row["report_currency"] == currency for row in (actual, expense, purpose, pool)),
             "MONTH_REPORT_MISMATCH", "月报各项审计的来源快照或报告货币不一致")
+    max_spendable = summarize_max_spendable(actual, expense)
     return {"mode": "v6_reviewed_month", "month": month, "as_of": as_of.isoformat(),
             "report_currency": currency, "ledger_snapshot": actual["ledger_snapshot"],
             "owner_names": owner_names,
             "actual_spendable": actual,
+            "max_spendable": max_spendable,
             "expense_targets": expense,
             "purpose_progress": purpose,
             "purpose_pools": pool,
@@ -186,6 +217,11 @@ def audit_month_workflow(config: Path) -> dict:
                             "pending_events": result.get("pending_actual_events", []),
                             "source": str((config.parent / document[source_key]).resolve())
                             if source_key in document else str(config)})
+    capped = report.get("max_spendable", {"status": "NOT_CONFIGURED"})
+    if capped["status"] == "NEEDS_REVIEW":
+        pending.append({"metric": "最多能花", "status": "NEEDS_REVIEW",
+                        "reason_codes": capped["reason_codes"],
+                        "source": str((config.parent / document["expense_plans"]).resolve())})
     if report["account_purposes"]["status"] == "NEEDS_REVIEW":
         pending.append({"metric": "资产账户用途", "status": "NEEDS_REVIEW",
                         "reason_codes": ["H_HOLDINGS_PENDING"],
@@ -212,6 +248,9 @@ def render_workflow_text(outcome: dict) -> str:
             lines.append(f"  {item['metric']}：{reasons} [{item['source']}]")
             if item.get("missing_target_ids"):
                 lines.append(f"    缺少目标：{', '.join(item['missing_target_ids'])}")
+            for event in item.get("pending_events", []):
+                source = event.get("source") or str(event.get("ref", item["source"]))
+                lines.append(f"    {event['kind']}：{event['reason']} [{source}]")
             for position in item.get("pending_positions", []):
                 codes = ", ".join(reason["code"] for reason in position["reasons"])
                 lines.append(f"    {position['account']} {position['commodity']} "
@@ -251,13 +290,23 @@ def render_text(report: dict) -> str:
 
     currency = report["report_currency"]
     actual = report["actual_spendable"]
+    capped = report.get("max_spendable", {"status": "NOT_CONFIGURED"})
     expense = report["expense_targets"]
     purpose = report["purpose_progress"]
     owner_names = report.get("owner_names", {})
+    if capped["status"] == "CERTIFIED":
+        headline = (f"最多能花：{amount(capped['max_spendable'])} {currency}"
+                    f"（{capped['category_name']}消费目标差 {amount(capped['consumption_target_remaining'])}；"
+                    f"用途现金可支付 {amount(capped['payable_after_obligations'])}）")
+    elif capped["status"] == "NEEDS_REVIEW":
+        headline = f"最多能花：待审（{', '.join(capped['reason_codes'])}）"
+    elif actual["status"] == "CERTIFIED":
+        headline = (f"用途现金可支付：{amount(actual['actual_spendable'])} {currency}；"
+                    "未配置消费目标上限，不签发『最多能花』")
+    else:
+        headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
-             f"实际可花：{amount(actual['actual_spendable'])} {currency}" if actual["status"] == "CERTIFIED"
-             else f"实际可花：待审（{', '.join(actual['reason_codes'])}）",
-             "", "消费目标（目标 − 实际；负数为超支）"]
+             headline, "", "消费目标（目标 − 实际；负数为超支）"]
     if actual["status"] == "CERTIFIED" and actual.get("booked_debts"):
         lines[2:2] = ["未清已记消费责任（已从实际可花扣减）", *(
             f"  {row['obligation_id']}：{amount(row['remaining_native'])} "
@@ -290,6 +339,9 @@ def render_text(report: dict) -> str:
         name = owner_names.get(row["owner_id"], row["owner_id"])
         if row["status"] == "CERTIFIED":
             lines.append(f"  {name}：目标 {amount(row['target_q'])}，实际 {amount(row['actual_g'])}，差额 {amount(row['remaining_q_minus_g'])} {currency}")
+        elif row["status"] == "NOT_ASSESSED":
+            value = amount(row["actual_g"]) if row["actual_g"] is not None else "待审"
+            lines.append(f"  {name}：实际净划拨 {value} {currency}；本月不考核划拨目标")
         elif row["status"] == "TARGET_MISSING":
             lines.append(f"  {name}：实际 {amount(row['actual_g']) if row['actual_g'] is not None else '待审'}，无目标")
         else:

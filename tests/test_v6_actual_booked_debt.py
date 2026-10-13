@@ -12,6 +12,7 @@ from beancount_budget_tool.financial import load_financial
 from beancount_budget_tool.v6.actual_snapshot import audit_actual_snapshot
 from beancount_budget_tool.v6.obligations import audit_simple_obligations
 from beancount_budget_tool.v6.ownership import audit_ownership
+from beancount_budget_tool.v6.purpose_flows import audit_monthly_purpose_flows
 
 
 CUTOVER = date(2026, 9, 1)
@@ -114,6 +115,25 @@ class BookedDebtSnapshotTests(unittest.TestCase):
                                     date(2026, 9, 30))
             self.assertEqual(protected["status"], "NEEDS_REVIEW")
             self.assertIn("DEBT_COVERAGE_PENDING", protected["reason_codes"])
+
+    def test_reviewed_card_payment_is_not_a_new_purpose_allocation(self):
+        with TemporaryDirectory() as folder:
+            ledger, accounts, opening, ownership, obligations, _ = self._fixture(Path(folder))
+            without_review = audit_monthly_purpose_flows(
+                ledger, CUTOVER, "2026-09", accounts, opening, ownership)
+            self.assertEqual(without_review["status"], "NEEDS_REVIEW")
+            self.assertIn("NAMED_H_EVENT_UNSUPPORTED",
+                          [row["reason"] for row in without_review["pending_events"]])
+            self.assertTrue(any(row["source"].startswith(str(ledger.resolve()) + ":")
+                                for row in without_review["pending_events"]))
+
+            reviewed = audit_monthly_purpose_flows(
+                ledger, CUTOVER, "2026-09", accounts, opening, ownership,
+                obligations=obligations)
+            self.assertEqual(reviewed["status"], "CERTIFIED", reviewed["pending_events"])
+            self.assertEqual(reviewed["net_allocations"], {"free": "0", "savings": "0"})
+            self.assertEqual([row["kind"] for row in reviewed["known_events"]],
+                             ["liability_payment"])
 
 
 if __name__ == "__main__":

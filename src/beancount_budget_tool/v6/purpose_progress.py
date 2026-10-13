@@ -46,7 +46,7 @@ def compare_purpose_progress(targets: dict, flows: dict) -> dict:
             "report_currency": targets["report_currency"],
             "ledger_snapshot": flows["ledger_snapshot"],
             "plan_sha256": targets["plan_sha256"],
-            "status": "CERTIFIED" if all(row["status"] in
+            "status": "CERTIFIED" if flows["status"] == "CERTIFIED" and all(row["status"] in
                        ("CERTIFIED", "NOT_ASSESSED") for row in rows) else "NEEDS_REVIEW",
             "actual_status": flows["status"],
             "pending_actual_events": flows["pending_events"],
@@ -61,10 +61,11 @@ def audit_monthly_purpose_progress(root: Path, cutover: date, month: str,
                                    h_transfers: Path | None = None,
                                    k_events: Path | None = None,
                                    h_fx: Path | None = None,
-                                   purpose_pools: Path | None = None) -> dict:
+                                   purpose_pools: Path | None = None,
+                                   obligations: Path | None = None) -> dict:
     flows = audit_monthly_purpose_flows(root, cutover, month, accounts, opening,
                                         ownership, h_transfers, k_events, h_fx,
-                                        purpose_pools)
+                                        purpose_pools, obligations)
     require(report_currency == flows["report_currency"],
             "REPORT_CURRENCY_INVALID", "用途进度货币须与账户声明一致")
     owners = set(_owners(load_yaml(ownership)["owners"]).values())

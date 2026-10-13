@@ -68,12 +68,17 @@ def load_expense_targets(path: Path, month: str, report_currency: str,
     ids = {row["id"] for row in categories}
     require_quoted_month_keys(path)
     document = _fields(load_yaml(path),
-                       {"schema", "report_currency", "defaults", "effective_templates", "months"},
+                       {"schema", "report_currency", "spendable_cap_category_id",
+                        "defaults", "effective_templates", "months"},
                        str(path))
     require(type(document.get("schema")) is int and document["schema"] == 6,
             "SCHEMA_UNSUPPORTED", "消费目标文件 schema 必须是 6", str(path))
     require(document.get("report_currency") == report_currency,
             "REPORT_CURRENCY_INVALID", "消费目标货币须与报告货币一致", str(path))
+    cap_id = document.get("spendable_cap_category_id")
+    if "spendable_cap_category_id" in document:
+        require(type(cap_id) is str and cap_id in ids, "PLAN_CATEGORY_UNKNOWN",
+                "最多能花的消费目标上限须引用已注册类别", str(path))
     defaults = _target_layer(document.get("defaults", {}), ids, "defaults")
     def parse_layers(field: str) -> dict[str, dict[str, dict[str, Fraction]]]:
         values = document.get(field, {})
@@ -93,6 +98,7 @@ def load_expense_targets(path: Path, month: str, report_currency: str,
             targets[field].update(override[field])
     return {"month": month, "report_currency": report_currency,
             "plan_sha256": sha256(path.read_bytes()).hexdigest(),
+            "spendable_cap_category_id": cap_id,
             "targets": {ident: exact_text(value) for ident, value in targets["expense_targets"].items()},
             "subtree_targets": {ident: exact_text(value) for ident, value in targets["expense_subtree_targets"].items()}}
 
@@ -205,6 +211,7 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
     return {"mode": "v6_monthly_expense_target_report", "month": month,
             "cutover": cutover.isoformat(), "ledger_snapshot": spending["ledger_snapshot"],
             "plan_sha256": expanded["plan_sha256"], "report_currency": report_currency,
+            "spendable_cap_category_id": expanded["spendable_cap_category_id"],
             "status": "NEEDS_REVIEW" if reasons else "CERTIFIED", "reason_codes": reasons,
             "missing_target_ids": sorted(missing), "categories": details,
             "comparison_basis": "actual_settlement_cost_where_proved" if settlement else

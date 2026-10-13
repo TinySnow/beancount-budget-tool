@@ -95,6 +95,33 @@ class MonthlyMigrationGateTests(unittest.TestCase):
                 check_month(old, new, "2023-07", allow_financial_corrections=True)
             self.assertEqual(error.exception.code, "MIGRATION_OUTSIDE_MONTH_SOURCE_CHANGE")
 
+    def test_target_month_transaction_added_does_not_shift_later_metadata(self):
+        with TemporaryDirectory() as folder:
+            addition = ('2023-07-06 * "move"\n'
+                        '  Assets:Cash -1 CNY\n'
+                        '  Assets:Bank 1 CNY\n\n')
+            changed = AFTER.replace('2023-08-02 * "lunch"', addition + '2023-08-02 * "lunch"')
+            old, new = self.ledgers(Path(folder), changed)
+            result = check_month(old, new, "2023-07", allow_financial_corrections=True)
+            self.assertFalse(result["financial_facts_equal"])
+            self.assertTrue(result["outside_month_metadata_equal"])
+            self.assertEqual(len(result["financial_changes"]), 1)
+            self.assertEqual(result["financial_changes"][0]["change"], "insert")
+
+    def test_target_month_transaction_removed_does_not_shift_later_metadata(self):
+        with TemporaryDirectory() as folder:
+            removed = ('2023-07-06 * "move"\n'
+                       '  Assets:Cash -1 CNY\n'
+                       '  Assets:Bank 1 CNY\n\n')
+            old, new = self.ledgers(Path(folder))
+            old.write_text(BEFORE.replace('2023-08-02 * "lunch"',
+                                          removed + '2023-08-02 * "lunch"'),
+                           encoding="utf-8")
+            result = check_month(old, new, "2023-07", allow_financial_corrections=True)
+            self.assertFalse(result["financial_facts_equal"])
+            self.assertTrue(result["outside_month_metadata_equal"])
+            self.assertEqual(result["financial_changes"][0]["change"], "delete")
+
     def test_other_month_metadata_change_fails(self):
         with TemporaryDirectory() as folder:
             old, new = self.ledgers(Path(folder), AFTER.replace("旧交易级标签", "新标签"))

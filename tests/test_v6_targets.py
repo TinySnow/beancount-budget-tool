@@ -85,12 +85,14 @@ class ExpenseTargetTests(unittest.TestCase):
         self.assertEqual(rows["living"]["direct_remaining"], "100")
 
     def test_parent_subtree_cap_covers_child_without_inventing_child_target(self):
-        self.write_plan('schema: 6\nreport_currency: CNY\nmonths:\n'
+        self.write_plan('schema: 6\nreport_currency: CNY\n'
+                        'spendable_cap_category_id: living\nmonths:\n'
                         '  "2026-09":\n    expense_subtree_targets:\n      living: "2000"\n')
         report = audit_monthly_expense_targets(
             self.ledger, date(2026, 9, 1), "2026-09", self.classes, self.plans, "CNY")
         self.assertEqual((report["status"], report["missing_target_ids"]),
                          ("CERTIFIED", []))
+        self.assertEqual(report["spendable_cap_category_id"], "living")
         rows = {row["id"]: row for row in report["categories"]}
         self.assertEqual((rows["living"]["direct_target"],
                           rows["living"]["direct_remaining_status"],
@@ -128,6 +130,8 @@ class ExpenseTargetTests(unittest.TestCase):
              '  expense_targets:\n    other: "3"\n', "PLAN_CATEGORY_UNKNOWN"),
             ('schema: 6\nreport_currency: CNY\ndefaults:\n'
              '  expense_subtree_targets:\n    living: -1\n', "PLAN_AMOUNT_INVALID"),
+            ('schema: 6\nreport_currency: CNY\nspendable_cap_category_id: unknown\n',
+             "PLAN_CATEGORY_UNKNOWN"),
         ]
         for source, code in cases:
             with self.subTest(code=code):

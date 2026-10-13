@@ -81,7 +81,8 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
                                 "aliases": []}], "classifications": []})
             save("expense-plans.yaml", {
                 "schema": 6, "report_currency": "CNY",
-                "defaults": {"expense_targets": {"food": "0"}}})
+                "spendable_cap_category_id": "food",
+                "defaults": {"expense_subtree_targets": {"food": "0"}}})
             save("purpose-plans.yaml", {
                 "schema": 6, "report_currency": "CNY",
                 "defaults": {"allocation_targets": {
@@ -120,6 +121,7 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
                              ("CERTIFIED_SCOPED", "report"))
             self.assertEqual(outcome["report"]["actual_spendable"]["actual_spendable"],
                              "-10")
+            self.assertEqual(outcome["report"]["max_spendable"]["max_spendable"], "-10")
             self.assertEqual(outcome["report"]["account_purposes"]["rows"], [
                 {"account": "Assets:Bank", "commodity": "CNY",
                  "owner_id": "free", "units": "100"},
@@ -141,7 +143,7 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
             with redirect_stdout(output):
                 code = main(["--config", str(base / "month.yaml")])
             self.assertEqual(code, 0)
-            self.assertIn("实际可花：-10 CNY", output.getvalue())
+            self.assertIn("最多能花：-10 CNY", output.getvalue())
 
             checkpoint = base / "checkpoint" / "main.bean"
             checkpoint.parent.mkdir()
