@@ -62,7 +62,7 @@ class OwnershipAuditTests(unittest.TestCase):
             self.assertEqual(audit["claimed_h_postings"], 2)
             self.assertEqual(len(audit["pending_payment_scope"]), 1)
             self.assertEqual(len(audit["k_book_flow_postings"]), 1)
-            changed = yaml.safe_load(review.read_text())
+            changed = yaml.safe_load(review.read_text(encoding="utf-8"))
             changed["claims"][0]["slices"][1]["signed_units"] = "11"
             review.write_text(yaml.safe_dump(changed, allow_unicode=True), encoding="utf-8")
             with self.assertRaises(BudgetError) as error:

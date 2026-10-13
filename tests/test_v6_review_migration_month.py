@@ -65,8 +65,10 @@ class ReviewMigrationMonthTests(unittest.TestCase):
         self.assertEqual(len(result["review"]["items"]), 2)
         self.assertTrue(all(row["reason_code"] == "TAG_LEVEL_FORBIDDEN"
                             for row in result["review"]["items"]))
-        self.assertIn(f"{self.after}:8", render_text(result))
-        self.assertIn(f"{self.after}:12", render_text(result))
+        for row, line in zip(result["review"]["items"], (8, 12), strict=True):
+            source_path, source_line = row["source"].rsplit(":", 1)
+            self.assertTrue(Path(source_path).samefile(self.after))
+            self.assertEqual(source_line, str(line))
 
     def test_post_cutover_needs_matching_config_then_runs_existing_workflow(self):
         missing = review_month(self.before, self.after, "2026-10", date(2026, 9, 1))

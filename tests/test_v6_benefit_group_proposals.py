@@ -64,7 +64,7 @@ class BenefitGroupProposalTests(unittest.TestCase):
             self.assertEqual(benefit_audit["proved_benefits"], 1)
             self.assertEqual(benefit_audit["proved"][0]["proof"],
                              "approved_costed_sale_equation")
-            stale = yaml.safe_load(approval.read_text())
+            stale = yaml.safe_load(approval.read_text(encoding="utf-8"))
             stale["ledger_snapshot"] = "stale"
             approval.write_text(yaml.safe_dump(stale, allow_unicode=True), encoding="utf-8")
             with self.assertRaises(BudgetError) as error:
