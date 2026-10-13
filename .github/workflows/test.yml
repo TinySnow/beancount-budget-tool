@@ -25,3 +25,6 @@ jobs:
         run: |
           beancount-budget-tool --help
           beancount-budget-review-month --help
+          beancount-budget-audit --help
+          beancount-budget-review-refs --help
+          python -c "import curses"
