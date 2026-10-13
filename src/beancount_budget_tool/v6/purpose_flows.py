@@ -46,9 +46,9 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     require(first >= cutover,
             "MONTH_INVALID", "用途净划拨月份不得早于 cutover", month)
     last = date(first.year, first.month, calendar.monthrange(first.year, first.month)[1])
-    owner_audit = audit_ownership(root, cutover, accounts, ownership)
+    owner_audit = audit_ownership(root, cutover, accounts, ownership, opening)
     holdings = audit_h_holdings(root, cutover, last, accounts, opening, ownership)
-    transfers = audit_h_transfers(root, cutover, accounts, ownership, h_transfers)
+    transfers = audit_h_transfers(root, cutover, accounts, ownership, h_transfers, opening)
     books = audit_k_events(root, cutover, accounts, ownership, k_events)
     exchange = audit_h_fx(root, cutover, accounts, ownership, h_fx)
     gains = audit_h_income_gains(root, cutover, accounts, ownership)
