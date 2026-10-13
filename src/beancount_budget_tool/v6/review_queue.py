@@ -38,6 +38,7 @@ LABELS = {"account_semantics": "新资产账户语义", "payment_scope": "账户
           "classification": "费用／收入分类", "asset_ownership": "资产用途",
           "pool_boundary": "证券池对外边界", "booked_obligation": "已记负债事件",
           "liability_opening": "期初负债", "fund_amount": "fund 金额",
+          "inventory": "真实库存顺序与余额",
           "h_transfer": "资产用途转账", "k_event": "基金申赎用途事件",
           "h_fx": "购汇用途事件"}
 
@@ -153,7 +154,33 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                     "suppressed_pool_internal_h_postings": None, "preflight_only": True,
                     "note": "先修正上述 fund 标签并重跑；本次尚未检查其他待审来源。"}
 
-        accounts = audit_accounts(root, cutover, path("accounts"))
+        try:
+            accounts = audit_accounts(root, cutover, path("accounts"))
+        except BudgetError as exc:
+            if exc.code != "H_NEGATIVE_INVENTORY" or exc.source is None:
+                raise
+            matches = [key for key, source in source_by_ref.items()
+                       if source == exc.source and since <= dated[key] <= through]
+            if not matches:
+                raise
+            key = matches[0]
+            posting = posting_by_ref[key]
+            item = {"kind": "inventory", "date": dated[key].isoformat(),
+                    "account": posting.account, "commodity": posting.units.currency,
+                    "signed_units": exact_text(exact(posting.units.number)),
+                    "ref": facts.for_posting(posting).as_dict(), "source": exc.source,
+                    "reason_code": exc.code, "detail": exc.message}
+            require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
+                        for item, digest in before.items()),
+                    "INPUT_CHANGED", "待审清单运行期间配置或审阅文件发生变化", str(config))
+            return {"mode": "v6_import_review_queue", "since": since.isoformat(),
+                    "through": through.isoformat(), "ledger_snapshot": fin.digest,
+                    "latest_booked_transaction_date": max(booked_dates).isoformat() if booked_dates else None,
+                    "booked_transactions_in_range": sum(since <= day <= through for day in booked_dates),
+                    "source_review_state": "NEEDS_REVIEW", "counts": {"inventory": 1},
+                    "items": [item], "suppressed_pool_internal_h_postings": None,
+                    "preflight_only": True,
+                    "note": "先核对这笔真实库存负值的账本顺序、期初余额或账户语义并重跑；其余来源尚未检查。"}
         categories = audit_classification(root, cutover, path("classifications"))
         opening = path("opening") if "opening" in doc else None
         ownership = audit_ownership(root, cutover, path("accounts"), path("ownership"), opening)
@@ -307,7 +334,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
 def render_text(report: dict) -> str:
     lines = [f"v6 导入后待审：{report['since']} 至 {report['through']}"]
     if report.get("preflight_only"):
-        lines.append(f"fund 标签待修正 {len(report['items'])} 项；其余来源尚未检查")
+        lines.append(f"来源预检待审 {len(report['items'])} 项；其余来源尚未检查")
     else:
         lines.append(f"待审 {len(report['items'])} 项；证券池内部免逐腿审阅 "
                      f"{report['suppressed_pool_internal_h_postings']} 条")
@@ -331,6 +358,8 @@ def render_text(report: dict) -> str:
             source += f" → [{item['to_source']}]"
         lines.append(f"  {item['date']} {description}（{item['reason_code']}）："
                      f"{account}{amount}{source}")
+        if item.get("detail"):
+            lines.append(f"    原因：{item['detail']}")
     lines.append(report["note"])
     return "\n".join(lines)
 

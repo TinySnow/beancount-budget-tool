@@ -70,6 +70,12 @@ class PurposePoolTests(unittest.TestCase):
     def audit(self):
         return audit_purpose_pools(self.ledger, date(2026, 9, 1), date(2026, 9, 30), self.pools)
 
+    def test_month_without_a_security_pool_uses_empty_declaration(self):
+        self.pools.write_text(yaml.safe_dump({
+            "schema": 6, "cutover": "2026-09-01", "report_currency": "CNY",
+            "pools": []}), encoding="utf-8")
+        self.assertEqual(self.audit()["pools"], [])
+
     def test_rollover_keeps_nominal_principal_without_lot_assignment(self):
         report = self.audit()
         pool = report["pools"][0]

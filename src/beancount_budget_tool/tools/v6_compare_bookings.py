@@ -55,8 +55,9 @@ def booking_snapshot(root: Path) -> dict:
                 "无法比较没有结构字段的 booked 指令", type(entry).__name__)
         row = {"kind": type(entry).__name__, "fields": _value(entry._asdict())}
         entries.append(row)
-    sources = {str(path.relative_to(fin.root.parent)) if path.is_relative_to(fin.root.parent)
-               else str(path): source.sha256 for path, source in sorted(fin.sources.items())}
+    sources = {path.relative_to(fin.root.parent).as_posix()
+               if path.is_relative_to(fin.root.parent) else path.as_posix(): source.sha256
+               for path, source in sorted(fin.sources.items())}
     return {"schema": 1, "loader_version": fin.loader_version,
             "root": str(fin.root), "sources": sources,
             "entry_count": len(entries), "entries": entries}
