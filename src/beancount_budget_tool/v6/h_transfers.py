@@ -33,11 +33,12 @@ def _number(value: object, key: str) -> Fraction:
 
 
 def audit_h_transfers(root: Path, cutover: date, accounts: Path,
-                      ownership: Path, declarations: Path | None = None) -> dict:
+                      ownership: Path, declarations: Path | None = None,
+                      opening: Path | None = None) -> dict:
     """Audit exact two-H transfers; no sale, FX or composite event guessing."""
     scan_v6_source(root, cutover)
     account_audit = audit_accounts(root, cutover, accounts)
-    owner_audit = audit_ownership(root, cutover, accounts, ownership)
+    owner_audit = audit_ownership(root, cutover, accounts, ownership, opening)
     fin = load_financial(root)
     facts = FactIndex(fin)
     report_currency = account_audit["report_currency"]

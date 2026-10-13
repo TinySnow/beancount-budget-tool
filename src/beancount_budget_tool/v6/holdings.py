@@ -37,7 +37,7 @@ def audit_h_holdings(root: Path, cutover: date, as_of: date, accounts: Path,
             "TIME_INVALID", "持有报告日期不得早于 cutover")
     account_audit = audit_accounts(root, cutover, accounts)
     opening_audit = audit_opening(root, cutover, accounts, opening)
-    owner_audit = audit_ownership(root, cutover, accounts, ownership)
+    owner_audit = audit_ownership(root, cutover, accounts, ownership, opening)
     fin = load_financial(root)
     facts = FactIndex(fin)
     account_rows = {row["account"]: row for row in account_audit["accounts"]

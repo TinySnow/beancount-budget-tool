@@ -62,7 +62,7 @@ def main(argv=None) -> int:
     parser.add_argument("--payable-cash-audit", action="store_true", help="核对报告货币可直接支付的完整 H 现金用途库存")
     parser.add_argument("--actual-audit", action="store_true", help="编译无未偿责任日末的首页实际可花")
     parser.add_argument("--accounts", type=Path, help="schema 6 人工账户声明；供资产相关审计使用")
-    parser.add_argument("--opening", type=Path, help="schema 6 人工期初声明；供期初、持有、可支付现金或用途净划拨审计使用")
+    parser.add_argument("--opening", type=Path, help="schema 6 人工期初声明；亦可供归属与 H 转账继承已审期初用途")
     parser.add_argument("--ownership", type=Path, help="schema 6 H 资产逐腿归属；供资产相关审计使用")
     parser.add_argument("--k-events", type=Path, help="schema 6 已审简单 K 申赎事件；须配合 --k-event-audit")
     parser.add_argument("--h-transfers", type=Path, help="schema 6 已审简单 H 转账事件；须配合 --h-transfer-audit")
@@ -98,8 +98,9 @@ def main(argv=None) -> int:
         parser.error("--opening-audit 必须提供 --accounts")
     if args.opening and not (args.opening_audit or args.holdings_audit or
                              args.payable_cash_audit or args.actual_audit or
-                             args.purpose_flow_audit or args.purpose_progress_audit):
-        parser.error("--opening 只能与期初、持有或可支付现金审计一起使用")
+                             args.purpose_flow_audit or args.purpose_progress_audit or
+                             args.ownership_audit or args.h_transfer_audit):
+        parser.error("--opening 只能与期初、归属、H 转账、持有或可支付现金审计一起使用")
     if args.ownership_audit and not args.accounts:
         parser.error("--ownership-audit 必须提供 --accounts")
     if args.ownership and not (args.ownership_audit or args.holdings_audit or
@@ -232,7 +233,8 @@ def main(argv=None) -> int:
         elif args.purpose_pool_audit:
             result = audit_purpose_pools(args.ledger, cutover, as_of, args.purpose_pools)
         elif args.ownership_audit:
-            result = audit_ownership(args.ledger, cutover, args.accounts, args.ownership)
+            result = audit_ownership(args.ledger, cutover, args.accounts,
+                                     args.ownership, args.opening)
         elif args.holdings_audit:
             result = audit_h_holdings(args.ledger, cutover, as_of,
                                       args.accounts, args.opening, args.ownership)
@@ -241,7 +243,7 @@ def main(argv=None) -> int:
                                     args.ownership, args.k_events)
         elif args.h_transfer_audit:
             result = audit_h_transfers(args.ledger, cutover, args.accounts,
-                                       args.ownership, args.h_transfers)
+                                       args.ownership, args.h_transfers, args.opening)
         elif args.h_gain_audit:
             result = audit_h_income_gains(args.ledger, cutover, args.accounts,
                                           args.ownership)

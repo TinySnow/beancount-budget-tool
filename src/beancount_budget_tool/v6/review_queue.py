@@ -71,10 +71,10 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
     require(root.is_file(), "REVIEW_QUEUE_CONFIG_INVALID",
             "待审清单引用了不存在的根账本", yaml_key_location(config, "ledger"))
     sidecars = [config, *(path(key) for key in NEEDED - {"schema", "ledger", "cutover"})]
-    for key in ("h_transfers", "k_events", "h_fx"):
+    for key in ("opening", "h_transfers", "k_events", "h_fx"):
         if key in doc:
             sidecars.append(path(key))
-    optional_sidecars = {key for key in ("h_transfers", "k_events", "h_fx") if key in doc}
+    optional_sidecars = {key for key in ("opening", "h_transfers", "k_events", "h_fx") if key in doc}
     for key in NEEDED - {"schema", "ledger", "cutover"} | optional_sidecars:
         require(path(key).is_file(), "REVIEW_QUEUE_CONFIG_INVALID",
                 "待审清单引用了不存在的审阅文件", yaml_key_location(config, key))
@@ -155,11 +155,13 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
 
         accounts = audit_accounts(root, cutover, path("accounts"))
         categories = audit_classification(root, cutover, path("classifications"))
-        ownership = audit_ownership(root, cutover, path("accounts"), path("ownership"))
+        opening = path("opening") if "opening" in doc else None
+        ownership = audit_ownership(root, cutover, path("accounts"), path("ownership"), opening)
         obligations = audit_simple_obligations(root, cutover, path("obligations"), through)
         pool = audit_purpose_pools(root, cutover, through, path("purpose_pools"))
         transfers = audit_h_transfers(root, cutover, path("accounts"), path("ownership"),
-                                      path("h_transfers") if "h_transfers" in doc else None)
+                                      path("h_transfers") if "h_transfers" in doc else None,
+                                      opening)
         k_events = audit_k_events(root, cutover, path("accounts"), path("ownership"),
                                   path("k_events") if "k_events" in doc else None)
         exchange = audit_h_fx(root, cutover, path("accounts"), path("ownership"),

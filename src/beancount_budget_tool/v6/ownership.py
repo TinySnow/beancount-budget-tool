@@ -24,6 +24,7 @@ from .accounts import _lot, audit_accounts
 from .classification import _key
 from .facts import FactIndex
 from .inline_amounts import parse_inline_amounts
+from .opening import audit_opening
 from .provenance import valid_digest
 from .source import scan_v6_source
 
@@ -61,7 +62,8 @@ def _signed_units(value: object, source: str) -> Fraction:
 
 
 def audit_ownership(root: Path, cutover: date, accounts: Path,
-                    declarations: Path | None = None) -> dict:
+                    declarations: Path | None = None,
+                    opening: Path | None = None) -> dict:
     """Validate H ownership slices and identify unknown H/K/account domains."""
     scan_v6_source(root, cutover)
     account_audit = audit_accounts(root, cutover, accounts)
@@ -183,9 +185,8 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
 
     pending_reasons: dict[str, str] = {}
     if defaults is not None:
-        # Automatic inference is deliberately limited to coordinates whose
-        # cutover inventory is zero. Existing balances still need reviewed
-        # opening ownership before they can serve as an inferred source.
+        # A nonzero cutover balance can serve as an inferred transfer source
+        # only when its entire native coordinate has reviewed opening owners.
         nonzero_opening = {
             (row["account"], coordinate["commodity"], coordinate["lot"])
             for row in account_audit["accounts"] if row.get("semantics") == "H"
@@ -193,10 +194,25 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             if Fraction(coordinate["signed_units"]) != 0
         }
         running: dict[tuple[str, str, str], dict[str, Fraction]] = {}
-        # Unknown opening ownership limits inference from that coordinate. It
-        # does not turn an explicitly classified posting (or an unrelated
-        # unknown account semantics record) into a pending ownership claim.
         unknown_coordinates = set(nonzero_opening)
+        if opening is not None:
+            opening_audit = audit_opening(root, cutover, accounts, opening)
+            require(opening_audit["ledger_snapshot"] == fin.digest,
+                    "OWNERSHIP_OPENING_MISMATCH", "期初归属与资产用途不属于同一账本快照")
+            incomplete = {(row["account"], row["commodity"], row["lot"])
+                          for row in opening_audit["missing_h_ownership"]}
+            reviewed_opening: dict[tuple[str, str, str], dict[str, Fraction]] = defaultdict(dict)
+            for row in load_yaml(opening)["h_holdings"]:
+                owner = row["owner"]
+                require(owner == "-" or owner in ids, "OPENING_OWNER_UNKNOWN",
+                        "H 期初 owner 未登记于归属名册", str(row))
+                coordinate = (row["account"], row["commodity"], row["lot"])
+                reviewed_opening[coordinate][owner] = Fraction(row["units"])
+            for coordinate in nonzero_opening - incomplete:
+                running[coordinate] = reviewed_opening[coordinate]
+                unknown_coordinates.remove(coordinate)
+        # Unknown opening ownership limits inference only from that coordinate;
+        # explicit post-cutover labels on other coordinates remain valid.
         for entry in fin.entries:
             if not isinstance(entry, data.Transaction) or entry.date < cutover:
                 continue
@@ -240,13 +256,14 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                         coordinate = coordinates[source_key]
                         before = running.get(coordinate, {}) if coordinate not in unknown_coordinates else {}
                         available = [(owner, amount) for owner, amount in before.items() if amount > 0]
+                        nonzero_owners = [owner for owner, amount in before.items() if amount]
                         required = -exact(negative[0].units.number)
                         if coordinate in unknown_coordinates:
                             pending_reasons[source_key] = "FUND_SOURCE_OPENING_PENDING"
-                        elif len(available) == 1 and available[0][1] >= required:
+                        elif len(nonzero_owners) == 1 and len(available) == 1 and available[0][1] >= required:
                             inferred(source_key, [(available[0][0], -required)],
                                      "交易前单一用途余额继承")
-                        elif available and sum((amount for _, amount in available), Fraction(0)) == required:
+                        elif len(nonzero_owners) == len(available) and available and sum((amount for _, amount in available), Fraction(0)) == required:
                             inferred(source_key, [(owner, -amount) for owner, amount in available],
                                      "交易前全部用途余额搬移")
                         else:
@@ -276,9 +293,11 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                          for owner, amount in deltas.items()}
                 after.update({owner: amount for owner, amount in before.items() if owner not in after})
                 if len(entry.postings) == len(h_legs) == 2:
-                    require(all(amount >= 0 for amount in after.values()),
+                    require(all(amount >= 0 or amount >= before.get(owner, Fraction(0))
+                                for owner, amount in after.items()),
                             "H_OWNER_NEGATIVE", "主动资产用途划拨不能透支交易前余额",
-                            str(entry.meta))
+                            f"{entry.meta.get('filename')}:{entry.meta.get('lineno')} "
+                            f"{coordinate} before={before} after={after}")
                 running[coordinate] = after
 
     compiled = [compiled_by_key[key] for key in order if key in compiled_by_key]
