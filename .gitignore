@@ -1,1 +1,8 @@
-/target
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.venv/
+/build/
+/dist/
+/fixtures/private-ledger/

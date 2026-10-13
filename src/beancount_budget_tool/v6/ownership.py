@@ -1,0 +1,296 @@
+"""Source-bound ownership-intent audit for real H asset postings.
+
+This stage validates each posting's declared owner and intent kind. It does
+not replay owner inventory or infer a budget transfer from account names.
+K book-flow postings are deliberately outside this claim domain.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from collections import defaultdict
+from fractions import Fraction
+from hashlib import sha256
+from pathlib import Path
+import re
+
+from beancount.core import data
+
+from ..errors import require
+from ..exact import exact, exact_text
+from ..financial import load_financial
+from ..yamlstrict import load_yaml
+from .accounts import _lot, audit_accounts
+from .classification import _key
+from .facts import FactIndex
+from .inline_amounts import parse_inline_amounts
+from .provenance import valid_digest
+from .source import scan_v6_source
+
+
+ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
+NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
+ROLES = {"hold", "allocation", "gain"}
+
+
+def _owners(rows: object) -> dict[str, str]:
+    require(type(rows) is list, "OWNER_REGISTRY_INVALID", "owners 必须是列表")
+    names = {}
+    identifiers = set()
+    for row in rows:
+        require(type(row) is dict and set(row) == {"id", "name", "aliases"},
+                "OWNER_REGISTRY_INVALID", "用途须有稳定 id/name/aliases")
+        ident = row["id"]
+        require(type(ident) is str and bool(ID.fullmatch(ident)) and ident not in identifiers,
+                "OWNER_ID_INVALID", "用途 ID 无效或重复", str(ident))
+        identifiers.add(ident)
+        require(type(row["aliases"]) is list, "OWNER_REGISTRY_INVALID", "aliases 必须是列表")
+        for name in [row["name"], *row["aliases"]]:
+            require(type(name) is str and bool(name) and name == name.strip() and
+                    name != "-" and not any(char in name for char in "|｜,，;；") and
+                    name not in names,
+                    "OWNER_NAME_INVALID", "用途名／别名非法或重复", str(name))
+            names[name] = ident
+    return names
+
+
+def _signed_units(value: object, source: str) -> Fraction:
+    require(type(value) is str and bool(NUMBER.fullmatch(value)),
+            "OWNERSHIP_UNITS_INVALID", "用途切片数量须为精确数字字符串", source)
+    return Fraction(value)
+
+
+def audit_ownership(root: Path, cutover: date, accounts: Path,
+                    declarations: Path | None = None) -> dict:
+    """Validate H ownership slices and identify unknown H/K/account domains."""
+    scan_v6_source(root, cutover)
+    account_audit = audit_accounts(root, cutover, accounts)
+    semantics = {row["account"]: row.get("semantics") for row in account_audit["accounts"]}
+    fin = load_financial(root)
+    facts = FactIndex(fin)
+    assets = fin.options["name_assets"]
+    h_candidates = {}
+    unknown = []
+    k_postings = []
+    order = []
+    for entry in fin.entries:
+        if not isinstance(entry, data.Transaction) or entry.date < cutover:
+            continue
+        for posting in entry.postings:
+            if posting.account.split(":", 1)[0] != assets:
+                continue
+            ref = facts.for_posting(posting).as_dict()
+            record = {"ref": ref, "account": posting.account,
+                      "signed_units": exact_text(exact(posting.units.number)),
+                      "commodity": posting.units.currency}
+            mode = semantics.get(posting.account)
+            if mode == "K":
+                # K is a signed subscription flow, not a holding. Its inline
+                # fund is validated together with the H cash counterpart by
+                # the K event audit; it does not enter H ownership inventory.
+                k_postings.append(record)
+            elif mode == "H":
+                key = _key(ref)
+                require(key not in h_candidates, "SOURCE_REF_AMBIGUOUS",
+                        "H 资产腿来源身份重复", key)
+                h_candidates[key] = (posting, record)
+                order.append(key)
+            else:
+                unknown.append(record)
+
+    names = {}
+    claims = {}
+    defaults = None
+    if declarations is not None:
+        document = load_yaml(declarations)
+        required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
+        require(type(document) is dict and required <= set(document) <= required | {"defaults"},
+            "OWNERSHIP_DECLARATION_INVALID", "归属声明字段不完整或含未知字段")
+        require(type(document["schema"]) is int and document["schema"] == 6 and
+                document["cutover"] == cutover.isoformat() and
+                valid_digest(document["ledger_snapshot"]) and
+                document["loader_version"] == fin.loader_version and
+                type(document["claims"]) is list,
+                "OWNERSHIP_DECLARATION_INVALID", "归属声明的版本或原审快照格式不匹配")
+        names = _owners(document["owners"])
+        ids = set(names.values())
+        if "defaults" in document:
+            defaults = document["defaults"]
+            require(type(defaults) is dict and set(defaults) == {
+                "income_owner_id", "expense_owner_id"} and
+                all(type(owner) is str and owner in ids
+                    for owner in defaults.values()),
+                "OWNERSHIP_DEFAULT_INVALID", "默认收入／支出用途须引用已登记的命名用途")
+        seen_slices = set()
+        for row in document["claims"]:
+            require(type(row) is dict and set(row) == {"claim", "reason", "slices"} and
+                    type(row["claim"]) is dict and type(row["reason"]) is str and
+                    bool(row["reason"].strip()) and type(row["slices"]) is list and row["slices"],
+                    "OWNERSHIP_CLAIM_INVALID", "归属 claim 须有完整引用、理由和切片")
+            key = _key(row["claim"])
+            require(key in h_candidates, "OWNERSHIP_REF_INVALID",
+                    "归属引用不存在、过期或不是已审 H 资产腿", key)
+            require(key not in claims, "OWNERSHIP_DOUBLE_CLAIM", "H 资产腿被重复认领", key)
+            posting, record = h_candidates[key]
+            require("fund" not in (posting.meta or {}), "OWNERSHIP_DOUBLE_CLAIM",
+                    "行内 fund 与外部归属不能同时认领", key)
+            original = exact(posting.units.number)
+            total = Fraction(0)
+            parts = []
+            for part in row["slices"]:
+                require(type(part) is dict and set(part) == {
+                    "id", "owner_id", "role", "signed_units"},
+                    "OWNERSHIP_CLAIM_INVALID", "用途切片须含 id/owner_id/role/signed_units", key)
+                ident, owner, role = part["id"], part["owner_id"], part["role"]
+                require(type(ident) is str and bool(ID.fullmatch(ident)) and
+                        ident not in seen_slices,
+                        "OWNERSHIP_SLICE_ID_INVALID", "用途切片 ID 无效或重复", key)
+                require(type(owner) is str and (owner == "-" or owner in ids) and
+                        role in ROLES and (owner != "-" or role == "hold"),
+                        "OWNERSHIP_ROLE_INVALID", "用途或意图角色非法", key)
+                seen_slices.add(ident)
+                amount = _signed_units(part["signed_units"], key)
+                require((amount == 0 if original == 0 else amount * original > 0),
+                        "OWNERSHIP_UNITS_MISMATCH", "切片与资产腿符号不一致", key)
+                total += amount
+                parts.append({"id": ident, "owner_id": owner, "role": role,
+                              "signed_units": exact_text(amount)})
+            require(total == original, "OWNERSHIP_UNITS_MISMATCH",
+                    "用途切片没有精确加回 H 资产腿", key)
+            claims[key] = {**record, "origin": "external", "slices": parts,
+                           "review_reason": row["reason"]}
+
+    compiled_by_key = {}
+    for key in order:
+        posting, record = h_candidates[key]
+        if key in claims:
+            compiled_by_key[key] = claims[key]
+            continue
+        raw = (posting.meta or {}).get("fund")
+        if raw is None:
+            continue
+        parts = parse_inline_amounts(raw, exact(posting.units.number), str(record["ref"]),
+                                     known_names=set(names), code="OWNERSHIP_UNITS_MISMATCH")
+        slice_id = "inline:" + sha256(key.encode()).hexdigest()
+        slices = []
+        for index, (name, amount) in enumerate(parts):
+            owner = "-" if name == "-" else names.get(name)
+            require(owner is not None, "OWNER_UNKNOWN", "行内 fund 用途未登记", name)
+            slices.append({"id": slice_id if len(parts) == 1 else f"{slice_id}:{index}",
+                           "owner_id": owner, "role": "hold",
+                           "signed_units": exact_text(amount)})
+        compiled_by_key[key] = {**record, "origin": "inline", "slices": slices}
+
+    pending_reasons: dict[str, str] = {}
+    if defaults is not None:
+        # Automatic inference is deliberately limited to coordinates whose
+        # cutover inventory is zero. Existing balances still need reviewed
+        # opening ownership before they can serve as an inferred source.
+        nonzero_opening = {
+            (row["account"], coordinate["commodity"], coordinate["lot"])
+            for row in account_audit["accounts"] if row.get("semantics") == "H"
+            for coordinate in row["opening_coordinates"]
+            if Fraction(coordinate["signed_units"]) != 0
+        }
+        running: dict[tuple[str, str, str], dict[str, Fraction]] = {}
+        # Unknown opening ownership limits inference from that coordinate. It
+        # does not turn an explicitly classified posting (or an unrelated
+        # unknown account semantics record) into a pending ownership claim.
+        unknown_coordinates = set(nonzero_opening)
+        for entry in fin.entries:
+            if not isinstance(entry, data.Transaction) or entry.date < cutover:
+                continue
+            h_legs = [posting for posting in entry.postings
+                      if semantics.get(posting.account) == "H"]
+            if not h_legs:
+                continue
+            leg_keys = {_key(facts.for_posting(p).as_dict()): p for p in h_legs}
+            coordinates = {key: (p.account, p.units.currency, _lot(p))
+                           for key, p in leg_keys.items()}
+            missing_keys = [key for key in leg_keys if key not in compiled_by_key]
+
+            def inferred(key: str, owner_parts: list[tuple[str, Fraction]], reason: str) -> None:
+                posting, record = h_candidates[key]
+                stem = "inferred:" + sha256(key.encode()).hexdigest()
+                compiled_by_key[key] = {**record, "origin": "inferred",
+                                        "review_reason": reason,
+                                        "slices": [
+                                            {"id": f"{stem}:{index}", "owner_id": owner,
+                                             "role": "hold", "signed_units": exact_text(amount)}
+                                            for index, (owner, amount) in enumerate(owner_parts)]}
+
+            roots = [p.account.split(":", 1)[0] for p in entry.postings]
+            if len(h_legs) == 1 and len(entry.postings) == 2 and len(missing_keys) == 1:
+                key = missing_keys[0]
+                signed = exact(leg_keys[key].units.number)
+                if fin.options["name_income"] in roots and signed > 0:
+                    inferred(key, [(defaults["income_owner_id"], signed)], "默认收入用途")
+                elif fin.options["name_expenses"] in roots:
+                    inferred(key, [(defaults["expense_owner_id"], signed)], "默认支出用途")
+            elif (len(entry.postings) == len(h_legs) == 2 and
+                  all(p.account.split(":", 1)[0] == assets for p in h_legs)):
+                positive = [p for p in h_legs if exact(p.units.number) > 0]
+                negative = [p for p in h_legs if exact(p.units.number) < 0]
+                if (len(positive) == len(negative) == 1 and
+                        positive[0].units.currency == negative[0].units.currency and
+                        exact(positive[0].units.number) == -exact(negative[0].units.number)):
+                    source_key = _key(facts.for_posting(negative[0]).as_dict())
+                    target_key = _key(facts.for_posting(positive[0]).as_dict())
+                    if source_key not in compiled_by_key:
+                        coordinate = coordinates[source_key]
+                        before = running.get(coordinate, {}) if coordinate not in unknown_coordinates else {}
+                        available = [(owner, amount) for owner, amount in before.items() if amount > 0]
+                        required = -exact(negative[0].units.number)
+                        if coordinate in unknown_coordinates:
+                            pending_reasons[source_key] = "FUND_SOURCE_OPENING_PENDING"
+                        elif len(available) == 1 and available[0][1] >= required:
+                            inferred(source_key, [(available[0][0], -required)],
+                                     "交易前单一用途余额继承")
+                        elif available and sum((amount for _, amount in available), Fraction(0)) == required:
+                            inferred(source_key, [(owner, -amount) for owner, amount in available],
+                                     "交易前全部用途余额搬移")
+                        else:
+                            pending_reasons[source_key] = (
+                                "FUND_MIXED_SOURCE" if len(available) > 1 else
+                                "FUND_SOURCE_INSUFFICIENT")
+                    if target_key not in compiled_by_key and source_key in compiled_by_key:
+                        source_slices = compiled_by_key[source_key]["slices"]
+                        inferred(target_key, [(part["owner_id"], -Fraction(part["signed_units"]))
+                                              for part in source_slices], "同用途资产搬移")
+                    elif target_key not in compiled_by_key:
+                        pending_reasons[target_key] = "FUND_SOURCE_UNRESOLVED"
+
+            if any(key not in compiled_by_key for key in leg_keys):
+                unknown_coordinates.update(coordinates.values())
+                continue
+            changes: dict[tuple[str, str, str], dict[str, Fraction]] = defaultdict(
+                lambda: defaultdict(Fraction))
+            for key in leg_keys:
+                for part in compiled_by_key[key]["slices"]:
+                    changes[coordinates[key]][part["owner_id"]] += Fraction(part["signed_units"])
+            for coordinate, deltas in changes.items():
+                if coordinate in unknown_coordinates:
+                    continue
+                before = running.setdefault(coordinate, {})
+                after = {owner: before.get(owner, Fraction(0)) + amount
+                         for owner, amount in deltas.items()}
+                after.update({owner: amount for owner, amount in before.items() if owner not in after})
+                if len(entry.postings) == len(h_legs) == 2:
+                    require(all(amount >= 0 for amount in after.values()),
+                            "H_OWNER_NEGATIVE", "主动资产用途划拨不能透支交易前余额",
+                            str(entry.meta))
+                running[coordinate] = after
+
+    compiled = [compiled_by_key[key] for key in order if key in compiled_by_key]
+    missing = [{**h_candidates[key][1],
+                **({"reason_code": pending_reasons[key]} if key in pending_reasons else {})}
+               for key in order if key not in compiled_by_key]
+    return {"mode": "v6_ownership_audit_only", "cutover": cutover.isoformat(),
+            "ledger_snapshot": fin.digest,
+            "review_state": "complete" if not missing and not unknown else "pending",
+            "h_postings": len(order), "claimed_h_postings": len(compiled),
+            "missing_h_ownership": missing, "unknown_account_semantics": unknown,
+            "k_book_flow_postings": k_postings,
+            "pending_payment_scope": account_audit["pending_payment_scope"],
+            "ownership": compiled,
+            "note": "归属意图切片不证明逐事件库存守恒、K 申赎、净划拨或首页现金"}

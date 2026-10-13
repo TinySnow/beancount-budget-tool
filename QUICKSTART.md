@@ -1,420 +1,121 @@
-# QUICKSTART — 功能清单与用法速查
+# 快速开始：给 Beancount 流水标 v6 预算
 
-> 日常使用推荐 **TUI 模式**（直接 `cargo run`），无需记参数。
+> v6 仍在开发。来源检查和已审月报已有命令；新月份仍需核对期初、账户、用途和责任，不能导入后直接签发。
 
----
+## 1. 安装并检查示例
 
-## 零、TUI 交互模式
-
-直接启动，全键盘操作：
+在仓库根目录运行：
 
 ```bash
-cargo run
-# 或
-./beancount-budget-tool
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+python -m beancount_budget_tool.v6 \
+  --ledger examples/v6/labeling.bean --cutover 2026-10-01
 ```
 
-首次使用配好 `budget-tool.toml` 里的默认路径，之后启动自动加载。
+安装后的 `beancount-budget-tool --config path/to/reviewed-month.yaml` 运行 v6 已审月报；`beancount-budget-audit` 运行分项审计。
 
-| 键 | 功能 |
-|---|---|
-| `←→` | 切换月份 |
-| `d` | 输入 YYYY-MM 直接跳转 |
-| `Tab` | 切换当月 / 累计 |
-| `t` | 日期范围模式（from → to） |
-| `s` | 排序 name → planned → actual → remain |
-| `e` | 展开/折叠子桶 |
-| `f` | 过滤关键词 |
-| `b` | 选择桶 |
-| `v` | 视图：汇总 / 分月 / 明细 |
-| `c` | 同比对比 |
-| `o` | 导出报告 |
-| `z` | 设置：修改预算/配置/账本/币种路径 |
-| `r` | 运行/刷新 |
-| `q` | 退出 |
+最后一条只做**来源与标签语法审计**，不会生成预算余额。示例账本见 [labeling.bean](examples/v6/labeling.bean)。当前测试环境使用项目依赖指定的 Beancount 3.2.3。
 
-**模式划分：** 无参数 → TUI；`--tui` → TUI（可组合 `--budgets/--config/--ledger-dir/--ledger/--currency` 传入初始路径）；其余带参数 → 纯 CLI。
+## 2. 导入后怎么写标签
 
----
+先保留 importer 生成的账户、金额、日期和成本；只在确认含义后给**对应分录**加 metadata。`budget` 与 `fund` 回答不同的问题：
 
-## 一、你需要准备三样东西
+| 写在哪条分录下 | 写什么 | 表示什么 |
+|---|---|---|
+| `Income` 或 `Expenses` | `budget: "自由资金"`、`budget: "生活开销.餐饮"` | 收入／费用归到哪个**预算类别** |
+| `Assets` | `fund: "自由资金"`、`fund: "储蓄"` | 真实余额类资产的资金用途；申赎累计类资产须与同笔现金腿共同校验 |
+| 交易头后、首条分录前 | `tracking: "旅行"` | 本交易的费用进入该专题；不改变类别或用途，月报按原币列支出、退款和净额 |
 
-```
-beancount-budget-tool \
-  --budgets budgets.yml \     # ← ① 预算计划
-  --config config.yml \       # ← ② 全局配置
-  --ledger-dir ./tx/          # ← ③ Beancount 账本
-```
-
-### ① budgets.yml — 纯预算计划
-
-只管预算。**跟踪桶不写在这里。**
-
-```yaml
-# 模板（可选）：定义每月默认值
-default_monthly:
-  储蓄: 700
-  生活费:
-    饮食: 2000
-    交通: 300
-  数码: 3000
-
-# 按月覆盖：只写与模板不同的桶
-"2026-06":
-  数码: 5000         # 覆盖模板 → 5000
-  # 生活费.饮食 没写 → 从模板继承 2000
-
-"2026-06 绩效":        # 标签键：与基础月叠加
-  数码: 2000          # 6月总预算 = 5000 + 2000 = 7000
-
-# 模板切换（加薪/降薪场景）
-"2026-07-01 template":  # label 含 "template" 即模板键
-  储蓄: 1200
-  生活费: 3000
-  # 数码没写 → 从 default_monthly 继承 3000
-```
-
-**规则：**
-- 嵌套 YAML 自动展平为点号桶名：`生活费.饮食`
-- 父桶不写金额，统计 = 子桶之和
-- 模板合并：`default_monthly` → 按日期叠 `template` → 月键覆写
-- 月键写了但模板没有的桶 → 保留
-- 月键写 0 → 覆盖模板值（不是相加）
-
-### ② config.yml — 全局配置
-
-管理账户映射、桶类型、跟踪桶、资产位置。
-
-```yaml
-# 兜底桶：无匹配时默认归入
-default_expense_bucket: 生活费
-
-# 账户前缀 → 桶名（最长前缀优先匹配）
-defaults:
-  "Expenses:Consume:饮食": 生活费.饮食
-  "Expenses:Consume:交通": 生活费.交通
-  "Expenses:Consume:电子": 数码
-
-# 跟踪桶：只追踪实际支出，不参与预算计算
-# 不显示在汇总表、不计入合计、不聚合到父桶
-tracking_buckets:
-  - 基金.旅游
-  - 基金.电子产品
-  - 大额支出
-
-# 桶类型声明（可省略，asset_bucket_accounts 中的桶自动识别为 asset）
-bucket_types:
-  储蓄: asset
-
-# 资产桶的关联账户（用于追踪资金位置）
-asset_bucket_accounts:
-  储蓄:
-    - "Assets:Bank:建设银行"
-    - "Assets:Invest:货币基金"
-```
-
-### ③ Beancount 账本 — 交易标注
+工资到账并随后划出一部分储蓄时，可以这样写（账户名换成自己的）：
 
 ```beancount
-; ── 基本标注 ──
-2026-06-17 * "京东" "买耳机"
-  budget: "数码"
-  Expenses:Consume:电子  2000 CNY
-  Assets:Bank:工行       -2000 CNY
+2026-10-08 * "雇主" "工资"
+  Assets:Bank:Daily 5000 CNY
+    fund: "自由资金"
+  Income:Salary -5000 CNY
 
-; ── 多桶归属（半角逗号分隔，中文逗号也支持）──
-2026-06-20 * "京东" "耳机+游戏"
-  budget: "数码, 爱好"
-  Expenses:Consume:电子  2000 CNY
-  Assets:Bank:工行       -2000 CNY
-  → 数码和爱好各计 2000
+2026-10-08 * "虚拟账务" "留出生活费"
+  Assets:Bank:Daily 2000 CNY
+    fund: "生活费"
+  Assets:Bank:Daily -2000 CNY
 
-; ── 金额拆分（尾部数字自动识别）──
-budget: "电子产品900, 旅游900, 保险200"
-budget: "电子产品：900，旅游：900"     ; 全角冒号+中文逗号也行
-budget: "电子产品900，旅游900"         ; 无分隔符也行
-  → 三桶分别计 900、900、200
-
-; ── 简写桶名自动补全 ──
-budget: "额外储蓄13847"   → 自动匹配到 投资.额外储蓄
-budget: "待投资金2000"    → 自动匹配到 投资.待投资金
-
-; ── 不写 budget（自动归类）──
-2026-06-16 * "工行" "地铁"
-  Expenses:Consume:交通  6 CNY       → 匹配到 生活费.交通
-  Assets:Bank:工行      -6 CNY
-
-; 无匹配 → 回退到 default_expense_bucket（默认"生活费"）
-2026-06-19 * "淘宝" "杂货"
-  Expenses:Consume:杂货  50 CNY      → 回退到 生活费
-
-; ── Income 入账（只有写 budget 的才入桶）──
-2026-04-03 * "广告" "广告费"
-  budget: "生活费"
-  Income:Misc:广告  -50 CNY
-  Assets:Bank:工行   50 CNY
-
-; ── Beancount 原生标签（配合 --filter）──
-2026-05-16 * "工行" "机票" #东京 ^trip-2026
-  budget: "旅行"
-  Expenses:Travel  5000 CNY
+2026-10-09 * "银行" "首次划入储蓄"
+  Assets:Bank:Daily -700 CNY
+    fund: "自由资金"
+  Assets:Bank:Savings 700 CNY
+    fund: "储蓄"
 ```
 
----
+这里的私人配置将 Income 和到账资产的默认用途设为「自由资金」，将 Expenses 对应资产腿的默认用途设为「生活费」。第二笔同账户虚拟账务把 2000 元正式留作生活费；第三笔首次划入储蓄。**未划出的自由资金不计入生活费可花余额。**转账交易的资产腿写 `fund`，不要写 `budget`。`fund: "-"` 表示**预算外**，不是自由资金。
 
-## 二、功能速查
+用途名称须登记在归属配置中。新双默认用途模式下，等额同币种的简单两资产腿转账可由已审 `fund` 与账本来源自动认证：同用途搬家净划拨为零，首次从自由资金划入储蓄则计入储蓄净划拨。简单的基金申购／赎回也可在累计申赎腿与同笔现金腿写 `fund`；程序核对金额和双方用途，不能再用侧文件重复认领该申赎。复杂交易仍需相应审阅。不方便改 importer 输出时，也可在审阅侧文件里逐腿声明用途，但同一腿不能同时由行内和侧文件认领。证券资金池内部买卖有单独池规则，入金、转出等池外边界仍需审阅。
 
-### 汇总报告
+只有申赎金额、没有可信份额的基金账户属于 K 账面累计账户。月报将它们的期初、本期变动、期末和 cutover 后已审用途变动单列；这些数不证明基金持仓或可赎回金额，也不与真实资产用途余额相加。
+
+**一条资产分录混有多个用途时，只写一个带金额的 `fund`：**例如 `fund: "保险200，电子产品900，旅游900"`，对应 importer 的一条 `2000 CNY` 分录。合计不等于分录金额时，单月入口会列出 `FUND_GRAMMAR` 和账本行号；先修正金额并重跑，才会继续检查其他来源。跨账户搬移多项原用途时，两侧各用途金额须相同；不一致会列为 `H_TRANSFER_MIXED_REMAP_PENDING`，并显示双侧账本行号。如确要重新分配用途，请另记同账户虚拟划拨。也可用有完整来源引用的审阅侧文件列三份切片，行内和侧文件不得重复认领。不要为了贴多个 `fund` 而把 importer 的一条分录改成多条。
+
+**默认分类由使用者配置，不写死在公共程序里。** 按最新私人规则，普通 Income 默认归自由资金，Expenses 默认归生活费；配置了对应默认值后可省略 `budget`。行内标签和侧文件分类不能同时认领同一分录，所以应在生成新侧文件**之前**完成手工标签。退款在原 `Expenses` 分录上沿用原类别；明确预算外时写 `budget: "-"`。一条分录的多类别拆分可写一个带金额的 `budget`，合计须精确等于分录金额。
+
+## 3. 导入新月后复核
+
+有已审 v6 配置和私人规则的账本，可用一条命令续用旧分类、生成新分类文件，并列出当前日期区间的待审来源：
 
 ```bash
-# 单月
-beancount-budget-tool -m 2026-06 --budgets budgets.yml --config config.yml -l ledger.bean
-
-# 累计（最早～当月）
-beancount-budget-tool -m 2026-06 --scope cumulative --budgets budgets.yml --config config.yml --ledger-dir ./tx/
-
-# 时间范围
-beancount-budget-tool --from 2026-03 --to 2026-06 --budgets budgets.yml --config config.yml --ledger-dir ./tx/
-
-# 全年
-beancount-budget-tool --year 2026 --budgets budgets.yml --config config.yml --ledger-dir ./tx/
+python -m beancount_budget_tool.tools.v6_refresh_review \
+  --config path/to/reviewed-month.yaml \
+  --rules path/to/approved-rules.yaml \
+  --since 2026-10-01 --through 2026-10-31 \
+  --output-classifications path/to/classifications-2026-10.yaml
 ```
 
-### 排序与展开
+输出文件不会覆盖旧文件。清单会指出未分类收入／费用、未审资产用途、待审的简单 H 资产转账、K 基金申赎与 H 购汇事件及其来源行号、证券池边界、新账户与负债。**待审 0 项只表示已导入来源没有这些待办**；若区间没有任何交易，程序会提示核对 importer 是否真的覆盖该月。复杂用途事件、计划、计价和报告日完整性仍各自审阅。
+
+配置文件的 YAML 语法、重复键以及月报月份、切换日期、缺失的文件路径等常见错误会给出 `文件:行号`；账本来源待审项则给出对应的账本行号。修正后重跑同一命令即可。
+
+准备好当月配置后，直接运行月报入口：来源尚待审时会先列出交易和账本行号；来源已审但指标仍缺证据时会列出待审指标；各项通过后才显示这份已审月报。配置格式见[月报配置与命令](docs/v6-monthly-report.md)。终端交互浏览使用同一入口：
 
 ```bash
-# 按超支程度排（结余少的在前）
---year 2026 --sort-by remain
-
-# 按实际支出排
---year 2026 --sort-by actual
-
-# 展开所有子桶（不折叠到父桶）
---year 2026 --expand
+python -m beancount_budget_tool.v6.monthly_report \
+  --config path/to/reviewed-month.yaml --format tui
 ```
 
-### 单桶明细
+TUI 用方向键或 `j/k` 滚动、`PgUp/PgDn` 翻页、`q` 退出；脚本调用可选 `--format text` 或 `json`。消费目标和储蓄／投资等用途月目标写在计划侧文件中，不能写在某笔工资或转账的 `budget` 标签里；漏存的月份也应保留目标。
+
+## 4. 旧账按月迁移与校对
+
+先保留原账本，使用 `beancount_budget_tool.tools.v6_make_review_copy` 生成一次完整审阅副本，或沿用已核过的审阅副本。每次保留修改前的完整账本，改完一个月后运行同一入口。例如修改 2023 年 7 月：
 
 ```bash
-# 汇总
---bucket 基金.旅游 --bucket-view summary
-
-# 按月拆分
---bucket 基金.旅游 --bucket-view monthly
-
-# 逐笔明细（含年度小结）
---bucket 基金.旅游 --bucket-view detail
+beancount-budget-review-month \
+  --before path/to/checkpoint/main.bean \
+  --after path/to/working/main.bean \
+  --month 2023-07 --cutover 2026-09-01
 ```
 
-明细视图中每年末尾自动打印（expense 桶下有 Asset 流时额外显示存入行）：
+**2026-09-01 cutover 以前**，该命令只核对两份账本是否都能加载、改动是否限于目标月、财务事实是否保持一致；不要求旧交易补 v6 标签，也不签发 v6 月报。若要为更早月份另行签发，须另定更早 cutover 并审定当时的期初用途。
 
-```
-========== 2025 年小结 ==========
-预算收入 本年合计: xxx
-预算收入 累计合计: xxx
-存入 本年合计: xxx          ← Asset 流（基金申购等）
-存入 累计合计: xxx
-支出 本年合计: xxx          ← Expense 流（实际消费）
-支出 累计合计: xxx
-==============================
-```
+**cutover 当月及之后**，给同一命令加 `--config path/to/reviewed-month.yaml`。配置须写本月、同一 cutover，并指向 `--after` 的账本。结构校验通过后，命令会继续列出来源待审、指标待审，或完整的已审月报；缺配置会明确提示。月报配置格式见[已审月报](docs/v6-monthly-report.md)。
 
-### 同比对比
+如果本月纠正了原账中写错的账户、金额等财务事实，加 `--allow-financial-corrections`。输出会列出更正前后的 booked 分录及文件行号，供逐项核对；目标月以外的修改仍被拒绝。纯结构校验通过不代表预算数字已认证。账户、期初和证券资金池审阅不要求旧哈希相同；程序按当前账本重算。改动已认领交易仍会使该笔来源引用失效，须重审受影响的认领。完整月报只能由其独立审计签发。
+
+若确实打算给某个月补行内 `budget`，要看**该月哪些费用／收入分录尚缺标签**，再运行：
 
 ```bash
---year 2026 --compare 2025-12
+python -m beancount_budget_tool.tools.v6_classification_proposals \
+  --ledger path/to/working/main.bean \
+  --month 2023-07 \
+  --output path/to/review-2023-07.json
 ```
 
-并排展示两期数据的预算桶、月预算、已支出、结余及差异。
+JSON 按账本科目列出逐笔日期、金额、摘要、来源引用和旧标签提示，供人工审阅；它不会自行决定类别。已写行内 `budget` 的分录不列入，尚未考虑分类侧文件中的已审认领。这一步只处理**预算类别**，不认证资产用途、目标兑现或月报。cutover 前的月份不必为了当前 v6 月报而补这些标签。
 
-### 关键词搜索
+## 常见错误
 
-```bash
---bucket 旅行 --bucket-view detail --filter "东京"
-```
+- **交易级 `budget`**：v6 会拒绝。旧标签可先保留为 `legacy_budget`，再按分录审阅。
+- **转账写 `budget: "投资"`**：`budget` 只用于 `Income`／`Expenses`；资金用途写在资产腿的 `fund` 或已审侧文件里。
+- **把“到账 5000、划出 700”记成两笔收入**：收入只有工资一笔；后续是资产间转移，净划拨最多计一次。
+- **刚导入就把新月月报当作今天余额**：月报有截止日；其后的交易和责任必须另核。
 
-匹配 payee / narration / metadata / #tag。
-
-### 文件导出
-
-```bash
---year 2026 --out-dir ./reports --csv-pivot --out-json
-```
-
-输出：
-| 文件 | 内容 |
-|---|---|
-| `summary-*.md` / `.txt` | 汇总 |
-| `buckets-*.csv` | 桶级 planned/actual |
-| `bucket-*.md` | 单桶完整报告 |
-| `pivot-*.csv` | 月×桶 横向透视 |
-| `summary-*.json` | JSON |
-
----
-
-## 三、跟踪桶专篇
-
-**场景：** 基金.旅游每月有固定存入，也有实际旅行支出，但我不设预算——只想知道花多少、剩多少。
-
-### 配置
-
-`config.yml`：
-```yaml
-tracking_buckets:
-  - 基金.旅游
-```
-
-`budgets.yml`：
-```yaml
-# default_monthly 里不要写 基金.旅游
-default_monthly:
-  储蓄: 700
-  生活费: 2000
-```
-
-### 效果
-
-- 汇总表里不显示 `基金.旅游`
-- 不参与合计，不聚合到父桶
-- `--bucket 基金.旅游 --bucket-view detail` 仍然可以看完整历史追踪
-- 资产位置（资金存放/支出来源/已支出）正常显示
-
----
-
-## 四、资产桶专篇
-
-用于追踪储蓄/投资等资产转移，不标记消费支出。
-
-```yaml
-# config.yml
-asset_bucket_accounts:
-  储蓄:
-    - "Assets:Bank:建设银行"
-    - "Assets:Invest:货币基金"
-```
-
-```beancount
-2026-06-18 * "工行" "储蓄转入"
-  budget: "储蓄"
-  Assets:Bank:建设银行  5000 CNY
-  Assets:Bank:工行      -5000 CNY
-```
-
-查询资产桶时自动显示：
-```
-资金存放（截至 2026-06）:       ← 钱存在哪
-建设银行: 28100.00 CNY
-
-支出来源（截至 2026-06）:       ← 钱从哪来
-工商银行: -29000.00 CNY
-
-已支出（截至 2026-06）: 9649.90 CNY  ← 差额 = 实际花掉的钱
-```
-
----
-
-## 五、多币种
-
-记账中有 JPY / USD 等外币时，两种方式自动换算为 CNY：
-
-### 方式一：`@@` 总价注释（精确，推荐）
-
-```beancount
-2026-07-16 * "Hotel" "日本旅行住宿"
-  budget: "旅游"
-  Expenses:Travel  158.12 USD @@ 1070.16 CNY
-  Liabilities:CreditCard  -158.12 USD @@ 1070.16 CNY
-```
-
-`@@ 1070.16 CNY` = 这 158.12 USD 折合 1070.16 CNY，工具直接使用此值。
-
-### 方式二：`config.yml` 汇率表（兜底）
-
-```yaml
-currency_rates:
-  JPY: 0.04327
-  USD: 6.77
-```
-
-纯外币账户（如 `Expenses:Food  5990 JPY` 无 `@@`）时使用此汇率。
-
-**优先级**：`@@ 总价` > `currency_rates` > 跳过
-
-明细视图中非 CNY 交易显示原币种 + CNY 等价：
-
-```
-2026-08-04："SAPPORO SOUP CURRY" 支出 5990.00 JPY (≈259.18 CNY)
-```
-
----
-
-## 六、CLI 参数速查
-
-```
--m, --month <YYYY-MM>      目标月份
---from/--to <YYYY-MM>      时间范围
---year <YYYY>              全年（= --from YYYY-01 --to YYYY-12）
-
---budgets <FILE>           预算文件（必需）
---config, -c <FILE>        配置文件（必需，旧名 --mappings 仍可用）
---ledger, -l <FILE>        账本文件（可重复多次）
---ledger-dir <DIR>         账本目录（递归扫描 .bean/.beancount）
-
---scope <month|cumulative> 统计范围（默认 month）
---bucket <NAME>            指定桶（支持简写自动补全）
---bucket-view <s|m|d>      桶视图粒度（summary|monthly|detail，默认 summary）
---sort-by <key>            排序（name|planned|actual|remain）
---expand                   展开子桶
---compare <YYYY-MM>        同比对比
---filter <KEYWORD>         过滤交易
-
---show-locations           汇总视图下显示资产桶位置
---hide-asset-flows          明细视图下隐藏资产转移记录
-
---out-dir <DIR>            导出报告
---csv-pivot                横向月表 CSV
---out-json                 JSON 报告
---strict                   未知桶报错退出
-
---currency <CODE>          币种（默认 CNY）
-```
-
----
-
-## 七、常见场景
-
-```bash
-# 本月花了多少 -- 只看当月预算执行
-beancount-budget-tool -m 2026-06 \
-  --budgets budgets.yml --config config.yml \
-  --ledger-dir ./tx/ --scope month
-
-# 年初至今累计 -- 看全年预算还剩下多少
-beancount-budget-tool -m 2026-06 --scope cumulative \
-  --budgets budgets.yml --config config.yml --ledger-dir ./tx/
-
-# 旅行花了多少 -- 跟踪桶明细
-beancount-budget-tool -m 2026-06 --scope cumulative \
-  --budgets budgets.yml --config config.yml --ledger-dir ./tx/ \
-  --bucket 基金.旅游 --bucket-view detail
-
-# 哪些桶超支了 -- 按结余排序
-beancount-budget-tool --year 2026 \
-  --budgets budgets.yml --config config.yml --ledger-dir ./tx/ \
-  --sort-by remain
-
-# 今年 vs 去年 -- 同比
-beancount-budget-tool --year 2026 \
-  --budgets budgets.yml --config config.yml --ledger-dir ./tx/ \
-  --compare 2025-12
-
-# 搜某次旅行 -- 关键词过滤
-beancount-budget-tool --year 2026 \
-  --budgets budgets.yml --config config.yml --ledger-dir ./tx/ \
-  --bucket 基金.旅游 --bucket-view detail --filter "东京"
-
-# 导出全年完整报告
-beancount-budget-tool --year 2026 \
-  --budgets budgets.yml --config config.yml --ledger-dir ./tx/ \
-  --out-dir ./reports --csv-pivot --out-json
-```
+更完整的输入形状、限制和例外见 [v6 架构](docs/budget-v6-review.md)与[实施状态](docs/v6-implementation-status.md)。
