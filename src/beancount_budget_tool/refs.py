@@ -119,7 +119,8 @@ class ReferenceIndex:
                 continue
             raw_text = fin.transaction_text(filename, lineno)
             tx_hash = sha256(raw_text.encode()).hexdigest()
-            relative = str(path.relative_to(fin.root.parent)) if path.is_relative_to(fin.root.parent) else str(path)
+            relative = (path.relative_to(fin.root.parent).as_posix()
+                        if path.is_relative_to(fin.root.parent) else path.as_posix())
             group = (relative, tx_hash)
             occurrence[group] = occurrence.get(group, 0) + 1
             txref = TransactionRef(relative, tx_hash, occurrence[group])

@@ -16,6 +16,16 @@ python -m beancount_budget_tool.v6 \
 
 安装后的 `beancount-budget-tool --config path/to/reviewed-month.yaml` 运行 v6 已审月报；`beancount-budget-audit` 运行分项审计。
 
+Windows PowerShell 中可使用 Python 3.12 和以下命令；在 Windows Terminal 的交互式窗口里运行 `--format tui`：
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\beancount-budget-review-month.exe --help
+```
+
+Windows 安装会一并安装 TUI 所需的 `windows-curses`。账本及审阅 YAML 尽量使用相对于各自入口文件的路径，方便在不同机器间移动。
+
 最后一条只做**来源与标签语法审计**，不会生成预算余额。示例账本见 [labeling.bean](examples/v6/labeling.bean)。当前测试环境使用项目依赖指定的 Beancount 3.2.3。
 
 ## 2. 导入后怎么写标签
@@ -95,6 +105,14 @@ beancount-budget-review-month \
 ```
 
 **2026-09-01 cutover 以前**，该命令只核对两份账本是否都能加载、改动是否限于目标月、财务事实是否保持一致；不要求旧交易补 v6 标签，也不签发 v6 月报。若要为更早月份另行签发，须另定更早 cutover 并审定当时的期初用途。
+
+**如果打算从首个账本月 2023-07 重新建立 v6 预算，改用 `--cutover 2023-07-01`。** `--before` 和 `--after` 必须是两个完整且独立的账本副本；首次可用相同内容的副本做基线检查。命令会先一次列出目标月的旧交易级标签等语法问题，附账本文件与行号。处理后重跑；准备好该月的审阅配置，再加 `--config` 进入账户、用途、责任和报表审计。月报只重放截至该月末的已记指令，因此不用先迁移未来月份的 v6 标签。来源预检清单可能只显示当前阻断层；修复后继续重跑，直至得到完整月报或下一层待审原因。不要把 `NEEDS_REVIEW` 当作已签发月报。
+
+PowerShell 中审核首月的命令是一行；路径换成你的两个完整账本副本：
+
+```powershell
+.\.venv\Scripts\beancount-budget-review-month.exe --before .\checkpoint\main.bean --after .\working\main.bean --month 2023-07 --cutover 2023-07-01
+```
 
 **cutover 当月及之后**，给同一命令加 `--config path/to/reviewed-month.yaml`。配置须写本月、同一 cutover，并指向 `--after` 的账本。结构校验通过后，命令会继续列出来源待审、指标待审，或完整的已审月报；缺配置会明确提示。月报配置格式见[已审月报](docs/v6-monthly-report.md)。
 

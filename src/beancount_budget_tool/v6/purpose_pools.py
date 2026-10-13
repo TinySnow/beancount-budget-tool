@@ -79,7 +79,7 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
     require(type(document["schema"]) is int and document["schema"] == 6 and
             document["cutover"] == cutover.isoformat() and
             type(currency) is str and currency in fin.options.get("operating_currency", []) and
-            type(document["pools"]) is list and bool(document["pools"]),
+            type(document["pools"]) is list,
             "POOL_DECLARATION_INVALID", "资金池版本、报告货币或列表无效")
 
     used_accounts: set[str] = set()

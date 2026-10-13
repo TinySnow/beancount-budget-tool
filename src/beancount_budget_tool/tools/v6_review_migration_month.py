@@ -29,12 +29,18 @@ def review_month(before: Path, after: Path, month: str, cutover: date,
     require(isinstance(cutover, date) and cutover.day == 1,
             "CUTOVER_INVALID", "cutover 必须是自然月第一天")
     structural = check_month(before, after, month, allow_financial_corrections,
-                             cutover=cutover)
+                             cutover=cutover, source_issues_as_review=True)
     result = {"mode": "v6_one_month_migration_review", "month": month,
               "cutover": cutover.isoformat(), "structural_check": structural,
               "review": None, "error": None}
     if first < cutover:
         result.update(status="PRE_CUTOVER_CHECKED", stage="pre_cutover")
+        return result
+    issues = structural["month_source_audit"].get("issues", [])
+    if issues:
+        result.update(status="NEEDS_REVIEW", stage="source_preflight",
+                      review={"items": issues, "note":
+                              "先修正这些账本标签并重跑；本次尚未检查用途、计划和月报。"})
         return result
     if config is None:
         result.update(status="REVIEW_CONFIG_REQUIRED", stage="config")
@@ -89,6 +95,13 @@ def render_text(result: dict) -> str:
                         lines.append(f"      {posting['account']} {posting['units']}")
     if result["stage"] == "pre_cutover":
         lines.append("本月早于 cutover：v6 不审预算标签、用途或月报。")
+    elif result["stage"] == "source_preflight":
+        issues = result["review"]["items"]
+        lines.append(f"账本标签待审 {len(issues)} 项：")
+        for item in issues:
+            lines.append(f"  {item['date']} {item['reason_code']}：{item['detail']} "
+                         f"[{item['source']}]")
+        lines.append(result["review"]["note"])
     elif result["stage"] == "config":
         lines.append("本月已到 cutover：提供指向修改后账本的已审月报配置，继续来源待审与月报。")
     elif result["stage"] == "review_input":

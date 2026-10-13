@@ -13,7 +13,7 @@ from typing import Any, Mapping, Optional
 
 from beancount.core import data
 
-from ..errors import require
+from ..errors import BudgetError, require
 from ..financial import load_financial
 from ..exact import exact
 from .inline_amounts import parse_inline_amounts
@@ -53,6 +53,69 @@ def _check_tracking(value: object, source: str) -> None:
     raw = _tag_text(value, "tracking", source)
     require("，" not in raw and all(part and part == part.strip() for part in raw.split(",")),
             "TRACKING_INVALID", "tracking 只接受非空、半角逗号分隔的专题", source)
+
+
+def collect_v6_source_issues(root: Path, cutover: date,
+                             through: Optional[date] = None) -> list[dict]:
+    """Collect every invalid inline v6 tag in a period before deeper audits.
+
+    This preflight reports lexical problems only. It must not infer a budget
+    category or an asset purpose from legacy transaction metadata.
+    """
+    fin = load_financial(root)
+    issues = []
+
+    def check(entry: data.Transaction, account: str, source: str,
+              operation) -> None:
+        try:
+            operation()
+        except BudgetError as exc:
+            issues.append({"kind": "source_tag", "date": entry.date.isoformat(),
+                           "account": account, "source": source,
+                           "reason_code": exc.code, "detail": exc.message})
+
+    for entry in fin.entries:
+        if not isinstance(entry, data.Transaction) or entry.date < cutover or (
+                through is not None and entry.date > through):
+            continue
+        meta = entry.meta or {}
+        tx_source = _source(meta)
+        for key in ("budget", "fund"):
+            if key in meta:
+                issues.append({"kind": "source_tag", "date": entry.date.isoformat(),
+                               "account": "(transaction)", "source": tx_source,
+                               "reason_code": "TAG_LEVEL_FORBIDDEN",
+                               "detail": f"交易级 {key} 须移到对应分录，旧含义待人工复核"})
+        if "tracking" in meta:
+            check(entry, "(transaction)", tx_source,
+                  lambda: _check_tracking(meta["tracking"], tx_source))
+        for posting in entry.postings:
+            pmeta = posting.meta or {}
+            psource = _source(pmeta)
+            kind = _root(posting.account, fin.options)
+            for key, valid in (("budget", kind in ("expenses", "income")),
+                               ("fund", kind == "assets")):
+                if key not in pmeta:
+                    continue
+                if not valid:
+                    issues.append({"kind": "source_tag", "date": entry.date.isoformat(),
+                                   "account": posting.account, "source": psource,
+                                   "reason_code": "TAG_LEVEL_FORBIDDEN",
+                                   "detail": f"{key} 不允许写在此类分录"})
+                    continue
+
+                def validate_tag(key=key, value=pmeta[key], source=psource,
+                                 posting=posting) -> None:
+                    raw = _tag_text(value, key, source)
+                    parse_inline_amounts(raw, exact(posting.units.number), source,
+                                         code="FUND_GRAMMAR" if key == "fund" else
+                                              "TAG_SYNTAX_INVALID")
+
+                check(entry, posting.account, psource, validate_tag)
+            if "tracking" in pmeta:
+                check(entry, posting.account, psource,
+                      lambda: _check_tracking(pmeta["tracking"], psource))
+    return issues
 
 
 def scan_v6_source(root: Path, cutover: date, through: Optional[date] = None) -> SourceAudit:

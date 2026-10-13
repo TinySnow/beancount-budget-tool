@@ -51,6 +51,23 @@ class ReviewMigrationMonthTests(unittest.TestCase):
                          "NOT_AUDITED")
         self.assertIn("早于 cutover", render_text(result))
 
+    def test_cutover_collects_all_legacy_transaction_tags_with_locations(self):
+        ledger = self.ledger.replace(
+            '2026-10-02 * "new salary"\n',
+            '2026-10-02 * "new salary"\n  budget: "old category"\n') + (
+            '2026-10-03 * "bonus"\n  fund: "old owner"\n'
+            '  Assets:Cash 1 CNY\n  Income:Salary -1 CNY\n')
+        self.before.write_text(ledger, encoding="utf-8")
+        self.after.write_text(ledger, encoding="utf-8")
+        result = review_month(self.before, self.after, "2026-10", date(2026, 10, 1))
+        self.assertEqual((result["status"], result["stage"]),
+                         ("NEEDS_REVIEW", "source_preflight"))
+        self.assertEqual(len(result["review"]["items"]), 2)
+        self.assertTrue(all(row["reason_code"] == "TAG_LEVEL_FORBIDDEN"
+                            for row in result["review"]["items"]))
+        self.assertIn(f"{self.after}:8", render_text(result))
+        self.assertIn(f"{self.after}:12", render_text(result))
+
     def test_post_cutover_needs_matching_config_then_runs_existing_workflow(self):
         missing = review_month(self.before, self.after, "2026-10", date(2026, 9, 1))
         self.assertEqual((missing["status"], missing["stage"]),

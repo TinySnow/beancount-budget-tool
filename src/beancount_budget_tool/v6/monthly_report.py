@@ -13,7 +13,7 @@ import sys
 
 from ..errors import BudgetError, require
 from ..exact import exact_text
-from ..financial import frozen_financial
+from ..financial import booked_through, frozen_financial
 from ..yamlstrict import load_yaml, yaml_key_location
 from .actual_snapshot import audit_actual_snapshot
 from .facts import frozen_fact_indices
@@ -194,6 +194,12 @@ def audit_month_workflow(config: Path) -> dict:
     first_day = date.fromisoformat(f"{month}-01")
     last_day = calendar.monthrange(first_day.year, first_day.month)[1]
     as_of = date(first_day.year, first_day.month, last_day)
+    with booked_through(as_of):
+        return _audit_month_workflow_bounded(config, document, month, first_day, as_of)
+
+
+def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
+                                  first_day: date, as_of: date) -> dict:
     review = audit_review_queue(config, first_day, as_of)
     if review["items"]:
         return {"status": "NEEDS_REVIEW", "stage": "source",

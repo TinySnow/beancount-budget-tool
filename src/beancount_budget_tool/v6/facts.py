@@ -97,8 +97,8 @@ class FactIndex:
             path = Path(filename).resolve()
             require(path in fin.sources, "SOURCE_REF_INVALID", "pad 来源未进入冻结快照",
                     f"{filename}:{lineno}")
-            relative = (str(path.relative_to(fin.root.parent))
-                        if path.is_relative_to(fin.root.parent) else str(path))
+            relative = (path.relative_to(fin.root.parent).as_posix()
+                        if path.is_relative_to(fin.root.parent) else path.as_posix())
             digest = sha256(fin.transaction_text(filename, lineno).encode()).hexdigest()
             group = (relative, digest)
             occurrences[group] = occurrences.get(group, 0) + 1

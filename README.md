@@ -43,4 +43,6 @@ python3 -m venv .venv
 
 安装后的 `beancount-budget-tool` 是 v6 已审月报入口；`beancount-budget-audit` 是 v6 分项审计入口；`beancount-budget-review-month` 用于逐月迁移校对。GitHub Release 工作流构建 Python wheel 和源码包。
 
+Windows PowerShell 用 `py -3.12 -m venv .venv` 建环境，再运行 `.\.venv\Scripts\python.exe -m pip install -e .`；首月迁移命令见 [QUICKSTART](QUICKSTART.md#4-旧账按月迁移与校对)。Windows TUI 所需的 `windows-curses` 会随项目安装。
+
 此环境只解决运行问题；旧 Beancount 2.3.6 审阅侧文件不能不经复核就改写为 3.2.3。当前真实账本副本的两版 booked 事实已由[跨版本审计](docs/v6-implementation-status.md)核对一致，但 v6 月报仍需按新 loader 重验侧文件来源。

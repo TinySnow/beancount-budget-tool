@@ -23,7 +23,7 @@ from beancount.core import data
 
 from beancount_budget_tool.errors import BudgetError, require
 from beancount_budget_tool.financial import load_financial
-from beancount_budget_tool.v6.source import scan_v6_source
+from beancount_budget_tool.v6.source import collect_v6_source_issues, scan_v6_source
 
 from .v6_make_review_copy import _financial_facts
 
@@ -44,7 +44,7 @@ def _source_layout(fin) -> set[str]:
     base = fin.root.parent
     require(all(path.is_relative_to(base) for path in fin.sources),
             "MIGRATION_SOURCE_LAYOUT", "include 必须位于各自根账本目录内")
-    return {str(path.relative_to(base)) for path in fin.sources}
+    return {path.relative_to(base).as_posix() for path in fin.sources}
 
 
 def _options(fin) -> dict:
@@ -66,7 +66,7 @@ def _outside_month_source(fin, first: date, last: date) -> dict[str, tuple[bool,
                 in_target = bool(match and first <= date.fromisoformat(line[:10]) <= last)
             if not in_target:
                 selected.append(line)
-        relative = str(path.relative_to(fin.root.parent))
+        relative = path.relative_to(fin.root.parent).as_posix()
         result[relative] = (path.read_bytes().startswith(b"\xef\xbb\xbf"), "".join(selected))
     return result
 
@@ -101,7 +101,7 @@ def _financial_change_rows(before, after, first: date, last: date) -> list[dict]
             if filename:
                 path = Path(filename)
                 try:
-                    filename = str(path.relative_to(fin.root.parent))
+                    filename = path.relative_to(fin.root.parent).as_posix()
                 except ValueError:
                     filename = str(path)
             item = {"date": entry.date.isoformat(),
@@ -125,7 +125,8 @@ def _financial_change_rows(before, after, first: date, last: date) -> list[dict]
 
 def check_month(before_root: Path, after_root: Path, month: str,
                 allow_financial_corrections: bool = False,
-                cutover: date | None = None) -> dict:
+                cutover: date | None = None,
+                source_issues_as_review: bool = False) -> dict:
     first, last = _month(month)
     require(cutover is None or isinstance(cutover, date) and cutover.day == 1,
             "CUTOVER_INVALID", "cutover 必须是自然月第一天")
@@ -176,11 +177,20 @@ def check_month(before_root: Path, after_root: Path, month: str,
                         "transactions": count, "tag_syntax": "NOT_AUDITED"}
         source_files = len(after.sources)
     else:
-        audit = scan_v6_source(after_root, first, last)
-        require(audit.transactions > 0, "MIGRATION_MONTH_EMPTY",
+        issues = (collect_v6_source_issues(after_root, first, last)
+                  if source_issues_as_review else [])
+        if issues:
+            count = sum(isinstance(entry, data.Transaction) and first <= entry.date <= last
+                        for entry in after.entries)
+            source_audit = {"status": "NEEDS_REVIEW", "transactions": count,
+                            "tag_syntax": "NEEDS_REVIEW", "issues": issues}
+            source_files = len(after.sources)
+        else:
+            audit = scan_v6_source(after_root, first, last)
+            source_audit = asdict(audit)
+            source_files = audit.source_files
+        require(source_audit["transactions"] > 0, "MIGRATION_MONTH_EMPTY",
                 "指定月份没有已导入交易；先核对 importer 覆盖范围", month)
-        source_audit = asdict(audit)
-        source_files = audit.source_files
     return {"month": month, "before": str(before.root), "after": str(after.root),
             "source_files": source_files, "booked_entries": len(before.entries),
             "financial_facts_equal": not changes,
