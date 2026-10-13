@@ -392,6 +392,8 @@ def render_text(report: dict) -> str:
 
 
 def main(argv=None) -> int:
+    from ..console import configure_output
+    configure_output()
     parser = argparse.ArgumentParser(description="从已审侧文件生成 v6 月报")
     parser.add_argument("--config", required=True, type=Path, help="schema 6 月报配置 YAML")
     parser.add_argument("--format", choices=("text", "json", "tui"), default="text")

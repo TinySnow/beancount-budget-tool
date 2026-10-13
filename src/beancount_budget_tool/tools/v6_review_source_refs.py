@@ -178,6 +178,8 @@ def diagnose(config: Path) -> dict:
 
 
 def main(argv=None) -> int:
+    from beancount_budget_tool.console import configure_output
+    configure_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--format", choices=("text", "json"), default="text")

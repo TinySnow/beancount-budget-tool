@@ -36,6 +36,8 @@ from beancount.core import data
 
 
 def main(argv=None) -> int:
+    from ..console import configure_output
+    configure_output()
     parser = argparse.ArgumentParser(description="Beancount Budget v6 staged audits and monthly spending metrics")
     parser.add_argument("--ledger", type=Path, required=True, help="根 Beancount 文件")
     parser.add_argument("--cutover", required=True, help="YYYY-MM-01，v6 起算日")
