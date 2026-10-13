@@ -114,6 +114,8 @@ PowerShell 中审核首月的命令是一行；路径换成你的两个完整账
 .\.venv\Scripts\beancount-budget-review-month.exe --before .\checkpoint\main.bean --after .\working\main.bean --month 2023-07 --cutover 2023-07-01
 ```
 
+边修改边审阅时，在同一命令末尾加 `--watch`。它会先审核一次；之后保存账本目录中的 `.bean`／`.beancount` 或审阅目录中的 `.yaml`／`.yml`，会自动重跑并把新结果追加到终端。按 `Ctrl+C` 停止。`--before` 仍指向固定的修改前副本，不能随每次保存更新。准备好月报配置后，重启命令并加 `--config` 和 `--watch`，配置及其同目录的审阅 YAML 也会触发重跑。`--watch` 只支持文本输出；需要单份 JSON 时去掉它并运行一次 `--format json`。
+
 **cutover 当月及之后**，给同一命令加 `--config path/to/reviewed-month.yaml`。配置须写本月、同一 cutover，并指向 `--after` 的账本。结构校验通过后，命令会继续列出来源待审、指标待审，或完整的已审月报；缺配置会明确提示。月报配置格式见[已审月报](docs/v6-monthly-report.md)。
 
 如果本月纠正了原账中写错的账户、金额等财务事实，加 `--allow-financial-corrections`。输出会列出更正前后的 booked 分录及文件行号，供逐项核对；目标月以外的修改仍被拒绝。纯结构校验通过不代表预算数字已认证。账户、期初和证券资金池审阅不要求旧哈希相同；程序按当前账本重算。改动已认领交易仍会使该笔来源引用失效，须重审受影响的认领。完整月报只能由其独立审计签发。

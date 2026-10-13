@@ -1,6 +1,8 @@
 """One monthly command should stop at the first honest review boundary."""
 
+from contextlib import redirect_stdout
 from datetime import date
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -9,7 +11,9 @@ from unittest.mock import patch
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.tools.v6_review_migration_month import review_month, render_text
+from beancount_budget_tool.tools.v6_review_migration_month import (
+    _watch_snapshot, review_month, render_text, watch_month,
+)
 
 
 class ReviewMigrationMonthTests(unittest.TestCase):
@@ -69,6 +73,42 @@ class ReviewMigrationMonthTests(unittest.TestCase):
             source_path, source_line = row["source"].rsplit(":", 1)
             self.assertTrue(Path(source_path).samefile(self.after))
             self.assertEqual(source_line, str(line))
+
+    def test_watch_tracks_nested_ledger_and_review_yaml(self):
+        nested = self.after.parent / "src" / "transactions"
+        nested.mkdir(parents=True)
+        ledger = nested / "july.bean"
+        ledger.write_text("; first\n", encoding="utf-8")
+        initial = _watch_snapshot(self.before, self.after, self.config)
+        ledger.write_text("; changed and longer\n", encoding="utf-8")
+        self.assertNotEqual(initial, _watch_snapshot(self.before, self.after, self.config))
+        updated = _watch_snapshot(self.before, self.after, self.config)
+        review = self.config.parent / "opening.yaml"
+        review.write_text("schema: 6\n", encoding="utf-8")
+        self.assertNotEqual(updated, _watch_snapshot(self.before, self.after, self.config))
+
+    def test_watch_reruns_after_save_and_stops_with_ctrl_c(self):
+        sleeps = 0
+
+        def save_then_stop(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps == 1:
+                self.after.write_text(self.ledger + "; saved edit\n", encoding="utf-8")
+            elif sleeps == 3:
+                raise KeyboardInterrupt
+
+        with patch("beancount_budget_tool.tools.v6_review_migration_month.review_month",
+                   return_value={}) as review, patch(
+                       "beancount_budget_tool.tools.v6_review_migration_month.render_text",
+                       return_value="reviewed"), patch(
+                           "beancount_budget_tool.tools.v6_review_migration_month.time.sleep",
+                           side_effect=save_then_stop), redirect_stdout(StringIO()) as output:
+            code = watch_month(self.before, self.after, "2026-10", date(2026, 10, 1),
+                               self.config, False)
+        self.assertEqual(code, 0)
+        self.assertEqual(review.call_count, 2)
+        self.assertIn("自动复审已停止", output.getvalue())
 
     def test_post_cutover_needs_matching_config_then_runs_existing_workflow(self):
         missing = review_month(self.before, self.after, "2026-10", date(2026, 9, 1))

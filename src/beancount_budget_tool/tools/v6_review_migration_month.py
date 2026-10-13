@@ -8,10 +8,12 @@ existing source queue and monthly report without copying any ledger files.
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime
 import json
+import os
 from pathlib import Path
 import sys
+import time
 
 from beancount_budget_tool.errors import BudgetError, require
 from beancount_budget_tool.v6.monthly_report import (
@@ -20,6 +22,70 @@ from beancount_budget_tool.v6.monthly_report import (
 from beancount_budget_tool.yamlstrict import load_yaml, yaml_key_location
 
 from .v6_check_migration_month import _month, check_month
+
+
+WATCH_SUFFIXES = frozenset((".bean", ".beancount", ".yaml", ".yml"))
+WATCH_IGNORED_DIRS = frozenset((".git", ".venv", "__pycache__", "node_modules"))
+
+
+def _watch_snapshot(before: Path, after: Path, config: Path | None) -> dict[Path, tuple[int, int] | None]:
+    """Track the ledger trees and review YAML without relying on OS-specific watchers."""
+    explicit = {before.resolve(), after.resolve()}
+    if config is not None:
+        explicit.add(config.resolve())
+    files = set(explicit)
+    for root in {path.parent for path in explicit}:
+        for directory, subdirs, names in os.walk(root):
+            subdirs[:] = [name for name in subdirs if name not in WATCH_IGNORED_DIRS]
+            files.update(Path(directory) / name for name in names
+                         if Path(name).suffix.lower() in WATCH_SUFFIXES)
+    snapshot = {}
+    for path in files:
+        try:
+            info = path.stat()
+            snapshot[path] = (info.st_mtime_ns, info.st_size)
+        except OSError:
+            snapshot[path] = None
+    return snapshot
+
+
+def watch_month(before: Path, after: Path, month: str, cutover: date,
+                config: Path | None, allow_financial_corrections: bool) -> int:
+    """Repeat the same read-only review after relevant files settle on disk."""
+    print("自动复审已启动；保存账本或审阅 YAML 后会重跑，按 Ctrl+C 停止。", flush=True)
+    snapshot = _watch_snapshot(before, after, config)
+    try:
+        while True:
+            print(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S} 复审 {month} ===", flush=True)
+            retry_unreadable = False
+            try:
+                result = review_month(before, after, month, cutover, config,
+                                      allow_financial_corrections)
+                print(render_text(result), flush=True)
+            except BudgetError as exc:
+                print(f"复审输入阻断：{exc.code}：{exc.message} "
+                      f"[{exc.source or '未知位置'}]", flush=True)
+            except (OSError, UnicodeError) as exc:
+                print(f"账本文件暂时无法读取：{exc}；保存完成后会自动重试。", flush=True)
+                retry_unreadable = True
+            current = _watch_snapshot(before, after, config)
+            if current != snapshot:
+                snapshot = current
+                continue
+            if retry_unreadable:
+                time.sleep(3)
+                snapshot = _watch_snapshot(before, after, config)
+                continue
+            while True:
+                time.sleep(0.75)
+                current = _watch_snapshot(before, after, config)
+                if current != snapshot:
+                    time.sleep(0.35)
+                    snapshot = _watch_snapshot(before, after, config)
+                    break
+    except KeyboardInterrupt:
+        print("\n自动复审已停止。")
+        return 0
 
 
 def review_month(before: Path, after: Path, month: str, cutover: date,
@@ -124,7 +190,13 @@ def main(argv=None) -> int:
     parser.add_argument("--config", type=Path, help="cutover 当月及之后的已审月报配置")
     parser.add_argument("--allow-financial-corrections", action="store_true")
     parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--watch", action="store_true", help="保存账本或审阅 YAML 后自动重跑文本复审")
     args = parser.parse_args(argv)
+    if args.watch:
+        if args.format != "text":
+            parser.error("--watch 仅支持 --format text；单次 JSON 输出请去掉 --watch")
+        return watch_month(args.before, args.after, args.month, args.cutover,
+                           args.config, args.allow_financial_corrections)
     try:
         result = review_month(args.before, args.after, args.month, args.cutover,
                               args.config, args.allow_financial_corrections)
