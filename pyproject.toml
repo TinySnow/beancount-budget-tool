@@ -13,6 +13,7 @@ dependencies = ["beancount==3.2.3", "PyYAML>=6,<7"]
 beancount-budget-tool = "beancount_budget_tool.v6.monthly_report:main"
 beancount-budget-audit = "beancount_budget_tool.v6.cli:main"
 beancount-budget-review-month = "beancount_budget_tool.tools.v6_review_migration_month:main"
+beancount-budget-review-refs = "beancount_budget_tool.tools.v6_review_source_refs:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

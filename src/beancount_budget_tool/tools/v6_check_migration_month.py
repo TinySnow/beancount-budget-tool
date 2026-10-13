@@ -156,11 +156,17 @@ def check_month(before_root: Path, after_root: Path, month: str,
         changes = _financial_change_rows(before, after, first, last)
         require(bool(changes), "MIGRATION_FINANCIAL_CHANGE",
                 "booked 事实不同，但无法定位目标月更正")
-    for ordinal, (old, new) in enumerate(zip(before.entries, after.entries), 1):
-        if not (first <= old.date <= last):
-            require(_entry_metadata(old) == _entry_metadata(new),
-                    "MIGRATION_OUTSIDE_MONTH_CHANGE",
-                    "指定月份之外的指令或分录 metadata 有变化", f"第 {ordinal} 条：{old.date}")
+    # Target-month corrections can add/remove booked entries. Compare only the
+    # unaffected subsequences; zipping the complete ledgers would misalign all
+    # later entries and falsely report their unchanged metadata as edited.
+    outside_before = [entry for entry in before.entries if not first <= entry.date <= last]
+    outside_after = [entry for entry in after.entries if not first <= entry.date <= last]
+    require(len(outside_before) == len(outside_after), "MIGRATION_OUTSIDE_MONTH_CHANGE",
+            "指定月份之外的指令数量发生变化")
+    for ordinal, (old, new) in enumerate(zip(outside_before, outside_after), 1):
+        require(_entry_metadata(old) == _entry_metadata(new),
+                "MIGRATION_OUTSIDE_MONTH_CHANGE",
+                "指定月份之外的指令或分录 metadata 有变化", f"月外第 {ordinal} 条：{old.date}")
     if cutover is not None and first < cutover:
         count = sum(isinstance(entry, data.Transaction) and first <= entry.date <= last
                     for entry in after.entries)

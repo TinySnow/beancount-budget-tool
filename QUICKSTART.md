@@ -81,7 +81,7 @@ python -m beancount_budget_tool.v6.monthly_report \
   --config path/to/reviewed-month.yaml --format tui
 ```
 
-TUI 用方向键或 `j/k` 滚动、`PgUp/PgDn` 翻页、`q` 退出；脚本调用可选 `--format text` 或 `json`。消费目标和储蓄／投资等用途月目标写在计划侧文件中，不能写在某笔工资或转账的 `budget` 标签里；漏存的月份也应保留目标。
+TUI 用方向键或 `j/k` 滚动、`PgUp/PgDn` 翻页、`q` 退出；脚本调用可选 `--format text` 或 `json`。消费目标和储蓄／投资等用途月目标写在计划侧文件中，不能写在某笔工资或转账的 `budget` 标签里；漏存的月份也应保留目标。要让首页「最多能花」受生活费目标约束，还需在消费计划顶层指定 `spendable_cap_category_id`，并为该类别写本月子树总目标；[配置示例](docs/v6-monthly-report.md)列出了写法。
 
 ## 4. 旧账按月迁移与校对
 
@@ -99,6 +99,8 @@ beancount-budget-review-month \
 **cutover 当月及之后**，给同一命令加 `--config path/to/reviewed-month.yaml`。配置须写本月、同一 cutover，并指向 `--after` 的账本。结构校验通过后，命令会继续列出来源待审、指标待审，或完整的已审月报；缺配置会明确提示。月报配置格式见[已审月报](docs/v6-monthly-report.md)。
 
 如果本月纠正了原账中写错的账户、金额等财务事实，加 `--allow-financial-corrections`。输出会列出更正前后的 booked 分录及文件行号，供逐项核对；目标月以外的修改仍被拒绝。纯结构校验通过不代表预算数字已认证。账户、期初和证券资金池审阅不要求旧哈希相同；程序按当前账本重算。改动已认领交易仍会使该笔来源引用失效，须重审受影响的认领。完整月报只能由其独立审计签发。
+
+若账本已改、旧侧文件仍指向原分录，可先运行 `beancount-budget-review-refs --config path/to/reviewed-month.yaml`，一次查看所有过期引用、旧 loader 版本和行内标签／侧文件重复认领，并定位审阅文件与账本行号。它只给候选，不自动替换已审决定；逐项复核后再跑月报。
 
 若确实打算给某个月补行内 `budget`，要看**该月哪些费用／收入分录尚缺标签**，再运行：
 

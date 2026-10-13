@@ -26,6 +26,7 @@ jobs:
           beancount-budget-tool --help
           beancount-budget-audit --help
           beancount-budget-review-month --help
+          beancount-budget-review-refs --help
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
