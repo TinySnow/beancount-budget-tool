@@ -1,0 +1,362 @@
+"""One-command, explicitly scoped report over independently certified v6 audits."""
+
+from __future__ import annotations
+
+import argparse
+import calendar
+from datetime import date
+from fractions import Fraction
+from hashlib import sha256
+import json
+from pathlib import Path
+import sys
+
+from ..errors import BudgetError, require
+from ..exact import exact_text
+from ..financial import frozen_financial
+from ..yamlstrict import load_yaml, yaml_key_location
+from .actual_snapshot import audit_actual_snapshot
+from .facts import frozen_fact_indices
+from .holdings import audit_h_holdings
+from .k_book_purposes import audit_k_book_purposes
+from .purpose_pools import audit_purpose_pools
+from .purpose_progress import audit_monthly_purpose_progress
+from .review_queue import audit_review_queue, render_text as render_review_queue
+from .targets import _month, audit_monthly_expense_targets
+from .tracking import audit_monthly_tracking
+
+
+REQUIRED = {"schema", "ledger", "cutover", "month", "report_currency",
+            "accounts", "opening", "ownership", "obligations", "classifications",
+            "expense_plans", "purpose_plans", "h_transfers", "k_events", "h_fx",
+            "purpose_pools"}
+OPTIONAL = {"completeness", "benefit_groups"}
+
+
+def _config_month(document: dict, config: Path) -> str:
+    try:
+        return _month(document.get("month"))
+    except BudgetError as exc:
+        raise BudgetError(exc.code, exc.message, yaml_key_location(config, "month")) from exc
+
+
+def summarize_account_purposes(holdings: dict, pools: dict) -> dict:
+    """Show reviewed H purpose units by account; pool accounts use their overlay."""
+    require(holdings["ledger_snapshot"] == pools["ledger_snapshot"] and
+            holdings["as_of"] == pools["as_of"],
+            "MONTH_REPORT_MISMATCH", "资产用途和证券池不属于同一账本时点")
+    pool_accounts = {account for pool in pools["pools"] for account in pool["accounts"]}
+    totals = {}
+    pending = []
+    for position in holdings["positions"]:
+        if position["account"] in pool_accounts:
+            continue
+        if position["status"] != "CERTIFIED":
+            pending.append({"account": position["account"],
+                            "commodity": position["commodity"], "lot": position["lot"],
+                            "reasons": position["reasons"]})
+            continue
+        for slice_ in position["owner_units"]:
+            key = (position["account"], position["commodity"], slice_["owner_id"])
+            totals[key] = totals.get(key, Fraction(0)) + Fraction(slice_["units"])
+    rows = [{"account": account, "commodity": commodity, "owner_id": owner,
+             "units": exact_text(units)}
+            for (account, commodity, owner), units in sorted(totals.items()) if units]
+    negative_positions = [row for row in rows
+                          if row["owner_id"] != "-" and Fraction(row["units"]) < 0]
+    return {"status": "NEEDS_REVIEW" if pending else "CERTIFIED_H_OUTSIDE_POOLS",
+            "rows": rows, "pending": pending,
+            "negative_purpose_positions": negative_positions,
+            "note": "仅为 H 账户原币用途份额；证券池单独按账面成本展示，K 与市值不在此合计"}
+
+
+def audit_reviewed_month(config: Path) -> dict:
+    """Run existing audits without promoting a partial metric to a complete home."""
+    document = load_yaml(config)
+    require(type(document) is dict, "MONTH_REPORT_CONFIG_INVALID",
+            "月报配置必须是映射", f"{config.resolve()}:1")
+    missing = REQUIRED - set(document)
+    unknown = set(document) - REQUIRED - OPTIONAL
+    require(not missing and not unknown, "MONTH_REPORT_CONFIG_INVALID",
+            f"月报配置缺少 {', '.join(sorted(missing))} 或含未知字段 {', '.join(map(str, sorted(unknown, key=str)))}",
+            yaml_key_location(config, str(sorted(unknown, key=str)[0])) if unknown
+            else f"{config.resolve()}:1")
+    require(type(document["schema"]) is int and document["schema"] == 6,
+            "MONTH_REPORT_CONFIG_INVALID", "月报配置版本无效",
+            yaml_key_location(config, "schema"))
+    for key in set(document) - {"schema"}:
+        require(type(document[key]) is str and bool(document[key].strip()),
+                "MONTH_REPORT_CONFIG_INVALID", "月报配置路径、月份或货币须为非空字符串",
+                yaml_key_location(config, key))
+    month = _config_month(document, config)
+    try:
+        cutover = date.fromisoformat(document["cutover"])
+    except ValueError as exc:
+        raise BudgetError("TIME_INVALID", "cutover 必须是有效日期",
+                          yaml_key_location(config, "cutover")) from exc
+    last_day = calendar.monthrange(*map(int, month.split("-")))[1]
+    as_of = date.fromisoformat(f"{month}-{last_day:02d}")
+    require(cutover.day == 1 and cutover <= as_of,
+            "TIME_INVALID", "月报月份须不早于自然月切换点",
+            yaml_key_location(config, "cutover"))
+    currency = document["report_currency"]
+
+    def path(key: str) -> Path | None:
+        value = document.get(key)
+        return (config.parent / value).resolve() if value is not None else None
+
+    root = path("ledger")
+    require(root.is_file(), "MONTH_REPORT_CONFIG_INVALID",
+            "月报配置引用了不存在的根账本", yaml_key_location(config, "ledger"))
+    sidecar_keys = (REQUIRED | OPTIONAL) - {"schema", "ledger", "cutover", "month", "report_currency"}
+    watched = [config, *(path(key) for key in sidecar_keys if key in document)]
+    for key in sidecar_keys & set(document):
+        require(path(key).is_file(), "MONTH_REPORT_CONFIG_INVALID",
+                "月报配置引用了不存在的审阅文件", yaml_key_location(config, key))
+    before = {item: sha256(item.read_bytes()).hexdigest() for item in watched}
+    accounts, opening, ownership = path("accounts"), path("opening"), path("ownership")
+    obligations, h_fx = path("obligations"), path("h_fx")
+    with frozen_financial(root), frozen_fact_indices():
+        actual = audit_actual_snapshot(root, cutover, as_of, accounts, opening,
+                                       ownership, obligations, path("completeness"))
+        expense = audit_monthly_expense_targets(
+            root, cutover, month, path("classifications"), path("expense_plans"),
+            currency, path("benefit_groups"), accounts, ownership, obligations, h_fx)
+        purpose = audit_monthly_purpose_progress(
+            root, cutover, month, accounts, opening, ownership, path("purpose_plans"),
+            currency, path("h_transfers"), path("k_events"), h_fx, path("purpose_pools"))
+        pool = audit_purpose_pools(root, cutover, as_of, path("purpose_pools"))
+        k_book = audit_k_book_purposes(root, cutover, as_of, accounts, opening,
+                                       ownership, path("k_events"))
+        holdings = audit_h_holdings(root, cutover, as_of, accounts, opening, ownership)
+        account_purposes = summarize_account_purposes(holdings, pool)
+        tracking = audit_monthly_tracking(root, cutover, month)
+        owner_names = {row["id"]: row["name"] for row in load_yaml(ownership)["owners"]}
+        require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
+                    for item, digest in before.items()),
+                "INPUT_CHANGED", "月报运行期间配置或审阅文件发生变化", str(config))
+    require(len({actual["ledger_snapshot"], expense["ledger_snapshot"],
+                 purpose["ledger_snapshot"], pool["ledger_snapshot"],
+                 holdings["ledger_snapshot"], k_book["ledger_snapshot"],
+                 tracking["ledger_snapshot"]}) == 1 and
+            all(row["report_currency"] == currency for row in (actual, expense, purpose, pool)),
+            "MONTH_REPORT_MISMATCH", "月报各项审计的来源快照或报告货币不一致")
+    return {"mode": "v6_reviewed_month", "month": month, "as_of": as_of.isoformat(),
+            "report_currency": currency, "ledger_snapshot": actual["ledger_snapshot"],
+            "owner_names": owner_names,
+            "actual_spendable": actual,
+            "expense_targets": expense,
+            "purpose_progress": purpose,
+            "purpose_pools": pool,
+            "k_book_purposes": k_book,
+            "account_purposes": account_purposes,
+            "tracking": tracking,
+            "note": "各项独立认证；此报表不签发完整首页或证券市值。历史日末数字不代表今天余额。"}
+
+
+def audit_month_workflow(config: Path) -> dict:
+    """Give a new month one entry point, without presenting partial audits as complete."""
+    document = load_yaml(config)
+    require(type(document) is dict, "MONTH_REPORT_CONFIG_INVALID",
+            "月报配置必须是映射", f"{config.resolve()}:1")
+    month = _config_month(document, config)
+    first_day = date.fromisoformat(f"{month}-01")
+    last_day = calendar.monthrange(first_day.year, first_day.month)[1]
+    as_of = date(first_day.year, first_day.month, last_day)
+    review = audit_review_queue(config, first_day, as_of)
+    if review["items"]:
+        return {"status": "NEEDS_REVIEW", "stage": "source",
+                "month": month, "review_queue": review, "report": None,
+                "pending_metrics": []}
+
+    report = audit_reviewed_month(config)
+    require(report["ledger_snapshot"] == review["ledger_snapshot"],
+            "MONTH_REPORT_MISMATCH", "待审清单与月报不属于同一账本快照")
+    pending = []
+    for key, label, source_key in (
+        ("actual_spendable", "实际可花", "completeness"),
+        ("expense_targets", "消费目标", "expense_plans"),
+        ("purpose_progress", "用途划拨", "purpose_plans"),
+    ):
+        result = report[key]
+        if result["status"] != "CERTIFIED":
+            pending.append({"metric": label, "status": result["status"],
+                            "reason_codes": result.get("reason_codes", []),
+                            "missing_target_ids": result.get("missing_target_ids", []),
+                            "pending_events": result.get("pending_actual_events", []),
+                            "source": str((config.parent / document[source_key]).resolve())
+                            if source_key in document else str(config)})
+    if report["account_purposes"]["status"] == "NEEDS_REVIEW":
+        pending.append({"metric": "资产账户用途", "status": "NEEDS_REVIEW",
+                        "reason_codes": ["H_HOLDINGS_PENDING"],
+                        "pending_positions": report["account_purposes"]["pending"],
+                        "source": str((config.parent / document["ownership"]).resolve())})
+    if report.get("k_book_purposes", {"status": "CERTIFIED"})["status"] != "CERTIFIED":
+        pending.append({"metric": "K 账面申赎用途", "status": "NEEDS_REVIEW",
+                        "reason_codes": ["K_BOOK_PURPOSE_PENDING"],
+                        "pending_accounts": report["k_book_purposes"]["pending_accounts"],
+                        "source": str((config.parent / document["k_events"]).resolve())})
+    return {"status": "NEEDS_REVIEW" if pending else "CERTIFIED_SCOPED",
+            "stage": "metrics" if pending else "report", "month": month,
+            "review_queue": review, "report": None if pending else report,
+            "pending_metrics": pending}
+
+
+def render_workflow_text(outcome: dict) -> str:
+    if outcome["stage"] == "source":
+        return render_review_queue(outcome["review_queue"])
+    if outcome["stage"] == "metrics":
+        lines = [f"v6 {outcome['month']} 月报待审：以下指标尚未认证"]
+        for item in outcome["pending_metrics"]:
+            reasons = ", ".join(item["reason_codes"]) or item["status"]
+            lines.append(f"  {item['metric']}：{reasons} [{item['source']}]")
+            if item.get("missing_target_ids"):
+                lines.append(f"    缺少目标：{', '.join(item['missing_target_ids'])}")
+            for position in item.get("pending_positions", []):
+                codes = ", ".join(reason["code"] for reason in position["reasons"])
+                lines.append(f"    {position['account']} {position['commodity']} "
+                             f"{position['lot']}：{codes}")
+            for account in item.get("pending_accounts", []):
+                lines.append(f"    {account}：K 期初或申赎用途待审")
+        lines.append("已认证的局部结果仍可通过 --format json 查看；本次不签发完整月报。")
+        return "\n".join(lines)
+    rendered = render_text(outcome["report"])
+    review = outcome["review_queue"]
+    if not review["booked_transactions_in_range"]:
+        latest = review["latest_booked_transaction_date"] or "无"
+        rendered += (f"\n查询月份没有已记交易；最近已记交易日 {latest}。"
+                     "请核对 importer 是否已覆盖本月。")
+    return rendered
+
+
+def render_text(report: dict) -> str:
+    """Show only rows carrying an independently certified value."""
+    def amount(raw: str) -> str:
+        value = Fraction(raw)
+        denominator = value.denominator
+        twos = fives = 0
+        while denominator % 2 == 0:
+            denominator //= 2
+            twos += 1
+        while denominator % 5 == 0:
+            denominator //= 5
+            fives += 1
+        if denominator != 1:
+            return str(value)
+        places = max(twos, fives)
+        scaled = abs(value.numerator) * (10 ** places) // value.denominator
+        whole, fractional = divmod(scaled, 10 ** places)
+        tail = (f"{fractional:0{places}d}".rstrip("0") if places else "")
+        return ("-" if value < 0 else "") + str(whole) + ("." + tail if tail else "")
+
+    currency = report["report_currency"]
+    actual = report["actual_spendable"]
+    expense = report["expense_targets"]
+    purpose = report["purpose_progress"]
+    owner_names = report.get("owner_names", {})
+    lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
+             f"实际可花：{amount(actual['actual_spendable'])} {currency}" if actual["status"] == "CERTIFIED"
+             else f"实际可花：待审（{', '.join(actual['reason_codes'])}）",
+             "", "消费目标（目标 − 实际；负数为超支）"]
+    if actual["status"] == "CERTIFIED" and actual.get("booked_debts"):
+        lines[2:2] = ["未清已记消费责任（已从实际可花扣减）", *(
+            f"  {row['obligation_id']}：{amount(row['remaining_native'])} "
+            f"{row['commodity']}，{row['account']}"
+            for row in actual["booked_debts"]), ""]
+    shown = 0
+    for row in expense["categories"]:
+        if row["subtree_target_kind"] != "explicit" and row["direct_target"] is None:
+            continue
+        subtree = row["subtree_target_kind"] == "explicit"
+        status_key = "subtree_remaining_status" if subtree else "direct_remaining_status"
+        amount_key = "subtree_spent" if subtree else "direct_spent"
+        gross_key = "subtree_gross_spent" if subtree else "direct_gross_spent"
+        refund_key = "subtree_refunded" if subtree else "direct_refunded"
+        target_key = "subtree_target" if subtree else "direct_target"
+        remain_key = "subtree_remaining" if subtree else "direct_remaining"
+        label = row["name"] + ("（含子类）" if subtree else "")
+        if row[status_key] == "CERTIFIED":
+            detail = (f"（支出 {amount(row[gross_key])}，"
+                      f"退款／冲回 {amount(row[refund_key])}）") if row.get(gross_key) is not None else ""
+            lines.append(f"  {label}：目标 {amount(row[target_key])}，实际 {amount(row[amount_key])}，"
+                         f"差额 {amount(row[remain_key])} {currency}{detail}")
+        else:
+            lines.append(f"  {label}：待审（目标 {row[target_key]}）")
+        shown += 1
+    if not shown:
+        lines.append("  无已声明的消费目标")
+    lines += ["", "用途划拨（目标 Q − 实际 G；负数为超额划拨）"]
+    for row in purpose["owners"]:
+        name = owner_names.get(row["owner_id"], row["owner_id"])
+        if row["status"] == "CERTIFIED":
+            lines.append(f"  {name}：目标 {amount(row['target_q'])}，实际 {amount(row['actual_g'])}，差额 {amount(row['remaining_q_minus_g'])} {currency}")
+        elif row["status"] == "TARGET_MISSING":
+            lines.append(f"  {name}：实际 {amount(row['actual_g']) if row['actual_g'] is not None else '待审'}，无目标")
+        else:
+            lines.append(f"  {name}：{row['status']}")
+    lines += ["", "证券资金池（账面成本口径）"]
+    for pool in report["purpose_pools"]["pools"]:
+        lines.append(f"  {pool['id']}：{pool['protected_label']} {amount(pool['protected_nominal_principal'])}，"
+                     f"{pool['remainder_label']} {amount(pool['remainder_book_cost'])} {currency}；市值未知")
+        for account in pool["account_purposes"]:
+            lines.append(f"    {account['account']}：{pool['protected_label']} {amount(account['protected_nominal'])}，"
+                         f"{pool['remainder_label']} {amount(account['remainder_book_cost'])} {currency}")
+    if report.get("k_book_purposes", {}).get("rows"):
+        lines += ["", "K 账面申赎及用途变动（非真实持仓；不可与 H 余额相加）"]
+        for row in report["k_book_purposes"]["rows"]:
+            lines.append(f"  {row['account']}：账面期初 {amount(row['booked_opening'])}，"
+                         f"本期变动 {amount(row['booked_change'])}，"
+                         f"期末 {amount(row['booked_end'])} {row['commodity']}；"
+                         "真实份额与可赎回额未知")
+            for part in row["purpose_changes"]:
+                name = owner_names.get(part["owner_id"], part["owner_id"])
+                lines.append(f"    cutover 后已审 {name} 申赎净变动 "
+                             f"{amount(part['signed_change'])} {row['commodity']}")
+    if "account_purposes" in report:
+        lines += ["", "其他 H 资产账户的用途份额（原币）"]
+        for row in report["account_purposes"].get("negative_purpose_positions", []):
+            name = owner_names.get(row["owner_id"], row["owner_id"])
+            lines.append(f"  警告：{row['account']} 的 {name} 用途份额为 "
+                         f"{amount(row['units'])} {row['commodity']}")
+        for row in report["account_purposes"]["rows"]:
+            name = owner_names.get(row["owner_id"], row["owner_id"])
+            lines.append(f"  {row['account']}：{name} {amount(row['units'])} {row['commodity']}")
+        if not report["account_purposes"]["rows"]:
+            lines.append("  无已审的非证券池 H 余额")
+    if report.get("tracking", {}).get("topics"):
+        lines += ["", "专题支出（原币；支出 − 退款／冲回 = 净额）"]
+        for row in report["tracking"]["topics"]:
+            lines.append(f"  {row['topic']}：支出 {amount(row['spent'])}，"
+                         f"退款／冲回 {amount(row['returned'])}，"
+                         f"净额 {amount(row['net'])} {row['commodity']}")
+    lines += ["", actual["note"], report["note"]]
+    return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="从已审侧文件生成 v6 月报")
+    parser.add_argument("--config", required=True, type=Path, help="schema 6 月报配置 YAML")
+    parser.add_argument("--format", choices=("text", "json", "tui"), default="text")
+    args = parser.parse_args(argv)
+    try:
+        outcome = audit_month_workflow(args.config.resolve())
+    except BudgetError as exc:
+        print(json.dumps({"error": {"code": exc.code, "message": exc.message,
+                                    "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
+        return 2
+    if args.format == "tui":
+        from .tui import run_tui
+        try:
+            run_tui(render_workflow_text(outcome))
+        except BudgetError as exc:
+            print(json.dumps({"error": {"code": exc.code, "message": exc.message,
+                                        "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
+            return 2
+    else:
+        print(render_workflow_text(outcome) if args.format == "text" else
+              json.dumps(outcome, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

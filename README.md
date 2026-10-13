@@ -1,172 +1,46 @@
 # beancount-budget-tool
 
-Beancount 预算分析工具。输入账本 + 预算配置，自动生成预算统计与多格式报告。
+从 Beancount 账本核对消费预算、专项资金用途和可花金额的工具。
 
-支持 **TUI 交互模式**（无参数或 `--tui` 启动）和 **CLI 批处理模式**（带参数运行）。
+> **当前状态：v6 开发预览。** 它能审计导入流水和已审资料；2026 年 9 月隔离账本已有分项认证结果。新月份仍要补齐用途、转账和责任审阅，尚不能导入账单后直接得到完整首页。
 
-## 快速开始
+## 从哪里开始
 
-> 详细功能清单与用法见 **[QUICKSTART.md](QUICKSTART.md)**
+| 你现在要做什么 | 读哪一页 |
+|---|---|
+| 了解导入流水后如何标工资、消费、转账，以及混合用途账户 | [QUICKSTART](QUICKSTART.md) |
+| 把 2023 年以来的旧账按月修改、按月校对 | [QUICKSTART 的逐月迁移步骤](QUICKSTART.md#4-旧账按月迁移与校对) |
+| 已有一套审阅过的 v6 配置，要查看月报或列出新交易待审项 | [月报与待审清单](docs/v6-monthly-report.md) |
+| 只是想知道哪些功能已实现、哪些还缺 | [实施状态](docs/v6-implementation-status.md) |
 
-**TUI 模式 — 推荐日常使用：**
+**推荐顺序：**先看本页；导入账单时看 QUICKSTART；需要运行已审月报时再看月报说明。需求、架构和实施状态在[文档导航](docs/README.md)中按用途归类。
+
+## v6 目前怎样工作
+
+1. 用 importer 把银行、钱包、信用卡和证券流水导入 Beancount，先核对账务事实。
+2. 给明确的费用／收入分录填 `budget`，给资产分录填 `fund`；混合用途可以在一条分录上写带金额的 `fund`，程序会核对合计。默认分类来自使用者批准的私人规则，不写进公共算法。
+3. 运行待审清单，核对分类、资产用途、转账边界和责任；工具对金额守恒及来源引用进行校验。未审事项保留待审状态。
+4. 审阅输入齐全后运行 v6 月报。每个指标独立显示认证状态；历史截止日的结果不等于今天余额。
+
+目前复杂归属与转账的侧文件仍属于审阅工作流：使用者确认事实和金额，维护者或审阅工具负责整理来源引用并运行校验；还没有适合日常用户直接操作的完整界面。
+
+公开的[示例账本](examples/v6/labeling.bean)和 QUICKSTART 可以演示标签语法。完整月报目前依赖已审账户、期初、归属、计划等侧文件；现有 9 月示范配置属于本地私人账本资料，公开仓库无法直接复现该命令。建立新账本的自动审阅界面和完整日常首页仍在开发。
+
+## 开发资料
+
+实现或审阅 v6：从[文档导航](docs/README.md)进入需求、架构和实施状态。
+
+## 开发环境
+
+在仓库根目录建立虚拟环境并安装项目：
 
 ```bash
-# 直接启动，全键盘操作（路径从 budget-tool.toml 加载）
-cargo run
-
-# 显式 TUI：命令行路径作为初始值（TUI 内按 z 可再改）
-beancount-budget-tool --tui \
-  --budgets budgets.yml --config config.yml --ledger-dir ./transactions/
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m unittest discover -s tests
+.venv/bin/beancount-budget-tool --help
 ```
 
-**模式划分：**
+安装后的 `beancount-budget-tool` 是 v6 已审月报入口；`beancount-budget-audit` 是 v6 分项审计入口；`beancount-budget-review-month` 用于逐月迁移校对。GitHub Release 工作流构建 Python wheel 和源码包。
 
-| 启动方式 | 进入的模式 |
-|---|---|
-| 无参数 | TUI（路径来自 `budget-tool.toml`） |
-| `--tui [--budgets X --config Y --ledger-dir Z --ledger F]` | TUI（命令行路径优先） |
-| 其余带参数（`-m`/`--year`/`--compare` 等） | 纯 CLI，一次性输出 |
-| `--help` / `--version` | 帮助 / 版本 |
-
-TUI 内按 `z` 可修改预算文件 / 配置文件 / 账本目录 / 币种。编辑时按 Enter 保存并立即重跑报告，然后返回设置字段选择页；按 Esc 取消编辑并返回字段选择页，再按 Esc 返回主界面。改动仅本次会话生效（不写回 toml）。
-
-**CLI 模式 — 脚本/自动化：**
-
-```bash
-beancount-budget-tool -m 2026-06 \
-  --budgets budgets.yml --config config.yml \
-  --ledger-dir ./transactions/ --scope cumulative
-```
-
-**三样东西：**
-
-| 文件 | 职责 | 写什么 |
-|---|---|---|
-| `budgets.yml` | **纯预算** | `default_monthly` 模板 + 按月覆盖 |
-| `config.yml` | **全局配置** | 账户映射、桶类型、跟踪桶、资产账户、汇率表 |
-| Beancount 账本 | **实际支出** | `budget:` metadata 标注交易所属桶 |
-
-## 构建
-
-```bash
-cargo build --release
-```
-
-## 核心概念
-
-### budgets.yml — 纯预算计划
-
-```yaml
-default_monthly:          # 月预算模板（可选）
-  储蓄: 700
-  生活费:
-    饮食: 2000
-    交通: 300
-  数码: 3000
-
-"2026-06":                # 6月只写与模板不同的部分
-  数码: 5000              # 覆盖模板 → 5000
-  # 生活费.饮食 没写 → 继承模板 2000
-```
-
-- 嵌套 YAML 自动展平为 `生活费.饮食`、`生活费.交通`
-- 父桶统计 = 子桶之和
-- 支持模板继承 + 多套模板切换（`YYYY-MM template` 键）
-- **跟踪桶不写在这里** — 移到 `config.yml` 的 `tracking_buckets`
-
-### config.yml — 全局配置
-
-```yaml
-default_expense_bucket: 生活费
-
-defaults:                              # 账户 → 桶（最长前缀匹配）
-  "Expenses:Consume:饮食": 生活费.饮食
-  "Expenses:Consume:交通": 生活费.交通
-
-tracking_buckets:                      # 跟踪桶：只追踪不预算
-  - 基金.旅游
-  - 大额支出
-
-# 多币种汇率（无 @@ 注释的纯外币交易自动换算）
-currency_rates:
-  JPY: 0.04327
-  USD: 6.77
-
-asset_bucket_accounts:                 # 资产桶（可选）
-  储蓄:
-    - "Assets:Bank:建设银行"
-```
-
-### Beancount 标注
-
-```beancount
-; 基本用法
-2026-06-17 * "京东" "买耳机"
-  budget: "数码"
-  Expenses:Consume:电子  2000 CNY
-  Assets:Bank:工行       -2000 CNY
-
-; 多桶 + 金额拆分
-2026-06-25 * "基金定投"
-  budget: "电子产品900, 旅游900"
-  Assets:Invest:基金  1800 CNY
-  Assets:Bank:工行    -1800 CNY
-
-; 多币种：@@ 自动转换，或配 currency_rates
-2026-07-16 * "Hotel" "日本旅行住宿"
-  budget: "宁波日本之旅"
-  Expenses:Travel  158.12 USD @@ 1070.16 CNY
-  Liabilities:CreditCard  -158.12 USD @@ 1070.16 CNY
-```
-
-## CLI
-
-| 参数 | 说明 |
-|---|---|
-| `-m, --month <YYYY-MM>` | 目标月份 |
-| `--from/--to <YYYY-MM>` | 时间范围 |
-| `--year <YYYY>` | 全年快捷方式 |
-| `--budgets <FILE>` | 预算文件 |
-| `--config, -c <FILE>` | 配置文件 |
-| `--scope <month\|cumulative>` | 统计范围 |
-| `--bucket <NAME>` | 指定桶明细 |
-| `--bucket-view <s\|m\|d>` | 桶视图粒度 |
-| `--sort-by <name\|planned\|actual\|remain>` | 排序 |
-| `--expand` | 展开子桶 |
-| `--compare <YYYY-MM>` | 同比对比 |
-| `--filter <KEYWORD>` | 关键词过滤 |
-| `--out-dir <DIR>` | 导出报告 |
-| `--csv-pivot` | 横向月表 CSV |
-| `--out-json` | JSON 导出 |
-| `--currency <CODE>` | 币种（默认 CNY） |
-
-## 项目结构
-
-```
-src/
-  cli.rs            CLI 参数
-  config.rs         budgets.yml + config.yml 加载
-  ledger.rs         Beancount 账本解析（含 @@ 价格注释）
-  budget.rs         预算引擎（FlowKind 分类 + 多币种转换）
-  util.rs           基础类型（ReportScope）+ CJK 对齐
-  tui.rs            TUI 交互界面
-  main.rs           入口 + CLI/TUI 路由 + 集成测试
-  report/
-    mod.rs          重导出
-    shared.rs       共享工具 + 文件导出
-    text.rs         终端文本报告
-    md.rs           Markdown 报告
-    csv.rs          CSV 导出
-    json.rs         JSON 导出
-```
-
-## 输出文件
-
-| 文件 | 内容 |
-|---|---|
-| `summary-{range}.md` / `.txt` | 汇总报告 |
-| `buckets-{range}.csv` | 桶级 planned/actual CSV |
-| `bucket-{桶名}-{range}.md` | 单桶完整报告 |
-| `asset-locations-{桶名}-{range}.md` | 资产桶资金位置 |
-| `pivot-{range}.csv` | 月×桶 横向透视 |
-| `summary-{range}.json` | JSON 导出 |
+此环境只解决运行问题；旧 Beancount 2.3.6 审阅侧文件不能不经复核就改写为 3.2.3。当前真实账本副本的两版 booked 事实已由[跨版本审计](docs/v6-implementation-status.md)核对一致，但 v6 月报仍需按新 loader 重验侧文件来源。

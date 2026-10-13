@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beancount-budget-tool"
+version = "0.4.0.dev0"
+description = "Evidence-first v6 budget review for Beancount"
+requires-python = ">=3.9"
+dependencies = ["beancount==3.2.3", "PyYAML>=6,<7"]
+
+[project.scripts]
+beancount-budget-tool = "beancount_budget_tool.v6.monthly_report:main"
+beancount-budget-audit = "beancount_budget_tool.v6.cli:main"
+beancount-budget-review-month = "beancount_budget_tool.tools.v6_review_migration_month:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
