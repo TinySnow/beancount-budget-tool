@@ -95,6 +95,8 @@ python -m beancount_budget_tool.v6.monthly_report \
 
 TUI 用方向键或 `j/k` 滚动、`PgUp/PgDn` 翻页、`q` 退出；脚本调用可选 `--format text` 或 `json`。消费目标和储蓄／投资等用途月目标写在计划侧文件中，不能写在某笔工资或转账的 `budget` 标签里；漏存的月份也应保留目标。要让首页「最多能花」受生活费目标约束，还需在消费计划顶层指定 `spendable_cap_category_id`，并为该类别写本月子树总目标；[配置示例](docs/v6-monthly-report.md)列出了写法。
 
+有旅游、储蓄等专项未偿卡债时，月报会要求明确哪份当前可支付现金用于偿还。可选的 `debt_coverage` 文件逐笔记录这项决定；也可明确没有专用覆盖，让未偿全额占用实际可花。具体写法见[月报说明中的专项卡债覆盖](docs/v6-monthly-report.md#专项卡债明确哪份现金用于偿还)。
+
 ## 4. 旧账按月迁移与校对
 
 先保留原账本，使用 `beancount_budget_tool.tools.v6_make_review_copy` 生成一次完整审阅副本，或沿用已核过的审阅副本。每次保留修改前的完整账本，改完一个月后运行同一入口。例如修改 2023 年 7 月：

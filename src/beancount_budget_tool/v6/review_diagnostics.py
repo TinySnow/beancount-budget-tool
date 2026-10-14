@@ -24,7 +24,7 @@ MESSAGES = {
     "BOOKED_LIABILITY_UNMATCHED": "该账户的账本负债余额与已审责任未偿额不一致。",
     "CLEARING_NONZERO": "这笔单位代垫尚未结清，当前实际可花计算尚不支持未结代垫。",
     "SETTLEMENT_VALUE_MISSING": "外币责任尚未清偿；当前实际可花入口尚未支持报告日外币清偿价值。",
-    "DEBT_COVERAGE_PENDING": "责任由专项用途承担；当前实际可花入口尚未支持该用途的独占覆盖计算。",
+    "DEBT_COVERAGE_PENDING": "专项责任缺少覆盖决定；在 debt_coverage 中逐笔声明专用支付资源，或明确 resources: [] 表示没有专用覆盖。",
     "EXTERNAL_SCOPE_PENDING": "缺少本月末的完整性声明；核对截至该日已发生但漏记的责任或在途付款，再提供 completeness。",
     "CLASSIFICATION_PENDING": "这条收入或费用尚未确定预算类别。",
     "VALUATION_MISSING": "这条外币消费缺少有来源的报告货币计价或已审核的实际还款成本。",
@@ -50,7 +50,7 @@ MESSAGES = {
     "NAMED_H_EVENT_UNSUPPORTED": "该资金事件尚未匹配已审用途协议；核对责任、转账、申赎或购汇审阅。",
 }
 IMPLEMENTATION_LIMITS = frozenset((
-    "CLEARING_NONZERO", "SETTLEMENT_VALUE_MISSING", "DEBT_COVERAGE_PENDING",
+    "CLEARING_NONZERO", "SETTLEMENT_VALUE_MISSING",
     "OBLIGATION_EVENT_UNSUPPORTED", "LIABILITY_OPENING_PENDING",
     "K_EVENT_SHAPE_UNSUPPORTED",
     "H_TRANSFER_SHAPE_UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED",

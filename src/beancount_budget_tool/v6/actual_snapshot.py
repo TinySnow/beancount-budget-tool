@@ -1,4 +1,4 @@
-"""Source-compiled v6 actual snapshot for debt-free or simple CNY card dates."""
+"""Source-compiled actual snapshot with explicit native card-debt coverage."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from ..financial import load_financial
 from ..yamlstrict import load_yaml, yaml_key_location
 from .accounts import _lot
 from .core import ActualInput, CashResource, Obligation, calculate_actual
+from .debt_coverage import audit_debt_coverage
 from .obligations import audit_simple_obligations
 from .payable_cash import audit_payable_cash
 from .classification import _key
@@ -24,12 +25,14 @@ from .review_diagnostics import posting_sources, review_item
 
 def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                           accounts: Path, opening: Path, ownership: Path,
-                          obligations: Path, completeness: Path | None = None) -> dict:
-    """Compile audited cash and simple CNY free-owner card debt into the core.
+                          obligations: Path, completeness: Path | None = None,
+                          debt_coverage: Path | None = None) -> dict:
+    """Compile audited cash, simple native card debt and explicit reservations.
 
     A human statement covers unbooked responsibilities and in-flight payments.
     Every nonzero booked liability must match reviewed obligation IDs exactly.
-    Foreign settlement and protected-purpose coverage need separate evidence.
+    Named-purpose coverage is bound to reviewed cash and purchase sources.
+    Foreign report-date settlement needs a separate protocol.
     """
     cash = audit_payable_cash(root, cutover, as_of, accounts, opening, ownership)
     debt = audit_simple_obligations(root, cutover, obligations, as_of)
@@ -75,6 +78,9 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         for coordinate, amount in balances.items()) and all(
             -balances.get(coordinate, Fraction(0)) == amount
             for coordinate, amount in obligation_by_coordinate.items())
+    coverage_audit = None
+    if cash["review_state"] == debt["review_state"] == "complete" and liability_matches:
+        coverage_audit = audit_debt_coverage(cash, booked_debts, cutover, as_of, sources, debt_coverage)
 
     declaration_sha = None
     complete_statement = False
@@ -110,7 +116,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         reasons.append("CLEARING_NONZERO")
     if any(row["commodity"] != cash["report_currency"] for row in booked_debts):
         reasons.append("SETTLEMENT_VALUE_MISSING")
-    if any(row["owner_id"] not in cash["spendable_owner_ids"] for row in booked_debts):
+    if coverage_audit is not None and coverage_audit["review_state"] != "complete":
         reasons.append("DEBT_COVERAGE_PENDING")
     if not complete_statement:
         reasons.append("EXTERNAL_SCOPE_PENDING")
@@ -161,17 +167,19 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                                         ref=row["outflow_ref"], account=row["account"],
                                         commodity=row["commodity"], remaining_native=row["remaining_native"]))
     for row in booked_debts:
-        for code, applies in (("SETTLEMENT_VALUE_MISSING", row["commodity"] != cash["report_currency"]),
-                              ("DEBT_COVERAGE_PENDING", row["owner_id"] not in cash["spendable_owner_ids"])):
-            if applies:
-                review_items.append(review_item(code, sources.get(_key(row["purchase_ref"])),
-                                                ref=row["purchase_ref"], account=row["account"],
-                                                commodity=row["commodity"], owner_id=row["owner_id"],
-                                                remaining_native=row["remaining_native"]))
+        if row["commodity"] != cash["report_currency"]:
+            review_items.append(review_item("SETTLEMENT_VALUE_MISSING", sources.get(_key(row["purchase_ref"])),
+                                            ref=row["purchase_ref"], account=row["account"],
+                                            commodity=row["commodity"], owner_id=row["owner_id"],
+                                            remaining_native=row["remaining_native"]))
+    if coverage_audit is not None:
+        review_items.extend(coverage_audit["review_items"])
     if not complete_statement:
         review_items.append(review_item("EXTERNAL_SCOPE_PENDING", None))
     actual = None
     protected_shortfall = None
+    purpose_available = None
+    uncovered_responsibility = None
     if not reasons:
         # In dual-default mode '-' is explicitly outside the budget system.
         # It remains visible in the cash inventory but cannot become a free
@@ -192,9 +200,10 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                        evidence=f"booked:{fin.digest}:{row['obligation_id']}")
             for row in booked_debts)
         state = ActualInput(as_of=as_of, report_currency=cash["report_currency"],
-                            resources=resources, obligations=obligations_input, coverage=(),
+                            resources=resources, obligations=obligations_input,
+                            coverage=coverage_audit["coverage"],
                             scope_complete=True,
-                            scope_evidence=f"cash:{fin.digest};completeness:{declaration_sha}",
+                            scope_evidence=f"cash:{fin.digest};completeness:{declaration_sha};coverage:{coverage_audit['review_sha256']}",
                             free_owner_ids=tuple(cash["spendable_owner_ids"]))
         report = calculate_actual(state)
         if report.capability.value is None:
@@ -202,12 +211,20 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         else:
             actual = exact_text(report.capability.value)
             protected_shortfall = exact_text(report.protected_shortfall)
+            uncovered_responsibility = exact_text(report.uncovered)
+            purpose_available = [{"owner_id": owner, "units": exact_text(amount)}
+                                 for owner, amount in report.purpose_available]
     return {"mode": "v6_actual_simple_booked_debt_snapshot",
             "cutover": cutover.isoformat(), "as_of": as_of.isoformat(),
             "ledger_snapshot": fin.digest, "completeness_sha256": declaration_sha,
             "status": "CERTIFIED" if actual is not None else "NEEDS_REVIEW",
             "actual_spendable": actual,
             "protected_shortfall": protected_shortfall,
+            "uncovered_responsibility": uncovered_responsibility,
+            "purpose_available": purpose_available,
+            "debt_coverage_sha256": coverage_audit["review_sha256"] if coverage_audit else None,
+            "coverage_allocations": coverage_audit["allocations"] if actual is not None else None,
+            "obligation_coverage": coverage_audit["obligations"] if actual is not None else None,
             "outside_budget_cash": cash["outside_budget_cash"],
             "report_currency": cash["report_currency"],
             "reason_codes": reasons,
