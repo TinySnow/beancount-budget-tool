@@ -16,6 +16,8 @@ from beancount_budget_tool.v6.monthly_report import (
 )
 from beancount_budget_tool.v6.purpose_pools import opening_fingerprint
 from beancount_budget_tool.tools.v6_review_migration_month import review_month
+from beancount_budget_tool.v6.classification import audit_classification
+from beancount_budget_tool.v6.ownership import audit_ownership
 
 
 class MonthWorkflowEndToEndTests(unittest.TestCase):
@@ -152,6 +154,36 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
                           render_workflow_text(outcome))
             self.assertIn("十月日常：支出 10，退款／冲回 0，净额 10 CNY",
                           render_workflow_text(outcome))
+
+            # A shared review file may grow as the next month is migrated.
+            # Rerunning October must keep its complete report and balances.
+            ledger.write_text(ledger.read_text(encoding="utf-8") +
+                              '2026-11-02 * "next month food"\n'
+                              '  Expenses:Food 3 CNY\n'
+                              '  Assets:Bank -3 CNY\n', encoding="utf-8")
+            future_category = audit_classification(
+                ledger, date(2026, 10, 1), base / "classifications.yaml")
+            future_ref = future_category["missing_classifications"][-1]["ref"]
+            classes = yaml.safe_load((base / "classifications.yaml").read_text(encoding="utf-8"))
+            classes["classifications"] = [{"claim": future_ref, "reason": "November review",
+                                           "slices": [{"id": "november-food", "category_id": "food",
+                                                       "signed_units": "3"}]}]
+            save("classifications.yaml", classes)
+            owned = audit_ownership(ledger, date(2026, 10, 1), base / "accounts.yaml",
+                                    base / "ownership.yaml", base / "opening.yaml")
+            owners = yaml.safe_load((base / "ownership.yaml").read_text(encoding="utf-8"))
+            owners["claims"] = [{"claim": owned["ownership"][-1]["ref"],
+                                 "reason": "November review", "slices": [
+                                     {"id": "november-payment", "owner_id": "living",
+                                      "role": "hold", "signed_units": "-3"}]}]
+            save("ownership.yaml", owners)
+            repeated = audit_month_workflow(base / "month.yaml")
+            self.assertEqual(repeated["status"], "CERTIFIED_SCOPED")
+            self.assertEqual(repeated["report"]["account_purposes"],
+                             outcome["report"]["account_purposes"])
+            self.assertEqual(repeated["report"]["actual_spendable"]["actual_spendable"], "-10")
+            self.assertEqual(repeated["report"]["max_spendable"]["max_spendable"], "-10")
+
             output = StringIO()
             with redirect_stdout(output):
                 code = main(["--config", str(base / "month.yaml")])

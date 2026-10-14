@@ -19,8 +19,8 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml
-from .facts import FactIndex
+from ..yamlstrict import load_yaml, yaml_path_location
+from .facts import FactIndex, future_posting_refs
 from .inline_amounts import parse_inline_amounts
 from .source import scan_v6_source
 
@@ -95,6 +95,8 @@ def audit_classification(root: Path, cutover: date, declarations: Path | None = 
     facts = FactIndex(fin)
     expense_root = fin.options["name_expenses"]
     income_root = fin.options["name_income"]
+    future_keys = {_key(ref) for posting, ref in future_posting_refs(fin, cutover)
+                   if posting.account.split(":", 1)[0] in (expense_root, income_root)}
     candidates: dict[str, tuple[data.Posting, dict]] = {}
     order: list[str] = []
     for entry in fin.entries:
@@ -130,17 +132,21 @@ def audit_classification(root: Path, cutover: date, declarations: Path | None = 
                 "income_category_id", "expense_category_id"} and
                 all(type(category) is str and category in registry.values()
                     for category in defaults.values()),
-                "CLASSIFICATION_DEFAULT_INVALID", "默认收入／支出类别须引用已登记类别", str(declarations))
+                "CLASSIFICATION_DEFAULT_INVALID", "默认收入／支出类别须引用已登记类别",
+                yaml_path_location(declarations, ("defaults",)))
         rows = document["classifications"]
         require(type(rows) is list, "CLASSIFICATION_DECLARATION_INVALID",
                 "classifications 必须是列表", str(declarations))
         seen_ids: set[str] = set()
-        for row in rows:
+        for row_index, row in enumerate(rows):
             require(type(row) is dict and set(row) == {"claim", "slices", "reason"},
                     "CLASSIFICATION_CLAIM_INVALID", "分类认领须包含 claim/slices/reason", str(declarations))
             require(type(row["claim"]) is dict, "CLAIM_REF_INVALID", "claim 必须是完整 booked 引用")
             key = _key(row["claim"])
-            require(key in candidates, "CLAIM_REF_INVALID", "分类引用不存在、过期或不属费用／收入", str(row["claim"]))
+            if key in future_keys:
+                continue  # Retain the decision for its month, not this report.
+            require(key in candidates, "CLAIM_REF_INVALID", "分类引用不存在、过期或不属费用／收入",
+                    yaml_path_location(declarations, ("classifications", row_index, "claim")))
             require(key not in claims, "CLASSIFICATION_DOUBLE_CLAIM", "同一 posting 重复分类", key)
             posting, ref = candidates[key]
             require("budget" not in (posting.meta or {}), "CLASSIFICATION_DOUBLE_CLAIM",

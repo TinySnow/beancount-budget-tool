@@ -19,10 +19,10 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml
+from ..yamlstrict import load_yaml, yaml_path_location
 from .accounts import _lot, audit_accounts
 from .classification import _key
-from .facts import FactIndex
+from .facts import FactIndex, future_posting_refs
 from .inline_amounts import parse_inline_amounts
 from .opening import audit_opening
 from .provenance import valid_digest
@@ -71,6 +71,9 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     fin = load_financial(root)
     facts = FactIndex(fin)
     assets = fin.options["name_assets"]
+    future_keys = {_key(ref) for posting, ref in future_posting_refs(fin, cutover)
+                   if posting.account.split(":", 1)[0] == assets
+                   and semantics.get(posting.account) == "H"}
     h_candidates = {}
     unknown = []
     k_postings = []
@@ -122,16 +125,20 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 "income_owner_id", "expense_owner_id"} and
                 all(type(owner) is str and owner in ids
                     for owner in defaults.values()),
-                "OWNERSHIP_DEFAULT_INVALID", "默认收入／支出用途须引用已登记的命名用途")
+                "OWNERSHIP_DEFAULT_INVALID", "默认收入／支出用途须引用已登记的命名用途",
+                yaml_path_location(declarations, ("defaults",)))
         seen_slices = set()
-        for row in document["claims"]:
+        for row_index, row in enumerate(document["claims"]):
             require(type(row) is dict and set(row) == {"claim", "reason", "slices"} and
                     type(row["claim"]) is dict and type(row["reason"]) is str and
                     bool(row["reason"].strip()) and type(row["slices"]) is list and row["slices"],
                     "OWNERSHIP_CLAIM_INVALID", "归属 claim 须有完整引用、理由和切片")
             key = _key(row["claim"])
+            if key in future_keys:
+                continue  # No future slices or balances enter a historical report.
             require(key in h_candidates, "OWNERSHIP_REF_INVALID",
-                    "归属引用不存在、过期或不是已审 H 资产腿", key)
+                    "归属引用不存在、过期或不是已审 H 资产腿",
+                    yaml_path_location(declarations, ("claims", row_index, "claim")))
             require(key not in claims, "OWNERSHIP_DOUBLE_CLAIM", "H 资产腿被重复认领", key)
             posting, record = h_candidates[key]
             require("fund" not in (posting.meta or {}), "OWNERSHIP_DOUBLE_CLAIM",
@@ -239,7 +246,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             if len(h_legs) == 1 and len(entry.postings) == 2 and len(missing_keys) == 1:
                 key = missing_keys[0]
                 signed = exact(leg_keys[key].units.number)
-                if fin.options["name_income"] in roots and signed > 0:
+                if fin.options["name_income"] in roots:
                     inferred(key, [(defaults["income_owner_id"], signed)], "默认收入用途")
                 elif fin.options["name_expenses"] in roots:
                     inferred(key, [(defaults["expense_owner_id"], signed)], "默认支出用途")
