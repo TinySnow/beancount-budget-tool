@@ -19,6 +19,7 @@ from .actual_snapshot import audit_actual_snapshot
 from .facts import frozen_fact_indices
 from .holdings import audit_h_holdings
 from .k_book_purposes import audit_k_book_purposes
+from .purpose_balances import summarize_purpose_balances
 from .purpose_pools import audit_purpose_pools
 from .purpose_progress import audit_monthly_purpose_progress
 from .review_queue import audit_review_queue, render_text as render_review_queue
@@ -160,7 +161,11 @@ def audit_reviewed_month(config: Path) -> dict:
         holdings = audit_h_holdings(root, cutover, as_of, accounts, opening, ownership)
         account_purposes = summarize_account_purposes(holdings, pool)
         tracking = audit_monthly_tracking(root, cutover, month)
-        owner_names = {row["id"]: row["name"] for row in load_yaml(ownership)["owners"]}
+        owner_document = load_yaml(ownership)
+        owner_names = {row["id"]: row["name"] for row in owner_document["owners"]}
+        purpose_balances = summarize_purpose_balances(account_purposes, pool, k_book,
+                                                      owner_document,
+                                                      yaml_key_location(ownership, "owners"))
         require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
                     for item, digest in before.items()),
                 "INPUT_CHANGED", "月报运行期间配置或审阅文件发生变化", str(config))
@@ -181,6 +186,7 @@ def audit_reviewed_month(config: Path) -> dict:
             "purpose_pools": pool,
             "k_book_purposes": k_book,
             "account_purposes": account_purposes,
+            "purpose_balances": purpose_balances,
             "tracking": tracking,
             "note": "各项独立认证；此报表不签发完整首页或证券市值。历史日末数字不代表今天余额。"}
 
@@ -238,6 +244,14 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
                         "reason_codes": ["K_BOOK_PURPOSE_PENDING"],
                         "pending_accounts": report["k_book_purposes"]["pending_accounts"],
                         "source": str((config.parent / document["k_events"]).resolve())})
+    balance_view = report.get("purpose_balances", {"status": "CERTIFIED"})
+    if balance_view["status"] != "CERTIFIED":
+        covered = {code for item in pending for code in item["reason_codes"]}
+        uncovered = [code for code in balance_view["reason_codes"] if code not in covered]
+        if uncovered:
+            pending.append({"metric": "预算用途余额", "status": "NEEDS_REVIEW",
+                            "reason_codes": uncovered,
+                            "source": yaml_key_location(config, "purpose_pools")})
     return {"status": "NEEDS_REVIEW" if pending else "CERTIFIED_SCOPED",
             "stage": "metrics" if pending else "report", "month": month,
             "review_queue": review, "report": None if pending else report,
@@ -381,6 +395,30 @@ def render_text(report: dict) -> str:
             lines.append(f"  {row['account']}：{name} {amount(row['units'])} {row['commodity']}")
         if not report["account_purposes"]["rows"]:
             lines.append("  无已审的非证券池 H 余额")
+    if report.get("purpose_balances", {}).get("status") == "CERTIFIED":
+        lines += ["", "预算资金按用途查看（各币种与账面口径分别列示）"]
+        balances = report["purpose_balances"]
+        rows = balances["purposes"] + ([balances["outside_budget"]]
+                                       if balances["outside_budget"] else [])
+        roles = {"income_default": "默认收入用途", "expense_default": "默认支出用途"}
+        for row in rows:
+            suffix = f"（{'、'.join(roles[role] for role in row['default_roles'])}）" if row["default_roles"] else ""
+            lines.append(f"  {row['name']}{suffix}：")
+            if row["has_negative_h_position"]:
+                lines.append("    警告：部分账户的该用途余额为负，请核对账户分布")
+            if not row["h_native_balances"]:
+                lines.append("    H 用途余额：0（无余额）")
+            for key, label, value_key in (
+                ("h_native_balances", "H 用途余额", "units"),
+                ("pool_book_cost_balances", "证券池账面成本", "units"),
+                ("k_book_purpose_changes", "K 已审申赎净变动（cutover 后）", "signed_change"),
+            ):
+                for total in row[key]:
+                    lines.append(f"    {label}：{amount(total[value_key])} {total['commodity']}")
+                    for position in total["accounts"]:
+                        pool_label = f"（{position['pool_id']}／{position['label']}）" if "pool_id" in position else ""
+                        lines.append(f"      {position['account']}{pool_label}："
+                                     f"{amount(position[value_key])} {total['commodity']}")
     if report.get("tracking", {}).get("topics"):
         lines += ["", "专题支出（原币；支出 − 退款／冲回 = 净额）"]
         for row in report["tracking"]["topics"]:
