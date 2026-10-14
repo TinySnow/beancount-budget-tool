@@ -30,7 +30,8 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
     """Compile audited cash, simple native card debt and explicit reservations.
 
     A human statement covers unbooked responsibilities and in-flight payments.
-    Every nonzero booked liability must match reviewed obligation IDs exactly.
+    Every booked liability coordinate must match reviewed debts and advances.
+    Unreimbursed third-party advances are disclosed but are not payable cash.
     Named-purpose coverage is bound to reviewed cash and purchase sources.
     Foreign report-date settlement needs a separate protocol.
     """
@@ -61,10 +62,11 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
     unresolved_clearings = [row for row in debt["clearing_advances"]
                             if Fraction(row["remaining_native"]) != 0]
 
-    # A booked liability is not an extra debt on top of its obligation IDs.
-    # Match the full signed ledger vector to those IDs before handing them to
-    # the pure core; this prevents both omitted and double-counted card debt.
+    # Match the full signed ledger vector, including reviewed advances. An
+    # advance is a receivable, even when recorded in Liabilities: it neither
+    # adds payable cash nor offsets personal debt handed to the pure core.
     obligation_by_coordinate: dict[tuple[str, str, str], Fraction] = defaultdict(Fraction)
+    advance_by_coordinate: dict[tuple[str, str, str], Fraction] = defaultdict(Fraction)
     booked_debts = []
     for row in unresolved_obligations:
         amount = Fraction(row["remaining_native"])
@@ -73,11 +75,13 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                              "account": row["account"], "commodity": row["commodity"],
                              "owner_id": row["owner_id"], "remaining_native": row["remaining_native"],
                              "purchase_ref": row["purchase_ref"]})
+    for row in unresolved_clearings:
+        advance_by_coordinate[(row["account"], row["commodity"], row["lot"])] += Fraction(
+            row["remaining_native"])
+    coordinates = set(balances) | set(obligation_by_coordinate) | set(advance_by_coordinate)
     liability_matches = all(
-        amount == -obligation_by_coordinate.get(coordinate, Fraction(0))
-        for coordinate, amount in balances.items()) and all(
-            -balances.get(coordinate, Fraction(0)) == amount
-            for coordinate, amount in obligation_by_coordinate.items())
+        balances[coordinate] == advance_by_coordinate[coordinate] - obligation_by_coordinate[coordinate]
+        for coordinate in coordinates)
     coverage_audit = None
     if cash["review_state"] == debt["review_state"] == "complete" and liability_matches:
         coverage_audit = audit_debt_coverage(cash, booked_debts, cutover, as_of, sources, debt_coverage)
@@ -112,8 +116,6 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         reasons.append("BOOKED_OBLIGATIONS_PENDING")
     if not liability_matches:
         reasons.append("BOOKED_LIABILITY_UNMATCHED")
-    if unresolved_clearings:
-        reasons.append("CLEARING_NONZERO")
     if any(row["commodity"] != cash["report_currency"] for row in booked_debts):
         reasons.append("SETTLEMENT_VALUE_MISSING")
     if coverage_audit is not None and coverage_audit["review_state"] != "complete":
@@ -154,18 +156,17 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                 "LIABILITY_OPENING_PENDING", liability_sources.get(coordinate), **row,
                 blocking_reason_code="BOOKED_OBLIGATIONS_PENDING"))
     if not liability_matches:
-        for coordinate in sorted(set(balances) | set(obligation_by_coordinate)):
-            if balances[coordinate] == -obligation_by_coordinate[coordinate]:
+        for coordinate in sorted(coordinates):
+            expected = advance_by_coordinate[coordinate] - obligation_by_coordinate[coordinate]
+            if balances[coordinate] == expected:
                 continue
             account, commodity, lot = coordinate
             review_items.append(review_item(
                 "BOOKED_LIABILITY_UNMATCHED", liability_sources.get(coordinate), account=account,
                 commodity=commodity, lot=lot, signed_booked_units=exact_text(balances[coordinate]),
-                reviewed_remaining=exact_text(obligation_by_coordinate[coordinate])))
-    for row in unresolved_clearings:
-        review_items.append(review_item("CLEARING_NONZERO", sources.get(_key(row["outflow_ref"])),
-                                        ref=row["outflow_ref"], account=row["account"],
-                                        commodity=row["commodity"], remaining_native=row["remaining_native"]))
+                reviewed_remaining=exact_text(obligation_by_coordinate[coordinate]),
+                reviewed_receivable=exact_text(advance_by_coordinate[coordinate]),
+                signed_reviewed_units=exact_text(expected)))
     for row in booked_debts:
         if row["commodity"] != cash["report_currency"]:
             review_items.append(review_item("SETTLEMENT_VALUE_MISSING", sources.get(_key(row["purchase_ref"])),
@@ -225,6 +226,9 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
             "debt_coverage_sha256": coverage_audit["review_sha256"] if coverage_audit else None,
             "coverage_allocations": coverage_audit["allocations"] if actual is not None else None,
             "obligation_coverage": coverage_audit["obligations"] if actual is not None else None,
+            "clearing_receivables": [
+                {**row, "source": sources.get(_key(row["outflow_ref"]))}
+                for row in unresolved_clearings] if actual is not None else None,
             "outside_budget_cash": cash["outside_budget_cash"],
             "report_currency": cash["report_currency"],
             "reason_codes": reasons,

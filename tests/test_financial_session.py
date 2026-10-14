@@ -7,7 +7,7 @@ from datetime import date
 from unittest.mock import patch
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.financial import booked_through, frozen_financial, load_financial
+from beancount_budget_tool.financial import booked_through, frozen_financial, load_financial, reference_financial
 from beancount_budget_tool.v6.facts import FactIndex, frozen_fact_indices
 
 
@@ -23,6 +23,10 @@ class FrozenFinancialTests(unittest.TestCase):
                     self.assertEqual(len(bounded.entries), 1)
                     self.assertEqual(bounded.digest, complete.digest)
                     self.assertIs(load_financial(ledger), bounded)
+                    reference = reference_financial(bounded)
+                    self.assertEqual(reference.entries, complete.entries)
+                    self.assertEqual(reference.digest, bounded.digest)
+                    self.assertEqual(len(load_financial(ledger).entries), 1)
             self.assertEqual(len(load_financial(ledger).entries), 2)
 
     def test_loader_does_not_consult_existing_pickle_cache(self):

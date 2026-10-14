@@ -21,8 +21,7 @@ MESSAGES = {
     "H_FX_SHAPE_UNSUPPORTED": "该复合购汇交易不符合当前简单购汇协议，需补程序实现。",
     "PAYABLE_CASH_PENDING": "可直接支付账户的用途库存尚未审定；核对期初用途、分录归属或支付范围。",
     "BOOKED_OBLIGATIONS_PENDING": "已入账责任尚未审定；核对消费责任、还款和代垫清算的来源。",
-    "BOOKED_LIABILITY_UNMATCHED": "该账户的账本负债余额与已审责任未偿额不一致。",
-    "CLEARING_NONZERO": "这笔单位代垫尚未结清，当前实际可花计算尚不支持未结代垫。",
+    "BOOKED_LIABILITY_UNMATCHED": "该账户的账本余额与已审代垫应收减去本人未偿责任不一致；核对所有消费、还款、代垫和报销来源。",
     "SETTLEMENT_VALUE_MISSING": "外币责任尚未清偿；当前实际可花入口尚未支持报告日外币清偿价值。",
     "DEBT_COVERAGE_PENDING": "专项责任缺少覆盖决定；在 debt_coverage 中逐笔声明专用支付资源，或明确 resources: [] 表示没有专用覆盖。",
     "EXTERNAL_SCOPE_PENDING": "缺少本月末的完整性声明；核对截至该日已发生但漏记的责任或在途付款，再提供 completeness。",
@@ -50,7 +49,7 @@ MESSAGES = {
     "NAMED_H_EVENT_UNSUPPORTED": "该资金事件尚未匹配已审用途协议；核对责任、转账、申赎或购汇审阅。",
 }
 IMPLEMENTATION_LIMITS = frozenset((
-    "CLEARING_NONZERO", "SETTLEMENT_VALUE_MISSING",
+    "SETTLEMENT_VALUE_MISSING",
     "OBLIGATION_EVENT_UNSUPPORTED", "LIABILITY_OPENING_PENDING",
     "K_EVENT_SHAPE_UNSUPPORTED",
     "H_TRANSFER_SHAPE_UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED",
