@@ -16,8 +16,8 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
-from ..financial import FinancialInput
-from .facts import FactIndex
+from ..financial import FinancialInput, reference_financial
+from .facts import FactIndex, reference_fact_index
 
 
 def _key(ref: dict) -> str:
@@ -57,9 +57,14 @@ def validate_same_day_settlements(fin: FinancialInput, facts: FactIndex,
                                             for x in whitelist) and len(set(whitelist)) == len(whitelist),
             "SETTLEMENT_WHITELIST_INVALID", "信用卡白名单须列唯一完整负债账户")
     require(type(claims) is list, "SETTLEMENT_CLAIM_INVALID", "同日结算声明须为列表")
-    entries = [entry for entry in fin.entries if isinstance(entry, data.Transaction)]
+    if not claims:
+        return [], {}
+    visible = {id(entry) for entry in fin.entries}
+    reference_fin = reference_financial(fin)
+    reference_facts = facts if reference_fin is fin else reference_fact_index(fin)
+    entries = [entry for entry in reference_fin.entries if isinstance(entry, data.Transaction)]
     positions = {id(entry): index for index, entry in enumerate(entries)}
-    by_ref = {_key(facts.for_posting(posting).as_dict()): (entry, posting)
+    by_ref = {_key(reference_facts.for_posting(posting).as_dict()): (entry, posting)
               for entry in entries for posting in entry.postings}
     used_refs: set[str] = set()
     result: list[SameDaySettlement] = []
@@ -111,6 +116,8 @@ def validate_same_day_settlements(fin: FinancialInput, facts: FactIndex,
                            p.units.currency == debit.units.currency), Fraction(0))
         require(debt_before <= -amount, "SETTLEMENT_LIABILITY_INVALID",
                 "还款前白名单信用卡须有足额已记负债", card)
+        if id(debit_tx) not in visible:
+            continue  # Valid future evidence cannot permit an exception in this month.
         claim = SameDaySettlement(account, card, debit.units.currency, debit_tx.date,
                                   amount, id(debit), id(funding), row["debit_ref"],
                                   row["liability_ref"], row["funding_ref"], row["reason"])

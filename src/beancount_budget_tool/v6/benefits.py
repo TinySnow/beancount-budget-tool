@@ -17,11 +17,11 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
-from ..financial import load_financial
-from ..yamlstrict import load_yaml
+from ..financial import load_financial, reference_financial
+from ..yamlstrict import load_yaml, yaml_path_location
 from .classification import _key, audit_classification
 from .provenance import valid_digest
-from .facts import FactIndex
+from .facts import FactIndex, future_transaction_refs, reference_fact_index
 
 
 def costed_sale_candidate(entry: data.Transaction, income: data.Posting,
@@ -111,6 +111,14 @@ def audit_economic_benefits(root: Path, cutover: date,
             proved.append({**record, "evidence_ref": facts.for_posting(counterpart).as_dict(),
                           "proof": "unique_same_transaction_booked_counterpart"})
     if approved_groups is not None:
+        future_groups = {_key(ref): (entry, posting)
+                         for entry, refs in future_transaction_refs(fin, cutover)
+                         if len(entry.postings) > 2
+                         for posting, ref in zip(entry.postings, refs)
+                         if posting.account.split(":", 1)[0] == income_root
+                         and exact(posting.units.number) < 0}
+        reference_fin = reference_financial(fin)
+        reference_facts = reference_fact_index(fin) if future_groups else facts
         document = load_yaml(approved_groups)
         require(type(document) is dict and set(document) == {
             "schema", "cutover", "ledger_snapshot", "loader_version",
@@ -126,7 +134,7 @@ def audit_economic_benefits(root: Path, cutover: date,
                 "BENEFIT_GROUP_INVALID", "经济组版本、原审快照格式或报告货币不匹配")
         seen = set()
         approved = set()
-        for row in document["approvals"]:
+        for row_index, row in enumerate(document["approvals"]):
             require(type(row) is dict and set(row) == {"income_ref", "reason"} and
                     type(row["income_ref"]) is dict and type(row["reason"]) is str and
                     bool(row["reason"].strip()),
@@ -134,8 +142,15 @@ def audit_economic_benefits(root: Path, cutover: date,
             key = _key(row["income_ref"])
             require(key not in seen, "BENEFIT_GROUP_DUPLICATE", "同一收入重复认领经济组", key)
             seen.add(key)
+            location = yaml_path_location(approved_groups, ("approvals", row_index))
+            if key in future_groups:
+                entry, posting = future_groups[key]
+                require(costed_sale_candidate(entry, posting, reference_fin, reference_facts, currency)
+                        is not None, "BENEFIT_GROUP_UNPROVED",
+                        "未来证券成本、到账、收益与费用未构成唯一守恒组", location)
+                continue
             require(key in complex_context, "BENEFIT_GROUP_REF_INVALID",
-                    "经济组收入引用不存在、过期或无需复杂分摊", key)
+                    "经济组收入引用不存在、过期或无需复杂分摊", location)
             entry, posting = complex_context[key]
             candidate = costed_sale_candidate(entry, posting, fin, facts, currency)
             require(candidate is not None and candidate["income_ref"] == row["income_ref"],

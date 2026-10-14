@@ -18,8 +18,8 @@ from beancount.core import data
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml
-from .facts import FactIndex, GeneratedPostingRef
+from ..yamlstrict import load_yaml, yaml_path_location
+from .facts import FactIndex, GeneratedPostingRef, future_transactions
 from .provenance import asset_opening_fingerprint
 from .settlements import validate_same_day_settlements
 
@@ -50,6 +50,11 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
     fin = load_financial(root)
     facts = FactIndex(fin)
     asset_root = fin.options["name_assets"]
+    future_commodities = defaultdict(set)
+    for entry in future_transactions(fin, cutover):
+        for posting in entry.postings:
+            if posting.account.split(":", 1)[0] == asset_root:
+                future_commodities[posting.account].add(posting.units.currency)
     states: dict[str, dict] = {}
     for entry in fin.entries:
         if not isinstance(entry, data.Transaction):
@@ -145,15 +150,17 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
         fin, facts, document.get("credit_card_whitelist", []),
         document.get("same_day_settlements", []), cutover, currency)
     approved = {}
-    for item in records:
+    declared_semantics = {}
+    for row_index, item in enumerate(records):
         require(isinstance(item, dict) and set(item) == {
             "account", "semantics", "balance_semantics", "payment_scope", "reason"},
             "ACCOUNT_DECLARATION_INVALID", "每个账户须明确语义、余额语义、逐币种支付范围和理由",
             str(declarations))
         account = item["account"]
-        require(type(account) is str and account in states,
-                "ACCOUNT_UNKNOWN", "声明了没有直接资产 posting 的账户", str(account))
-        require(account not in approved, "ACCOUNT_DUPLICATE", "账户重复声明", account)
+        location = yaml_path_location(declarations, ("accounts", row_index))
+        require(type(account) is str and (account in states or account in future_commodities),
+                "ACCOUNT_UNKNOWN", "声明了没有直接资产 posting 的账户", location)
+        require(account not in declared_semantics, "ACCOUNT_DUPLICATE", "账户重复声明", location)
         require(type(item["reason"]) is str and bool(item["reason"].strip()),
                 "ACCOUNT_REASON_MISSING", "账户语义及支付范围须留下人工审阅理由", account)
         semantics = item["semantics"]
@@ -162,9 +169,19 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
         require(item["balance_semantics"] == expected_balance,
                 "ACCOUNT_SEMANTICS_INVALID", f"{semantics} 必须使用 {expected_balance} 余额语义", account)
         scope = item["payment_scope"]
-        require(isinstance(scope, dict) and set(scope) == states[account]["commodities"] and
+        current_commodities = states[account]["commodities"] if account in states else set()
+        require(isinstance(scope, dict) and current_commodities <= set(scope) and
+                set(scope) <= current_commodities | future_commodities[account] and
                 all(type(value) is str and value in ("payable", "excluded", "pending") for value in scope.values()),
-                "PAYMENT_SCOPE_INVALID", "每个出现过的商品均须填写 payable、excluded 或 pending", account)
+                "PAYMENT_SCOPE_INVALID", "当期商品须填写支付范围，额外商品须有未来来源", location)
+        require(semantics != "K" or all(value == "excluded" for value in scope.values()),
+                "PAYMENT_SCOPE_INVALID", "K 不能作为首页可直接支付现金", location)
+        declared_semantics[account] = semantics
+        if account not in states:
+            continue  # Future accounts have no opening, inventory or payment scope here.
+        item = {**item, "payment_scope": {commodity: scope[commodity]
+                                        for commodity in current_commodities}}
+        scope = item["payment_scope"]
         state = states[account]
         if semantics == "K":
             require(state["commodities"] == {currency} and not state["has_cost"] and
@@ -252,6 +269,7 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
                            for commodity, value in item["payment_scope"].items()
                            if value == "pending")
     result["report_currency"] = currency
+    result["declared_semantics"] = declared_semantics
     result["missing_declarations"] = missing
     result["pending_payment_scope"] = pending_scope
     result["same_day_settlements"] = [claim.as_dict() for claim in settlements]
