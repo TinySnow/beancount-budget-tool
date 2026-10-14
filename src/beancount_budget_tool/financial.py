@@ -42,6 +42,7 @@ class FinancialInput:
     sources: Mapping[Path, SourceFile]
     digest: str
     loader_version: str
+    reference_entries: Optional[Tuple[Any, ...]] = None
 
     def line(self, filename: str, lineno: int) -> str:
         path = Path(filename).resolve()
@@ -104,8 +105,19 @@ def _bounded(fin: FinancialInput) -> FinancialInput:
     through = _BOOKED_THROUGH.get()
     if through is None:
         return fin
-    return replace(fin, entries=tuple(entry for entry in fin.entries
-                                      if entry.date <= through))
+    entries = fin.reference_entries if fin.reference_entries is not None else fin.entries
+    return replace(fin, entries=tuple(entry for entry in entries if entry.date <= through),
+                   reference_entries=entries)
+
+
+def reference_financial(fin: FinancialInput) -> FinancialInput:
+    """Restore frozen booked facts for reference lookup, never for report totals.
+
+    Historical reports may share a review file containing later transactions.
+    Retain those source identities so a known future claim is distinguishable
+    from a stale reference, without replaying future cash or responsibility.
+    """
+    return replace(fin, entries=fin.reference_entries) if fin.reference_entries is not None else fin
 
 
 @contextmanager

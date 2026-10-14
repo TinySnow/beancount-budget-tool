@@ -136,6 +136,9 @@ class FactIndex:
                     txref, ordinal, _lot(posting), _fact(posting))
                 self.generated_postings += 1
         self._initialized = True
+        # Keep the identity alive for the report-local cache keyed by id(fin).
+        # Reference-only views may otherwise be collected between audits.
+        self._financial = fin
         cache = _FACT_INDEX_CACHE.get()
         if cache is not None:
             cache[id(fin)] = self

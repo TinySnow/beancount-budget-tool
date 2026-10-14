@@ -19,7 +19,7 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, reference_financial
 from ..refs import _lot
 from ..yamlstrict import load_yaml
 from .classification import _key
@@ -47,6 +47,16 @@ def audit_simple_obligations(root: Path, cutover: date,
     fin = load_financial(root)
     facts = FactIndex(fin)
     liability_root = fin.options["name_liabilities"]
+    reference_fin = reference_financial(fin)
+    visible = {id(entry) for entry in fin.entries}
+    future_postings = [posting
+        for entry in reference_fin.entries if isinstance(entry, data.Transaction) and
+        (id(entry) not in visible or as_of is not None and entry.date > as_of)
+        for posting in entry.postings if posting.account.split(":", 1)[0] == liability_root]
+    future_keys = set()
+    if future_postings:
+        reference_facts = facts if reference_fin is fin else FactIndex(reference_fin)
+        future_keys = {_key(reference_facts.for_posting(posting).as_dict()) for posting in future_postings}
     asset_root = fin.options["name_assets"]
     expense_root = fin.options["name_expenses"]
     opening = defaultdict(Fraction)
@@ -116,6 +126,8 @@ def audit_simple_obligations(root: Path, cutover: date,
             require(type(row["liability_ref"]) is dict and type(row["counterpart_ref"]) is dict,
                     "OBLIGATION_CLAIM_INVALID", "责任事件必须绑定两侧完整 booked 来源")
             key = _key(row["liability_ref"])
+            if key in future_keys:
+                continue  # Existing source after the report date; do not apply its claim.
             require(key in candidates, "OBLIGATION_REF_INVALID", "负债来源不存在或过期", key)
             require(key not in claims, "DUPLICATE_OBLIGATION_CLAIM", "负债腿被重复认领", key)
             candidate = candidates[key]

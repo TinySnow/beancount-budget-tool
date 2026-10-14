@@ -300,6 +300,9 @@ def render_workflow_text(outcome: dict) -> str:
                 elif "signed_booked_units" in item:
                     context += (f" 账本余额 {item['signed_booked_units']} {item.get('commodity', '')}；"
                                 f"已审责任未偿额 {item['reviewed_remaining']}")
+                    if "reviewed_receivable" in item:
+                        context += (f"，代垫应收 {item['reviewed_receivable']}；"
+                                    f"应有账本余额 {item['signed_reviewed_units']}")
                 elif "signed_units" in item:
                     context += f" {item['signed_units']} {item.get('commodity', '')}"
                 if context:
@@ -371,6 +374,11 @@ def render_text(report: dict) -> str:
         headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
              headline, "", "消费目标（目标 − 实际；负数为超支）"]
+    if actual["status"] == "CERTIFIED" and actual.get("clearing_receivables"):
+        lines[2:2] = ["待报销代垫（应收原币；未到账，不计入可花现金）", *(
+            f"  {row['clearing_id']}：待收 {amount(row['remaining_native'])} "
+            f"{row['commodity']}，{row['account']} [{row['source']}]"
+            for row in actual["clearing_receivables"]), ""]
     if actual["status"] == "CERTIFIED" and actual.get("booked_debts"):
         coverage = {row["obligation_id"]: row for row in actual.get("obligation_coverage") or []}
         lines[2:2] = ["未清已记消费责任（未覆盖部分占用实际可花）", *(
