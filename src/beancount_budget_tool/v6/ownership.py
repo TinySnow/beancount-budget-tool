@@ -73,7 +73,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     assets = fin.options["name_assets"]
     future_keys = {_key(ref) for posting, ref in future_posting_refs(fin, cutover)
                    if posting.account.split(":", 1)[0] == assets
-                   and semantics.get(posting.account) == "H"}
+                   and account_audit["declared_semantics"].get(posting.account) == "H"}
     h_candidates = {}
     unknown = []
     k_postings = []

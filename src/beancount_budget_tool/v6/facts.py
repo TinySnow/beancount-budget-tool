@@ -50,7 +50,7 @@ TransactionIdentity = Union[TransactionRef, GeneratedTransactionRef]
 PostingIdentity = Union[BookedRef, GeneratedPostingRef]
 
 
-def future_posting_refs(fin: FinancialInput, cutover: date) -> Iterator[tuple[data.Posting, dict]]:
+def future_transactions(fin: FinancialInput, cutover: date) -> Iterator[data.Transaction]:
     """Identify existing future facts without including them in report totals.
 
     Only a report-bounded financial input has invisible entries. Consumers
@@ -60,28 +60,52 @@ def future_posting_refs(fin: FinancialInput, cutover: date) -> Iterator[tuple[da
     if fin.reference_entries is None:
         return
     visible = {id(entry) for entry in fin.entries}
-    future = [entry for entry in fin.reference_entries
-              if isinstance(entry, data.Transaction) and entry.date >= cutover
-              and id(entry) not in visible]
-    if not future:
-        return
-    facts = FactIndex(reference_financial(fin))
-    for entry in future:
-        for posting in entry.postings:
-            yield posting, facts.for_posting(posting).as_dict()
+    for entry in fin.reference_entries:
+        if isinstance(entry, data.Transaction) and entry.date >= cutover and id(entry) not in visible:
+            yield entry
+
+
+def future_transaction_refs(fin: FinancialInput, cutover: date) -> Iterator[tuple[data.Transaction, list[dict]]]:
+    facts = None
+    for entry in future_transactions(fin, cutover):
+        if facts is None:
+            facts = reference_fact_index(fin)
+        yield entry, [facts.for_posting(posting).as_dict() for posting in entry.postings]
+
+
+def future_posting_refs(fin: FinancialInput, cutover: date) -> Iterator[tuple[data.Posting, dict]]:
+    for entry, refs in future_transaction_refs(fin, cutover):
+        yield from zip(entry.postings, refs)
 
 
 _FACT_INDEX_CACHE: ContextVar[Optional[Dict[int, "FactIndex"]]] = ContextVar(
     "fact_index_cache", default=None)
+_REFERENCE_INDEX_CACHE: ContextVar[Optional[Dict[int, tuple[FinancialInput, "FactIndex"]]]] = ContextVar(
+    "reference_fact_index_cache", default=None)
+
+
+def reference_fact_index(fin: FinancialInput) -> "FactIndex":
+    """Reuse a complete-source index within one frozen report, never across edits."""
+    if fin.reference_entries is None:
+        return FactIndex(fin)
+    cache = _REFERENCE_INDEX_CACHE.get()
+    if cache is not None and id(fin) in cache:
+        return cache[id(fin)][1]
+    facts = FactIndex(reference_financial(fin))
+    if cache is not None:
+        cache[id(fin)] = (fin, facts)
+    return facts
 
 
 @contextmanager
 def frozen_fact_indices():
     """Reuse source-reference work only within one frozen report."""
     token = _FACT_INDEX_CACHE.set({})
+    reference_token = _REFERENCE_INDEX_CACHE.set({})
     try:
         yield
     finally:
+        _REFERENCE_INDEX_CACHE.reset(reference_token)
         _FACT_INDEX_CACHE.reset(token)
 
 

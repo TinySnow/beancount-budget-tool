@@ -13,10 +13,10 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml
+from ..yamlstrict import load_yaml, yaml_path_location
 from .accounts import audit_accounts
 from .classification import _key
-from .facts import FactIndex
+from .facts import FactIndex, future_transaction_refs
 from .ownership import _owners, audit_ownership
 from .provenance import valid_digest
 from .source import scan_v6_source
@@ -46,6 +46,15 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
     owner_document = load_yaml(ownership)
     owner_ids = set(_owners(owner_document["owners"]).values())
     h_claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
+    future_pairs = {}
+    for entry, refs in future_transaction_refs(fin, cutover):
+        if len(entry.postings) != 2 or not all(
+                account_audit["declared_semantics"].get(p.account) == "H" for p in entry.postings):
+            continue
+        negatives = [index for index, p in enumerate(entry.postings) if exact(p.units.number) < 0]
+        positives = [index for index, p in enumerate(entry.postings) if exact(p.units.number) > 0]
+        if len(negatives) == len(positives) == 1:
+            future_pairs[_key(refs[negatives[0]])] = refs[positives[0]]
     candidates = {}
     order = []
     for entry in fin.entries:
@@ -98,12 +107,17 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         used_to = set()
         used_slices = set()
-        for row in document["events"]:
+        for row_index, row in enumerate(document["events"]):
             require(type(row) is dict and set(row) == {"from_ref", "to_ref", "reason", "slices"} and
                     type(row["from_ref"]) is dict and type(row["to_ref"]) is dict,
                     "H_TRANSFER_CLAIM_INVALID", "H 转账须有双方完整 booked 来源、理由和切片")
             key = _key(row["from_ref"])
-            require(key in candidates, "H_TRANSFER_REF_INVALID", "H 转出来源不存在或过期", key)
+            location = yaml_path_location(declarations, ("events", row_index))
+            if key in future_pairs:
+                require(row["to_ref"] == future_pairs[key], "H_TRANSFER_TO_REF_INVALID",
+                        "未来 H 转入来源须为同一交易的完整对手", location)
+                continue
+            require(key in candidates, "H_TRANSFER_REF_INVALID", "H 转出来源不存在或过期", location)
             require(key not in claims, "H_TRANSFER_DOUBLE_CLAIM", "H 转出来源重复认领", key)
             candidate = candidates[key]
             require(candidate["shape"] == "simple_cash", "H_TRANSFER_UNSUPPORTED",

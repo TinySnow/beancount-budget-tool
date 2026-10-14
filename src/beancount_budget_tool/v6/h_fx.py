@@ -13,10 +13,10 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml
+from ..yamlstrict import load_yaml, yaml_path_location
 from .accounts import audit_accounts
 from .classification import _key
-from .facts import FactIndex
+from .facts import FactIndex, future_transaction_refs
 from .ownership import _owners, audit_ownership
 from .provenance import valid_digest
 from .source import scan_v6_source
@@ -48,6 +48,18 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
     modes = {row["account"]: row.get("semantics") for row in account_audit["accounts"]}
     owner_ids = set(_owners(load_yaml(ownership)["owners"]).values())
     h_claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
+    future_pairs = {}
+    for entry, refs in future_transaction_refs(fin, cutover):
+        if len(entry.postings) != 2 or not all(
+                account_audit["declared_semantics"].get(p.account) == "H" for p in entry.postings):
+            continue
+        if len({p.units.currency for p in entry.postings}) != 2:
+            continue
+        report_legs = [index for index, p in enumerate(entry.postings)
+                       if p.units.currency == report_currency]
+        if len(report_legs) == 1:
+            index = report_legs[0]
+            future_pairs[_key(refs[index])] = refs[1 - index]
     candidates = {}
     order = []
     for entry in fin.entries:
@@ -101,14 +113,19 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
                 "H_FX_DECLARATION_INVALID", "H 外汇版本或原审快照格式不匹配")
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         used_to = set()
-        for row in document["events"]:
+        for row_index, row in enumerate(document["events"]):
             require(type(row) is dict and set(row) == {
                 "from_ref", "to_ref", "owner_id", "signed_from_units",
                 "signed_to_units", "boundary_role", "reason"} and
                 type(row["from_ref"]) is dict and type(row["to_ref"]) is dict,
                 "H_FX_CLAIM_INVALID", "H 外汇须有两侧完整 booked 引用、单一用途及人工理由")
             key = _key(row["from_ref"])
-            require(key in candidates, "H_FX_REF_INVALID", "H 外汇转出来源不存在或过期", key)
+            location = yaml_path_location(declarations, ("events", row_index))
+            if key in future_pairs:
+                require(row["to_ref"] == future_pairs[key], "H_FX_TO_REF_INVALID",
+                        "未来 H 外汇转入来源须为同一交易的完整对手", location)
+                continue
+            require(key in candidates, "H_FX_REF_INVALID", "H 外汇转出来源不存在或过期", location)
             require(key not in claims, "H_FX_DOUBLE_CLAIM", "H 外汇来源重复认领", key)
             candidate = candidates[key]
             require(candidate["shape"] == "simple_buy", "H_FX_UNSUPPORTED",

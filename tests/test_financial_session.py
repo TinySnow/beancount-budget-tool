@@ -8,10 +8,33 @@ from unittest.mock import patch
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.financial import booked_through, frozen_financial, load_financial, reference_financial
-from beancount_budget_tool.v6.facts import FactIndex, frozen_fact_indices
+from beancount_budget_tool.v6.facts import FactIndex, frozen_fact_indices, reference_fact_index
 
 
 class FrozenFinancialTests(unittest.TestCase):
+    def test_complete_reference_index_is_shared_only_within_one_frozen_report(self):
+        with TemporaryDirectory() as folder:
+            ledger = Path(folder) / "main.bean"
+            ledger.write_text('2023-07-01 open Assets:Cash\n'
+                              '2023-07-01 open Income:Salary\n'
+                              '2023-08-01 * "future salary"\n'
+                              '  Assets:Cash 10 CNY\n'
+                              '  Income:Salary -10 CNY\n', encoding="utf-8")
+            with booked_through(date(2023, 7, 31)):
+                with frozen_financial(ledger), frozen_fact_indices():
+                    bounded = load_financial(ledger)
+                    first = reference_fact_index(bounded)
+                    self.assertIs(reference_fact_index(bounded), first)
+                    self.assertEqual(len(first._financial.entries), 3)
+                    self.assertEqual(len(bounded.entries), 2)
+            ledger.write_text(ledger.read_text(encoding="utf-8").replace('10 CNY', '20 CNY'),
+                              encoding="utf-8")
+            with booked_through(date(2023, 7, 31)):
+                with frozen_financial(ledger), frozen_fact_indices():
+                    second = reference_fact_index(load_financial(ledger))
+                    self.assertIsNot(first, second)
+                    self.assertNotEqual(first._financial.digest, second._financial.digest)
+
     def test_historical_scope_ignores_future_booked_entries_but_keeps_source(self):
         with TemporaryDirectory() as folder:
             ledger = Path(folder) / "main.bean"

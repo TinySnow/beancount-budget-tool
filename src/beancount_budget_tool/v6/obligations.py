@@ -21,9 +21,9 @@ from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial, reference_financial
 from ..refs import _lot
-from ..yamlstrict import load_yaml
+from ..yamlstrict import load_yaml, yaml_path_location
 from .classification import _key
-from .facts import FactIndex
+from .facts import FactIndex, reference_fact_index
 from .obligation_opening import compile_obligation_opening, opening_source, paired_price_value
 from .ownership import _owners
 from .provenance import valid_digest
@@ -50,14 +50,17 @@ def audit_simple_obligations(root: Path, cutover: date,
     liability_root = fin.options["name_liabilities"]
     reference_fin = reference_financial(fin)
     visible = {id(entry) for entry in fin.entries}
-    future_postings = [posting
+    future_entries = [entry
         for entry in reference_fin.entries if isinstance(entry, data.Transaction) and
-        (id(entry) not in visible or as_of is not None and entry.date > as_of)
-        for posting in entry.postings if posting.account.split(":", 1)[0] == liability_root]
-    future_keys = set()
-    if future_postings:
-        reference_facts = facts if reference_fin is fin else FactIndex(reference_fin)
-        future_keys = {_key(reference_facts.for_posting(posting).as_dict()) for posting in future_postings}
+        (id(entry) not in visible or as_of is not None and entry.date > as_of)]
+    future_pairs = {}
+    if any(p.account.split(":", 1)[0] == liability_root for e in future_entries for p in e.postings):
+        reference_facts = reference_fact_index(fin)
+        for entry in future_entries:
+            refs = [_key(reference_facts.for_posting(p).as_dict()) for p in entry.postings]
+            for index, posting in enumerate(entry.postings):
+                if posting.account.split(":", 1)[0] == liability_root:
+                    future_pairs[refs[index]] = set(refs[:index] + refs[index + 1:])
     asset_root = fin.options["name_assets"]
     expense_root = fin.options["name_expenses"]
     opening = defaultdict(Fraction)
@@ -123,7 +126,7 @@ def audit_simple_obligations(root: Path, cutover: date,
         owners = set(_owners(document["owners"]).values())
         opening_rows = document.get("opening", [])
         review_sha = sha256(declarations.read_bytes()).hexdigest()
-        for row in document["events"]:
+        for row_index, row in enumerate(document["events"]):
             require(type(row) is dict and set(row) in ({
                 "liability_ref", "counterpart_ref", "kind", "obligation_id",
                 "owner_id", "reason"}, {
@@ -133,7 +136,10 @@ def audit_simple_obligations(root: Path, cutover: date,
             require(type(row["liability_ref"]) is dict and type(row["counterpart_ref"]) is dict,
                     "OBLIGATION_CLAIM_INVALID", "责任事件必须绑定两侧完整 booked 来源")
             key = _key(row["liability_ref"])
-            if key in future_keys:
+            if key in future_pairs:
+                require(_key(row["counterpart_ref"]) in future_pairs[key],
+                        "OBLIGATION_COUNTERPART_INVALID", "未来负债对手须为同一交易的完整来源",
+                        yaml_path_location(declarations, ("events", row_index, "counterpart_ref")))
                 continue  # Existing source after the report date; do not apply its claim.
             require(key in candidates, "OBLIGATION_REF_INVALID", "负债来源不存在或过期", key)
             require(key not in claims, "DUPLICATE_OBLIGATION_CLAIM", "负债腿被重复认领", key)

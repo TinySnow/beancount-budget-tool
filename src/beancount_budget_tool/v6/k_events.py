@@ -18,10 +18,10 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml
+from ..yamlstrict import load_yaml, yaml_path_location
 from .accounts import audit_accounts
 from .classification import _key
-from .facts import FactIndex
+from .facts import FactIndex, future_transaction_refs
 from .inline_amounts import parse_inline_amounts
 from .ownership import _owners, audit_ownership
 from .provenance import valid_digest
@@ -57,6 +57,14 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
     names = _owners(owner_document["owners"])
     owner_ids = set(names.values())
     cash_claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
+    future_pairs = {}
+    for entry, refs in future_transaction_refs(fin, cutover):
+        if len(entry.postings) != 2:
+            continue
+        modes_future = [account_audit["declared_semantics"].get(p.account) for p in entry.postings]
+        if set(modes_future) == {"H", "K"}:
+            index = modes_future.index("K")
+            future_pairs[_key(refs[index])] = refs[1 - index]
     candidates = {}
     inline_funds = {}
     order = []
@@ -122,14 +130,19 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         used_cash = set()
         used_slices = set()
-        for row in document["events"]:
+        for row_index, row in enumerate(document["events"]):
             require(type(row) is dict and set(row) == {
                 "k_ref", "cash_ref", "kind", "reason", "slices"},
                 "K_EVENT_CLAIM_INVALID", "K 事件须声明两侧来源、类型、理由及切片")
             require(type(row["k_ref"]) is dict and type(row["cash_ref"]) is dict,
                     "K_EVENT_CLAIM_INVALID", "K 事件必须绑定完整 booked 引用")
             key = _key(row["k_ref"])
-            require(key in candidates, "K_EVENT_REF_INVALID", "K 来源不存在或过期", key)
+            location = yaml_path_location(declarations, ("events", row_index))
+            if key in future_pairs:
+                require(row["cash_ref"] == future_pairs[key], "K_EVENT_CASH_REF_INVALID",
+                        "未来 K 现金来源须为同一交易的完整 H 对手", location)
+                continue
+            require(key in candidates, "K_EVENT_REF_INVALID", "K 来源不存在或过期", location)
             require(key not in claims, "K_EVENT_DOUBLE_CLAIM", "K 事件重复认领", key)
             require(key not in inline_funds, "K_EVENT_DOUBLE_CLAIM",
                     "K 行内 fund 与外部申赎事件不能同时认领", key)
