@@ -47,7 +47,7 @@ PYTHONPATH=src python -m beancount_budget_tool.v6.monthly_report \
 
 数据或审阅决定缺失时，状态为 `NEEDS_REVIEW`，清单解释需要核对什么；外币消费缺计价会定位到费用分录，未清责任会定位到相关负债分录，缺目标会指出类别／用途和计划文件。嵌套计划金额、未知类别／用途 ID 和完整性声明字段错误也有 YAML 行号。找不到尚未填写的字段时，位置指向最近的已有配置层。
 
-当前入口尚未实现的计算会明确标为“程序实现缺口”，状态为 `IMPLEMENTATION_BLOCKED`，对应待办的 `reason_kind` 是 `implementation_limit`。这包括外币未偿责任的报告日清偿价值、期初负债协议及不符合现有协议的复合事件。它们需要继续开发，不能靠改标签或人工批准消除。有实现缺口时仍列出同时发现的数据待审项。
+当前入口尚未实现的计算会明确标为“程序实现缺口”，状态为 `IMPLEMENTATION_BLOCKED`，对应待办的 `reason_kind` 是 `implementation_limit`。这包括外币未偿责任的报告日清偿价值、非消费借款和复合期初责任及不符合现有协议的复合事件。它们需要继续开发，不能靠改标签或人工批准消除。有实现缺口时仍列出同时发现的数据待审项。
 
 完整性声明按指定月末使用，不要求账本哈希保持不变；旧声明中的 `ledger_snapshot` 和 `as_of_booked_fingerprint` 可留作历史记录，也可删除。补记旧月交易后，程序会重新计算现金与已入账责任；新交易缺用途或责任认领时，月报仍会列为待审。完整性声明只涉及其所写的月末，不把历史报表变成今天余额。
 
@@ -75,11 +75,38 @@ h_fx: h-fx.yaml
 purpose_pools: purpose-pools.yaml
 ```
 
+## 从历史月份开始：切换前还没结清的债务或代垫
+
+例如 cutover 为 9 月 1 日，8 月刷卡 500 元、已还 200 元：只把 **9 月 1 日交易前仍欠的 300 元**结转为期初责任。8 月消费不会进入 9 月费用，9 月还款继续扣减同一责任。未收回的单位代垫同样只结转尚未报销的金额，不提前增加可花现金。
+
+在现有 `obligations` 文件中补可选的 `opening` 列表，不新增账本交易。先运行月报的 `--format json`：`LIABILITY_OPENING_PENDING` 项会列出账面余额及 `source_candidates`，从中选择真正尚未结清责任的原始来源，把完整 `liability_ref` 复制到期初项；候选并非自动批准。金额需要你按账单确认，程序不能从往来净余额猜出各笔剩余。以下只展示新增列表，原文件的 schema、cutover、loader_version、owners、events 等字段仍保留：
+
+```yaml
+opening:
+  - kind: consumer_debt
+    obligation_id: old-card
+    owner_id: living # 已登记的资金用途 ID
+    liability_ref: {} # 替换为 cutover 前消费或已有 Equity 结转的完整来源
+    remaining_native: '300' # 原币未偿额，始终为正数
+    reason: '8 月消费 500，切换前已还 200，余款由生活费承担'
+  - kind: advance_receivable
+    clearing_id: old-advance
+    liability_ref: {} # 替换为 cutover 前代垫或已有 Equity 结转的完整来源
+    remaining_native: '300'
+    reason: '切换前仍有 300 元单位代垫待报销'
+```
+
+每个账户／币种／lot 必须满足“期初应收 − 期初债务 = cutover 前 booked 余额”。同一坐标可列多个独立 ID；若应收与债务恰好相抵为零，也须把仍未结清的两者分别声明。不得因净余额为零省略真实责任。来源须在 cutover 前，类型与方向匹配；每个原始分录只认领一次，剩余金额不得超过原分录金额。金额不守恒、ID／来源重复或引用过期时，错误指向责任文件的具体行。
+
+切换后的还款事件用原 `obligation_id`，报销事件用原 `clearing_id`。缺少期初 ID 时先列待审，再补期初认领。**沿用同一 cutover 查看下个月时，opening 保持原切换日金额**，不手工减去新还款；程序会重放其后的全部已审结算。期初专项卡债仍须按报告日提供覆盖决定；期初外币债务仍须有报告日清偿价值，不能靠结转绕过计价要求。
+
+当前支持有简单同币消费、代垫或已有 Equity 结转来源的期初责任。非消费贷款、复合和跨币来源仍需专门协议，不能补造账务来过关。月报文本／TUI 标出“期初结转”，JSON 的 `actual_spendable.opening_responsibilities` 保留期初金额、来源和审阅位置。
+
 ## 单位代垫：钱没报销回来时怎样显示
 
 例如生活费现金 1000 元，替单位付了 500 元，月底只报销 200 元：月报显示可支付现金 **700 元**、待报销代垫 **300 元**。代垫应收不当作可花现金，也不再扣一次本人债务；下月剩余 300 元真实到账后才恢复现金。已审代垫及报销没有个人费用，也不产生新的用途划拨 G。来自专项用途的代垫按该笔资产 `fund` 增减该用途，报销的归属也由真实到账分录确定。
 
-继续使用配置里的 `obligations` 文件：付出两侧来源认领为 `kind: advance_outflow`，报销两侧来源认领为 `kind: advance_reimbursement`，双方使用同一个 `clearing_id` 和审阅理由。还需审定资产分录用途；不能仅凭往来科目余额为正就自动判成单位代垫。当前协议支持一笔同币现金代垫及其多次同币报销；每次报销不得超过该代垫剩余金额。期初已有应收或复合往来仍需后续协议。
+继续使用配置里的 `obligations` 文件：付出两侧来源认领为 `kind: advance_outflow`，报销两侧来源认领为 `kind: advance_reimbursement`，双方使用同一个 `clearing_id` 和审阅理由。还需审定资产分录用途；不能仅凭往来科目余额为正就自动判成单位代垫。当前协议支持一笔同币现金代垫及其多次同币报销；每次报销不得超过该代垫剩余金额。期初已有应收按上一节结转，复合往来仍需后续协议。
 
 月报文本和 TUI 单列待收原币金额、往来账户及原始代垫的文件行号；JSON 在 `report.actual_spendable.clearing_receivables` 保留稳定 ID 和来源。外币应收只列原币，不估算兑换价值；报销后是否可花仍取决于到账账户的支付范围。待报销款不能作为信用卡债务的专用现金覆盖。
 

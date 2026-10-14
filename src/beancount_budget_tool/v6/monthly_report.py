@@ -377,13 +377,15 @@ def render_text(report: dict) -> str:
     if actual["status"] == "CERTIFIED" and actual.get("clearing_receivables"):
         lines[2:2] = ["待报销代垫（应收原币；未到账，不计入可花现金）", *(
             f"  {row['clearing_id']}：待收 {amount(row['remaining_native'])} "
-            f"{row['commodity']}，{row['account']} [{row['source']}]"
+            f"{row['commodity']}，{row['account']}" +
+            ("（期初结转）" if row.get("origin") == "opening" else "") + f" [{row['source']}]"
             for row in actual["clearing_receivables"]), ""]
     if actual["status"] == "CERTIFIED" and actual.get("booked_debts"):
         coverage = {row["obligation_id"]: row for row in actual.get("obligation_coverage") or []}
         lines[2:2] = ["未清已记消费责任（未覆盖部分占用实际可花）", *(
             f"  {row['obligation_id']}：{amount(row['remaining_native'])} "
             f"{row['commodity']}，{row['account']}" +
+            ("（期初结转）" if row.get("origin") == "opening" else "") +
             (f"；专用覆盖 {amount(coverage[row['obligation_id']]['covered'])}，"
              f"未覆盖 {amount(coverage[row['obligation_id']]['uncovered'])}"
              if row["obligation_id"] in coverage else "")

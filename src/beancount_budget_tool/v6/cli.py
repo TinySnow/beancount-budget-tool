@@ -69,7 +69,7 @@ def main(argv=None) -> int:
     parser.add_argument("--k-events", type=Path, help="schema 6 已审简单 K 申赎事件；须配合 --k-event-audit")
     parser.add_argument("--h-transfers", type=Path, help="schema 6 已审简单 H 转账事件；须配合 --h-transfer-audit")
     parser.add_argument("--h-fx", type=Path, help="schema 6 已审单用途购汇事件；须配合 --h-fx-audit")
-    parser.add_argument("--obligations", type=Path, help="schema 6 已审简单消费责任、还款或代垫事件")
+    parser.add_argument("--obligations", type=Path, help="schema 6 已审期初未结责任、简单消费、还款或代垫事件")
     parser.add_argument("--completeness", type=Path, help="schema 6 报告日末未入账责任与在途付款完整性声明；须配合 --actual-audit")
     parser.add_argument("--debt-coverage", type=Path, help="schema 6 报告日已审责任覆盖；须配合 --actual-audit")
     parser.add_argument("--classifications", type=Path, help="schema 6 分类侧文件；供分类、计价、收益或月度审计使用")

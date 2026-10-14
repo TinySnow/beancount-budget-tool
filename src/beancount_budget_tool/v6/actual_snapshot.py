@@ -74,6 +74,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         booked_debts.append({"obligation_id": row["obligation_id"],
                              "account": row["account"], "commodity": row["commodity"],
                              "owner_id": row["owner_id"], "remaining_native": row["remaining_native"],
+                             "origin": row["origin"],
                              "purchase_ref": row["purchase_ref"]})
     for row in unresolved_clearings:
         advance_by_coordinate[(row["account"], row["commodity"], row["lot"])] += Fraction(
@@ -153,7 +154,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         for row in debt["opening_pending"]:
             coordinate = (row["account"], row["commodity"], row["lot"])
             review_items.append(review_item(
-                "LIABILITY_OPENING_PENDING", liability_sources.get(coordinate), **row,
+                row["reason_code"], row.get("origin_source") or liability_sources.get(coordinate), **row,
                 blocking_reason_code="BOOKED_OBLIGATIONS_PENDING"))
     if not liability_matches:
         for coordinate in sorted(coordinates):
@@ -229,6 +230,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
             "clearing_receivables": [
                 {**row, "source": sources.get(_key(row["outflow_ref"]))}
                 for row in unresolved_clearings] if actual is not None else None,
+            "opening_responsibilities": debt["opening_declarations"] if actual is not None else None,
             "outside_budget_cash": cash["outside_budget_cash"],
             "report_currency": cash["report_currency"],
             "reason_codes": reasons,

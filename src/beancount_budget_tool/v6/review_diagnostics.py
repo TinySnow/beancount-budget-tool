@@ -45,12 +45,14 @@ MESSAGES = {
     "PURPOSE_POOL_PENDING": "证券资金池的用途账面分配尚未审定。",
     "OBLIGATION_UNCLAIMED": "这条负债分录尚未认领为消费责任、还款或代垫清算。",
     "OBLIGATION_EVENT_UNSUPPORTED": "该负债交易不符合当前支持的简单消费、还款或代垫协议，需补程序实现。",
-    "LIABILITY_OPENING_PENDING": "cutover 前的未清负债需要期初责任协议，当前入口尚未实现该协议。",
+    "LIABILITY_OPENING_PENDING": "cutover 前账面余额尚未分配到期初未结债务或代垫 ID；在 obligations 的 opening 中审定来源、剩余金额及债务用途。",
+    "OBLIGATION_OPENING_REQUIRED": "这笔还款或报销指向切换前责任，先补 obligations.opening 的对应未结 ID，再重跑。",
+    "OBLIGATION_OPENING_SOURCE_UNSUPPORTED": "这份期初往来缺少当前协议可绑定的简单消费、代垫或 Equity 结转来源；借款、复合及跨币期初责任需要继续实现，不应改账伪造来源。",
     "NAMED_H_EVENT_UNSUPPORTED": "该资金事件尚未匹配已审用途协议；核对责任、转账、申赎或购汇审阅。",
 }
 IMPLEMENTATION_LIMITS = frozenset((
     "SETTLEMENT_VALUE_MISSING",
-    "OBLIGATION_EVENT_UNSUPPORTED", "LIABILITY_OPENING_PENDING",
+    "OBLIGATION_EVENT_UNSUPPORTED", "OBLIGATION_OPENING_SOURCE_UNSUPPORTED",
     "K_EVENT_SHAPE_UNSUPPORTED",
     "H_TRANSFER_SHAPE_UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED",
 ))
