@@ -1,4 +1,4 @@
-"""Source-compiled actual snapshot with explicit native card-debt coverage."""
+"""Source-compiled actual snapshot with debt coverage and locked settlement."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from ..yamlstrict import load_yaml, yaml_key_location
 from .accounts import _lot
 from .core import ActualInput, CashResource, Obligation, calculate_actual
 from .debt_coverage import audit_debt_coverage
+from .debt_settlements import audit_debt_settlements
 from .obligations import audit_simple_obligations
 from .payable_cash import audit_payable_cash
 from .classification import _key
@@ -26,14 +27,15 @@ from .review_diagnostics import posting_sources, review_item
 def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                           accounts: Path, opening: Path, ownership: Path,
                           obligations: Path, completeness: Path | None = None,
-                          debt_coverage: Path | None = None) -> dict:
-    """Compile audited cash, simple native card debt and explicit reservations.
+                          debt_coverage: Path | None = None,
+                          debt_settlements: Path | None = None) -> dict:
+    """Compile cash, simple card debt, locked foreign values and reservations.
 
     A human statement covers unbooked responsibilities and in-flight payments.
     Every booked liability coordinate must match reviewed debts and advances.
     Unreimbursed third-party advances are disclosed but are not payable cash.
     Named-purpose coverage is bound to reviewed cash and purchase sources.
-    Foreign report-date settlement needs a separate protocol.
+    Foreign debt uses separately reviewed report-date locked statement values.
     """
     cash = audit_payable_cash(root, cutover, as_of, accounts, opening, ownership)
     debt = audit_simple_obligations(root, cutover, obligations, as_of)
@@ -75,6 +77,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                              "account": row["account"], "commodity": row["commodity"],
                              "owner_id": row["owner_id"], "remaining_native": row["remaining_native"],
                              "origin": row["origin"],
+                             "purchase_date": row["purchase_date"],
                              "purchase_ref": row["purchase_ref"]})
     for row in unresolved_clearings:
         advance_by_coordinate[(row["account"], row["commodity"], row["lot"])] += Fraction(
@@ -84,8 +87,10 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         balances[coordinate] == advance_by_coordinate[coordinate] - obligation_by_coordinate[coordinate]
         for coordinate in coordinates)
     coverage_audit = None
-    if cash["review_state"] == debt["review_state"] == "complete" and liability_matches:
-        coverage_audit = audit_debt_coverage(cash, booked_debts, cutover, as_of, sources, debt_coverage)
+    settlement_audit = audit_debt_settlements(
+        booked_debts, cutover, as_of, cash["report_currency"], sources, debt_settlements)
+    if cash["review_state"] == debt["review_state"] == settlement_audit["review_state"] == "complete" and liability_matches:
+        coverage_audit = audit_debt_coverage(cash, settlement_audit["valued_debts"], cutover, as_of, sources, debt_coverage)
 
     declaration_sha = None
     complete_statement = False
@@ -117,8 +122,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         reasons.append("BOOKED_OBLIGATIONS_PENDING")
     if not liability_matches:
         reasons.append("BOOKED_LIABILITY_UNMATCHED")
-    if any(row["commodity"] != cash["report_currency"] for row in booked_debts):
-        reasons.append("SETTLEMENT_VALUE_MISSING")
+    reasons.extend(settlement_audit["reason_codes"])
     if coverage_audit is not None and coverage_audit["review_state"] != "complete":
         reasons.append("DEBT_COVERAGE_PENDING")
     if not complete_statement:
@@ -168,12 +172,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                 reviewed_remaining=exact_text(obligation_by_coordinate[coordinate]),
                 reviewed_receivable=exact_text(advance_by_coordinate[coordinate]),
                 signed_reviewed_units=exact_text(expected)))
-    for row in booked_debts:
-        if row["commodity"] != cash["report_currency"]:
-            review_items.append(review_item("SETTLEMENT_VALUE_MISSING", sources.get(_key(row["purchase_ref"])),
-                                            ref=row["purchase_ref"], account=row["account"],
-                                            commodity=row["commodity"], owner_id=row["owner_id"],
-                                            remaining_native=row["remaining_native"]))
+    review_items.extend(settlement_audit["review_items"])
     if coverage_audit is not None:
         review_items.extend(coverage_audit["review_items"])
     if not complete_statement:
@@ -199,13 +198,16 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                        remaining=Fraction(row["remaining_native"]),
                        currency=row["commodity"], kind="consumer",
                        owner=row["owner_id"], due_on=None,
-                       evidence=f"booked:{fin.digest}:{row['obligation_id']}")
-            for row in booked_debts)
+                       evidence=f"booked:{fin.digest}:{row['obligation_id']};settlement:{settlement_audit['review_sha256']}",
+                       settlement_amount=(Fraction(row["remaining_report"])
+                                          if row["commodity"] != cash["report_currency"] else None),
+                       settlement_as_of=as_of if row["commodity"] != cash["report_currency"] else None)
+            for row in settlement_audit["valued_debts"])
         state = ActualInput(as_of=as_of, report_currency=cash["report_currency"],
                             resources=resources, obligations=obligations_input,
                             coverage=coverage_audit["coverage"],
                             scope_complete=True,
-                            scope_evidence=f"cash:{fin.digest};completeness:{declaration_sha};coverage:{coverage_audit['review_sha256']}",
+                            scope_evidence=f"cash:{fin.digest};completeness:{declaration_sha};coverage:{coverage_audit['review_sha256']};settlement:{settlement_audit['review_sha256']}",
                             free_owner_ids=tuple(cash["spendable_owner_ids"]))
         report = calculate_actual(state)
         if report.capability.value is None:
@@ -231,6 +233,8 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                 {**row, "source": sources.get(_key(row["outflow_ref"]))}
                 for row in unresolved_clearings] if actual is not None else None,
             "opening_responsibilities": debt["opening_declarations"] if actual is not None else None,
+            "debt_settlements_sha256": settlement_audit["review_sha256"],
+            "settlement_allocations": settlement_audit["allocations"] if actual is not None else None,
             "outside_budget_cash": cash["outside_budget_cash"],
             "report_currency": cash["report_currency"],
             "reason_codes": reasons,

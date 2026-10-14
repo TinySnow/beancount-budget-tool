@@ -24,7 +24,7 @@ from ..refs import _lot
 from ..yamlstrict import load_yaml
 from .classification import _key
 from .facts import FactIndex
-from .obligation_opening import compile_obligation_opening, opening_source
+from .obligation_opening import compile_obligation_opening, opening_source, paired_price_value
 from .ownership import _owners
 from .provenance import valid_digest
 from .source import scan_v6_source
@@ -84,19 +84,20 @@ def audit_simple_obligations(root: Path, cutover: date,
             counterpart = next((p for p in entry.postings if p is not posting), None) if len(entry.postings) == 2 else None
             shape = None
             if counterpart is not None and amount != 0 and (
-                    posting.cost is None and posting.price is None and
-                    counterpart.cost is None and counterpart.price is None and
+                    posting.cost is None and counterpart.cost is None and
                     counterpart.units.currency == posting.units.currency and
-                    exact(counterpart.units.number) == -amount and
-                    fin.raw_price(posting)[0] == "none" and
-                    fin.raw_price(counterpart)[0] == "none"):
+                    exact(counterpart.units.number) == -amount):
                 other_root = counterpart.account.split(":", 1)[0]
                 if amount < 0 and other_root == expense_root:
+                    meta = posting.meta or entry.meta
+                    require(paired_price_value(fin, posting, counterpart), "OBLIGATION_PRICE_MISMATCH",
+                            "消费与负债两腿的原文价格权重须精确相等；不能用 loader 容差掩盖计价残差",
+                            f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}")
                     shape = "consumer_purchase"
-                elif amount > 0 and other_root == asset_root:
-                    shape = "asset_outflow"
-                elif amount < 0 and other_root == asset_root:
-                    shape = "asset_inflow"
+                elif (posting.price is None and counterpart.price is None and
+                      fin.raw_price(posting)[0] == fin.raw_price(counterpart)[0] == "none" and
+                      other_root == asset_root):
+                    shape = "asset_outflow" if amount > 0 else "asset_inflow"
             candidate = {"liability_ref": ref, "counterpart_ref":
                          facts.for_posting(counterpart).as_dict() if shape else None,
                          "account": posting.account, "commodity": posting.units.currency,
@@ -193,7 +194,8 @@ def audit_simple_obligations(root: Path, cutover: date,
                 require(ident not in balances, "DUPLICATE_OBLIGATION_CLAIM",
                         "稳定责任 ID 重复用于新消费", key)
                 balances[ident] = {"account": coord, "owner_id": claim["owner_id"],
-                                   "remaining": -amount, "purchase_ref": candidate["liability_ref"]}
+                                   "remaining": -amount, "purchase_ref": candidate["liability_ref"],
+                                   "purchase_date": candidate["date"]}
             elif kind == "payment":
                 require(ident in balances, "OBLIGATION_SETTLEMENT_UNKNOWN",
                         "还款未指向本审计中较早发生的消费责任", key)
@@ -229,6 +231,7 @@ def audit_simple_obligations(root: Path, cutover: date,
                   "commodity": item["account"][1], "lot": item["account"][2],
                   "owner_id": item["owner_id"],
                   "origin": item.get("origin", "current_period"),
+                  "purchase_date": item.get("purchase_date"),
                   "remaining_native": exact_text(item["remaining"]),
                   "purchase_ref": item["purchase_ref"]}
                  for ident, item in sorted(balances.items())]

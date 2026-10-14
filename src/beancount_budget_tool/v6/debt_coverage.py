@@ -20,12 +20,20 @@ from .review_diagnostics import review_item
 AMOUNT = re.compile(r"(?:0|[1-9]\d*)(?:\.\d+)?\Z")
 
 
+def _currency(row: dict) -> str:
+    return row.get("settlement_currency", row["commodity"])
+
+
+def _remaining(row: dict) -> Fraction:
+    return Fraction(row.get("remaining_report", row["remaining_native"]))
+
+
 def audit_debt_coverage(cash: dict, debts: list[dict], cutover: date, as_of: date,
                         sources: dict[str, str], declarations: Path | None = None) -> dict:
     """A decision may reserve several cash slices or explicitly reserve none.
 
     No same-purpose matching, FIFO allocation or capacity clamping happens.
-    Every named-purpose report-currency debt needs a decision; daily-purpose debt retains
+    Every named-purpose debt with a proved report value needs a decision; daily-purpose debt retains
     the existing full-uncovered behavior unless a reservation is declared.
     """
     currency = cash["report_currency"]
@@ -43,7 +51,7 @@ def audit_debt_coverage(cash: dict, debts: list[dict], cutover: date, as_of: dat
                 slices[(*coordinate, part["owner_id"])] = Fraction(part["units"])
 
     required_ids = {row["obligation_id"] for row in debts
-                    if row["commodity"] == currency and row["owner_id"] not in cash["spendable_owner_ids"]}
+                    if _currency(row) == currency and row["owner_id"] not in cash["spendable_owner_ids"]}
     decisions = set()
     covered = defaultdict(Fraction)
     coordinate_used = defaultdict(Fraction)
@@ -87,8 +95,8 @@ def audit_debt_coverage(cash: dict, debts: list[dict], cutover: date, as_of: dat
                     _key(decision["purchase_ref"]) == _key(row["purchase_ref"]),
                     "DEBT_COVERAGE_REF_INVALID", "覆盖决定的消费来源与已审责任不符或已过期",
                     yaml_path_location(declarations, (*keys, "purchase_ref")))
-            require(row["commodity"] == currency, "DEBT_COVERAGE_CURRENCY_UNSUPPORTED",
-                    "当前覆盖协议仅支持报告货币未偿责任", where)
+            require(_currency(row) == currency, "DEBT_COVERAGE_CURRENCY_UNSUPPORTED",
+                    "覆盖须使用报告货币责任金额或已审外币清偿金额", where)
             require(type(decision["reason"]) is str and bool(decision["reason"].strip()),
                     "DEBT_COVERAGE_INVALID", "覆盖或明确不覆盖须留下审阅理由",
                     yaml_path_location(declarations, (*keys, "reason")))
@@ -123,9 +131,9 @@ def audit_debt_coverage(cash: dict, debts: list[dict], cutover: date, as_of: dat
                 coordinate_used[coordinate] += amount
                 slice_used[slice_key] += amount
                 owner_used[owner] += amount
-                require(covered[ident] <= Fraction(row["remaining_native"]),
+                require(covered[ident] <= _remaining(row),
                         "DEBT_COVERAGE_OBLIGATION_EXCEEDED",
-                        f"总覆盖 {exact_text(covered[ident])} 超过责任未偿额 {row['remaining_native']}", source)
+                        f"总覆盖 {exact_text(covered[ident])} 超过责任清偿额 {exact_text(_remaining(row))} {currency}", source)
                 require(slice_used[slice_key] <= slices[slice_key],
                         "DEBT_COVERAGE_RESOURCE_EXCEEDED",
                         f"同一现金切片总覆盖 {exact_text(slice_used[slice_key])} 超过当前份额 {exact_text(slices[slice_key])}", source)
@@ -150,11 +158,13 @@ def audit_debt_coverage(cash: dict, debts: list[dict], cutover: date, as_of: dat
         "DEBT_COVERAGE_PENDING", sources[_key(outstanding[ident]["purchase_ref"])],
         obligation_id=ident, account=outstanding[ident]["account"],
         commodity=outstanding[ident]["commodity"], owner_id=outstanding[ident]["owner_id"],
-        remaining_native=outstanding[ident]["remaining_native"], ref=outstanding[ident]["purchase_ref"])
+        remaining_native=outstanding[ident]["remaining_native"],
+        remaining_report=exact_text(_remaining(outstanding[ident])), settlement_currency=currency,
+        ref=outstanding[ident]["purchase_ref"])
         for ident in missing]
     return {"review_state": "pending" if missing else "complete", "review_sha256": review_sha,
             "coverage": tuple(allocations), "allocations": records,
             "missing_decision_ids": missing, "review_items": review_items,
             "obligations": [{"obligation_id": ident, "covered": exact_text(covered[ident]),
-                             "uncovered": exact_text(Fraction(row["remaining_native"]) - covered[ident])}
-                            for ident, row in sorted(outstanding.items()) if row["commodity"] == currency]}
+                             "uncovered": exact_text(_remaining(row) - covered[ident])}
+                            for ident, row in sorted(outstanding.items()) if _currency(row) == currency]}

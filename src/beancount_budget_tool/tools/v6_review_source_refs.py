@@ -25,7 +25,7 @@ from beancount_budget_tool.yamlstrict import StrictLoader, load_yaml
 REVIEW_FIELDS = (
     "accounts", "opening", "ownership", "obligations", "completeness",
     "classifications", "benefit_groups", "expense_plans", "purpose_plans",
-    "h_transfers", "k_events", "h_fx", "purpose_pools", "debt_coverage",
+    "h_transfers", "k_events", "h_fx", "purpose_pools", "debt_coverage", "debt_settlements",
 )
 RAW_TRANSACTION = frozenset(("path", "transaction_sha256", "occurrence"))
 RAW_POSTING = RAW_TRANSACTION | frozenset((
