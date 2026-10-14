@@ -17,9 +17,12 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
+from ..yamlstrict import yaml_key_location
 from .accounts import _lot, audit_accounts
 from .k_events import audit_k_events
 from .opening import audit_opening
+from .classification import _key
+from .review_diagnostics import posting_sources, review_item
 
 
 def audit_k_book_purposes(root: Path, cutover: date, as_of: date,
@@ -101,9 +104,22 @@ def audit_k_book_purposes(root: Path, cutover: date, as_of: date,
                      "status": "CERTIFIED_BOOK_FLOW" if key not in missing_opening and
                      not pending_count[key] else "NEEDS_REVIEW"})
     pending = [row for row in rows if row["status"] == "NEEDS_REVIEW"]
+    sources = posting_sources(fin)
+    review_items = [review_item(
+        "K_BOOK_PURPOSE_PENDING", yaml_key_location(opening, "k_openings"),
+        account=account, commodity=commodity,
+        detail="该 K 账户的期初账面累计数尚未审定。")
+        for account, commodity, lot in sorted(missing_opening)]
+    for event in events_audit["events"]:
+        if event["date"] <= as_of.isoformat() and event["status"] != "CERTIFIED":
+            review_items.append(review_item(
+                event["reason_codes"][0], sources[_key(event["k_ref"])], ref=event["k_ref"],
+                account=event["k_account"], commodity=event["commodity"],
+                signed_units=event["signed_k_units"], blocking_reason_code="K_BOOK_PURPOSE_PENDING"))
     return {"mode": "v6_k_book_purpose_changes", "cutover": cutover.isoformat(),
             "as_of": as_of.isoformat(), "ledger_snapshot": fin.digest,
             "status": "CERTIFIED" if not pending and
             account_audit["review_state"] == "complete" else "NEEDS_REVIEW",
             "rows": rows, "pending_accounts": [row["account"] for row in pending],
+            "review_items": review_items,
             "note": "逐 K 账户的签约申赎账面数与 cutover 后用途变动；不代表基金份额、市值、可赎回额或真实持有余额，且不与 H 资产合计"}

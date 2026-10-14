@@ -167,6 +167,32 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
                              ("CERTIFIED_SCOPED", "report"))
             self.assertTrue(migrated["structural_check"]["financial_facts_equal"])
 
+            config = base / "month.yaml"
+            document = yaml.safe_load(config.read_text(encoding="utf-8"))
+            del document["completeness"]
+            save("month.yaml", document)
+            pending = audit_month_workflow(config)
+            self.assertEqual(pending["status"], "NEEDS_REVIEW")
+            self.assertIsNone(pending["report"])
+            self.assertEqual(len(pending["review_items"]), 1)
+            item = pending["review_items"][0]
+            self.assertEqual(item["metrics"], ["实际可花", "最多能花"])
+            self.assertEqual(item["source"], f"{config.resolve()}:1")
+            self.assertIn("本月末的完整性声明", render_workflow_text(pending))
+            self.assertNotIn("已审月报", render_workflow_text(pending))
+
+            (base / "expense-plans.yaml").write_text(
+                "schema: 6\nreport_currency: CNY\nspendable_cap_category_id: food\n"
+                "months:\n  '2026-10': {}\n", encoding="utf-8")
+            missing_plan = audit_month_workflow(config)
+            items = {row["reason_code"]: row for row in missing_plan["review_items"]}
+            self.assertEqual(items["PLAN_MISSING"]["target_id"], "food")
+            self.assertIn("餐饮", items["PLAN_MISSING"]["detail"])
+            plan_lines = (base / "expense-plans.yaml").read_text(encoding="utf-8").splitlines()
+            month_line = plan_lines.index("  '2026-10': {}") + 1
+            self.assertEqual(items["PLAN_MISSING"]["source"],
+                             f"{(base / 'expense-plans.yaml').resolve()}:{month_line}")
+
 
 if __name__ == "__main__":
     unittest.main()

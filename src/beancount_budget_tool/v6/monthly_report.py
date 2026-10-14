@@ -13,16 +13,19 @@ import sys
 
 from ..errors import BudgetError, require
 from ..exact import exact_text
-from ..financial import booked_through, frozen_financial
+from ..financial import booked_through, frozen_financial, load_financial
 from ..yamlstrict import load_yaml, yaml_key_location
 from .actual_snapshot import audit_actual_snapshot
+from .classification import _key
 from .facts import frozen_fact_indices
 from .holdings import audit_h_holdings
 from .k_book_purposes import audit_k_book_purposes
+from .metric_review import enrich_metric_reviews
 from .purpose_balances import summarize_purpose_balances
 from .purpose_pools import audit_purpose_pools
 from .purpose_progress import audit_monthly_purpose_progress
 from .review_queue import audit_review_queue, render_text as render_review_queue
+from .review_diagnostics import posting_sources, annotate_source_items
 from .targets import _month, audit_monthly_expense_targets
 from .tracking import audit_monthly_tracking
 
@@ -160,6 +163,13 @@ def audit_reviewed_month(config: Path) -> dict:
                                        ownership, path("k_events"))
         holdings = audit_h_holdings(root, cutover, as_of, accounts, opening, ownership)
         account_purposes = summarize_account_purposes(holdings, pool)
+        locations = posting_sources(load_financial(root))
+        for position in account_purposes["pending"]:
+            position["reasons"] = [
+                {**reason, "sources": [locations[_key(ref)]
+                                       for ref in reason.get("refs", [])] or
+                 [yaml_key_location(opening, "h_holdings")]}
+                for reason in position["reasons"]]
         tracking = audit_monthly_tracking(root, cutover, month)
         owner_document = load_yaml(ownership)
         owner_names = {row["id"]: row["name"] for row in owner_document["owners"]}
@@ -208,8 +218,12 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
                                   first_day: date, as_of: date) -> dict:
     review = audit_review_queue(config, first_day, as_of)
     if review["items"]:
-        return {"status": "NEEDS_REVIEW", "stage": "source",
+        review["items"] = annotate_source_items(review["items"])
+        status = ("IMPLEMENTATION_BLOCKED" if any(item["reason_kind"] == "implementation_limit"
+                                                  for item in review["items"]) else "NEEDS_REVIEW")
+        return {"status": status, "stage": "source",
                 "month": month, "review_queue": review, "report": None,
+                "review_items": review["items"],
                 "pending_metrics": []}
 
     report = audit_reviewed_month(config)
@@ -227,6 +241,7 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
                             "reason_codes": result.get("reason_codes", []),
                             "missing_target_ids": result.get("missing_target_ids", []),
                             "pending_events": result.get("pending_actual_events", []),
+                            "review_items": result.get("review_items", []),
                             "source": str((config.parent / document[source_key]).resolve())
                             if source_key in document else str(config)})
     capped = report.get("max_spendable", {"status": "NOT_CONFIGURED"})
@@ -242,6 +257,7 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
     if report.get("k_book_purposes", {"status": "CERTIFIED"})["status"] != "CERTIFIED":
         pending.append({"metric": "K 账面申赎用途", "status": "NEEDS_REVIEW",
                         "reason_codes": ["K_BOOK_PURPOSE_PENDING"],
+                        "review_items": report["k_book_purposes"].get("review_items", []),
                         "pending_accounts": report["k_book_purposes"]["pending_accounts"],
                         "source": str((config.parent / document["k_events"]).resolve())})
     balance_view = report.get("purpose_balances", {"status": "CERTIFIED"})
@@ -252,16 +268,42 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
             pending.append({"metric": "预算用途余额", "status": "NEEDS_REVIEW",
                             "reason_codes": uncovered,
                             "source": yaml_key_location(config, "purpose_pools")})
-    return {"status": "NEEDS_REVIEW" if pending else "CERTIFIED_SCOPED",
+    items = enrich_metric_reviews(config, document, report, pending)
+    blocked = any(item["reason_kind"] == "implementation_limit" for item in items)
+    return {"status": "IMPLEMENTATION_BLOCKED" if blocked else
+            "NEEDS_REVIEW" if pending else "CERTIFIED_SCOPED",
             "stage": "metrics" if pending else "report", "month": month,
             "review_queue": review, "report": None if pending else report,
+            "review_items": items,
             "pending_metrics": pending}
 
 
 def render_workflow_text(outcome: dict) -> str:
     if outcome["stage"] == "source":
-        return render_review_queue(outcome["review_queue"])
+        text = render_review_queue(outcome["review_queue"])
+        if outcome.get("status") == "IMPLEMENTATION_BLOCKED":
+            text += "\n其中含当前程序实现缺口；人工改标签不能解决这些计算限制。"
+        return text
     if outcome["stage"] == "metrics":
+        if "review_items" in outcome:
+            state = "月报阻断（存在程序实现缺口）" if outcome["status"] == "IMPLEMENTATION_BLOCKED" else "月报待审"
+            lines = [f"v6 {outcome['month']} {state}：{outcome['status']}"]
+            for item in outcome["review_items"]:
+                label = "程序实现缺口" if item["reason_kind"] == "implementation_limit" else "待审"
+                lines.append(f"  {'、'.join(item['metrics'])}／{label}（{item['reason_code']}）："
+                             f"{item['detail']} [{item['source']}]")
+                context = item.get("account", "")
+                if "remaining_native" in item:
+                    context += f" 未结金额 {item['remaining_native']} {item.get('commodity', '')}"
+                elif "signed_booked_units" in item:
+                    context += (f" 账本余额 {item['signed_booked_units']} {item.get('commodity', '')}；"
+                                f"已审责任未偿额 {item['reviewed_remaining']}")
+                elif "signed_units" in item:
+                    context += f" {item['signed_units']} {item.get('commodity', '')}"
+                if context:
+                    lines.append(f"    {context}")
+            lines.append("本次不签发完整月报；处理上述待审事实或程序实现缺口后重跑。")
+            return "\n".join(lines)
         lines = [f"v6 {outcome['month']} 月报待审：以下指标尚未认证"]
         for item in outcome["pending_metrics"]:
             reasons = ", ".join(item["reason_codes"]) or item["status"]
@@ -277,7 +319,7 @@ def render_workflow_text(outcome: dict) -> str:
                              f"{position['lot']}：{codes}")
             for account in item.get("pending_accounts", []):
                 lines.append(f"    {account}：K 期初或申赎用途待审")
-        lines.append("已认证的局部结果仍可通过 --format json 查看；本次不签发完整月报。")
+        lines.append("本次不签发完整月报；修正上述问题后重跑。")
         return "\n".join(lines)
     rendered = render_text(outcome["report"])
     review = outcome["review_queue"]

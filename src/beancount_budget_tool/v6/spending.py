@@ -16,6 +16,7 @@ from .benefits import audit_economic_benefits
 from .classification import _key, audit_classification
 from .facts import FactIndex
 from .valuation import audit_classification_valuation
+from .review_diagnostics import posting_sources, review_item
 
 
 def _audit_monthly_spending(root: Path, cutover: date, month: str,
@@ -45,6 +46,7 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
     benefits = audit_economic_benefits(root, cutover, classifications, benefit_groups)
     fin = load_financial(root)
     facts = FactIndex(fin)
+    locations = posting_sources(fin)
     ref_dates = {_key(facts.for_posting(posting).as_dict()): entry.date.strftime("%Y-%m")
                  for entry in fin.entries if isinstance(entry, data.Transaction)
                  for posting in entry.postings}
@@ -80,6 +82,17 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
             reasons.append("VALUATION_MISSING")
         if role_benefits:
             reasons.append("BENEFIT_SOURCE_PENDING")
+        review_items = []
+        for pending_rows, code in ((role_missing, "CLASSIFICATION_PENDING"),
+                                   (role_unvalued, "VALUATION_MISSING"),
+                                   (role_benefits, "BENEFIT_SOURCE_PENDING")):
+            for row in pending_rows:
+                review_items.append(review_item(
+                    row["reason_code"] if code == "BENEFIT_SOURCE_PENDING" else code,
+                    row.get("source") or locations[_key(row["ref"])],
+                    account=row["account"], commodity=row["commodity"],
+                    signed_units=row["signed_units"], ref=row["ref"],
+                    blocking_reason_code=code))
         native = [row for row in valuation["native_totals"]
                   if row["month"] == month and row["role"] == role]
         direct = {ident: Fraction(0) for ident in parents}
@@ -161,6 +174,7 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
             category_details.append(detail)
         result = {"status": "NEEDS_REVIEW" if reasons else "CERTIFIED",
                   "reason_codes": reasons, "report_currency": report_currency,
+                  "review_items": review_items,
                   "source_postings": len(role_claims) + len(role_missing),
                   "missing_classifications": len(role_missing),
                   "missing_historical_values": historical_unvalued_count,

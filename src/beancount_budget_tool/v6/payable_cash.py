@@ -41,6 +41,7 @@ def audit_payable_cash(root: Path, cutover: date, as_of: date, accounts: Path,
                 row["status"] != "CERTIFIED"):
             pending.append({"account": row["account"], "commodity": row["commodity"],
                             "lot": row["lot"], "status": row["status"],
+                            "reasons": row["reasons"],
                             "reason_codes": [reason["code"] for reason in row["reasons"]]
                             if row["status"] != "CERTIFIED" else ["PAYABLE_CURRENCY_UNSUPPORTED"]})
             continue

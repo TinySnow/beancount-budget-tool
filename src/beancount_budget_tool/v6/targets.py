@@ -12,9 +12,10 @@ from hashlib import sha256
 from pathlib import Path
 import re
 
-from ..errors import require
+from ..errors import BudgetError, require
 from ..exact import exact_text
-from ..yamlstrict import load_yaml, require_quoted_month_keys
+from ..yamlstrict import load_yaml, require_quoted_month_keys, yaml_key_location, yaml_path_location
+from .review_diagnostics import review_item
 from .classification import _registry
 from .spending import _audit_monthly_spending
 from .settlement_budget import audit_settlement_budget_values
@@ -41,18 +42,21 @@ def _fields(value: object, allowed: set[str], source: str) -> dict:
     return value
 
 
-def _target_layer(value: object, ids: set[str], source: str) -> dict[str, dict[str, Fraction]]:
-    row = _fields(value, {"expense_targets", "expense_subtree_targets"}, source)
+def _target_layer(value: object, ids: set[str], path: Path,
+                  keys: tuple[str, ...]) -> dict[str, dict[str, Fraction]]:
+    row = _fields(value, {"expense_targets", "expense_subtree_targets"}, yaml_path_location(path, keys))
     parsed = {}
     for field in ("expense_targets", "expense_subtree_targets"):
         targets = row.get(field, {})
-        require(type(targets) is dict, "PLAN_INVALID", f"{field} 必须是 ID 到金额的映射", source)
+        require(type(targets) is dict, "PLAN_INVALID", f"{field} 必须是 ID 到金额的映射",
+                yaml_path_location(path, (*keys, field)))
         result = {}
         for ident, raw in targets.items():
             require(type(ident) is str and ident in ids, "PLAN_CATEGORY_UNKNOWN",
-                    "计划引用未注册消费类别", str(ident))
+                    "计划引用未注册消费类别", yaml_path_location(path, (*keys, field, str(ident))))
             require(type(raw) is str and bool(DECIMAL.fullmatch(raw)),
-                    "PLAN_AMOUNT_INVALID", "目标须是非负十进制字符串", f"{source}/{field}/{ident}")
+                    "PLAN_AMOUNT_INVALID", "目标须是非负十进制字符串",
+                    yaml_path_location(path, (*keys, field, ident)))
             result[ident] = Fraction(raw)
         parsed[field] = result
     return parsed
@@ -70,21 +74,27 @@ def load_expense_targets(path: Path, month: str, report_currency: str,
     document = _fields(load_yaml(path),
                        {"schema", "report_currency", "spendable_cap_category_id",
                         "defaults", "effective_templates", "months"},
-                       str(path))
+                       f"{path.resolve()}:1")
     require(type(document.get("schema")) is int and document["schema"] == 6,
-            "SCHEMA_UNSUPPORTED", "消费目标文件 schema 必须是 6", str(path))
+            "SCHEMA_UNSUPPORTED", "消费目标文件 schema 必须是 6", yaml_key_location(path, "schema"))
     require(document.get("report_currency") == report_currency,
-            "REPORT_CURRENCY_INVALID", "消费目标货币须与报告货币一致", str(path))
+            "REPORT_CURRENCY_INVALID", "消费目标货币须与报告货币一致", yaml_key_location(path, "report_currency"))
     cap_id = document.get("spendable_cap_category_id")
     if "spendable_cap_category_id" in document:
         require(type(cap_id) is str and cap_id in ids, "PLAN_CATEGORY_UNKNOWN",
-                "最多能花的消费目标上限须引用已注册类别", str(path))
-    defaults = _target_layer(document.get("defaults", {}), ids, "defaults")
+                "最多能花的消费目标上限须引用已注册类别", yaml_key_location(path, "spendable_cap_category_id"))
+    defaults = _target_layer(document.get("defaults", {}), ids, path, ("defaults",))
     def parse_layers(field: str) -> dict[str, dict[str, dict[str, Fraction]]]:
         values = document.get(field, {})
-        require(type(values) is dict, "PLAN_INVALID", f"{field} 必须是月份映射", str(path))
-        return {_month(key): _target_layer(value, ids, f"{field}/{key}")
-                for key, value in values.items()}
+        require(type(values) is dict, "PLAN_INVALID", f"{field} 必须是月份映射", yaml_key_location(path, field))
+        result = {}
+        for key, value in values.items():
+            try:
+                month_key = _month(key)
+            except BudgetError as exc:
+                raise BudgetError(exc.code, exc.message, yaml_path_location(path, (field, str(key)))) from exc
+            result[month_key] = _target_layer(value, ids, path, (field, month_key))
+        return result
     effective = parse_layers("effective_templates")
     overrides = parse_layers("months")
     targets = {field: dict(defaults[field]) for field in defaults}
@@ -208,11 +218,18 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
     reasons = list(expense["reason_codes"])
     if missing:
         reasons.append("PLAN_MISSING")
+    review_items = list(expense["review_items"])
+    names = {row["id"]: row["name"] for row in rows}
+    review_items.extend(review_item(
+        "PLAN_MISSING", yaml_path_location(plans, ("months", month)), target_id=ident,
+        detail=f"本月消费类别「{names[ident]}」缺少目标；填写该类别目标或覆盖它的父类别子树目标。")
+        for ident in sorted(missing))
     return {"mode": "v6_monthly_expense_target_report", "month": month,
             "cutover": cutover.isoformat(), "ledger_snapshot": spending["ledger_snapshot"],
             "plan_sha256": expanded["plan_sha256"], "report_currency": report_currency,
             "spendable_cap_category_id": expanded["spendable_cap_category_id"],
             "status": "NEEDS_REVIEW" if reasons else "CERTIFIED", "reason_codes": reasons,
+            "review_items": review_items,
             "missing_target_ids": sorted(missing), "categories": details,
             "comparison_basis": "actual_settlement_cost_where_proved" if settlement else
                                 "historical_report_value",

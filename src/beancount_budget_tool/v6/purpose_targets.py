@@ -8,9 +8,9 @@ from hashlib import sha256
 from pathlib import Path
 import re
 
-from ..errors import require
+from ..errors import BudgetError, require
 from ..exact import exact_text
-from ..yamlstrict import load_yaml, require_quoted_month_keys
+from ..yamlstrict import load_yaml, require_quoted_month_keys, yaml_key_location, yaml_path_location
 
 
 MONTH = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])\Z")
@@ -47,34 +47,43 @@ def load_purpose_targets(path: Path, month: str, report_currency: str,
     document = load_yaml(path)
     require(type(document) is dict and set(document) <= {
         "schema", "report_currency", "defaults", "effective_templates", "months"},
-        "PLAN_INVALID", "用途目标文件字段无效", str(path))
+        "PLAN_INVALID", "用途目标文件字段无效", f"{path.resolve()}:1")
     require(type(document.get("schema")) is int and document["schema"] == 6,
-            "SCHEMA_UNSUPPORTED", "用途目标文件 schema 必须是 6", str(path))
+            "SCHEMA_UNSUPPORTED", "用途目标文件 schema 必须是 6", yaml_key_location(path, "schema"))
     require(document.get("report_currency") == report_currency,
-            "REPORT_CURRENCY_INVALID", "用途目标货币须与报告货币一致", str(path))
+            "REPORT_CURRENCY_INVALID", "用途目标货币须与报告货币一致", yaml_key_location(path, "report_currency"))
 
-    def layer(value: object, source: str) -> dict[str, Fraction | str]:
+    def layer(value: object, keys: tuple[str, ...]) -> dict[str, Fraction | str]:
         require(type(value) is dict and set(value) <= {"allocation_targets"},
-                "PLAN_INVALID", "用途目标层字段无效", source)
+                "PLAN_INVALID", "用途目标层字段无效", yaml_path_location(path, keys))
         raw = value.get("allocation_targets", {})
-        require(type(raw) is dict, "PLAN_INVALID", "allocation_targets 必须是用途 ID 映射", source)
+        require(type(raw) is dict, "PLAN_INVALID", "allocation_targets 必须是用途 ID 映射",
+                yaml_path_location(path, (*keys, "allocation_targets")))
         parsed = {}
         for ident, amount in raw.items():
             require(type(ident) is str and ident in owner_ids,
-                    "PLAN_OWNER_UNKNOWN", "目标引用未登记用途", str(ident))
+                    "PLAN_OWNER_UNKNOWN", "目标引用未登记用途",
+                    yaml_path_location(path, (*keys, "allocation_targets", str(ident))))
             require(type(amount) is str and
                     (amount == NOT_ASSESSED or bool(AMOUNT.fullmatch(amount))),
                     "PLAN_AMOUNT_INVALID", "用途目标须是非负十进制字符串或 not_assessed",
-                    f"{source}/{ident}")
+                    yaml_path_location(path, (*keys, "allocation_targets", ident)))
             parsed[ident] = amount if amount == NOT_ASSESSED else Fraction(amount)
         return parsed
 
     def dated_layers(field: str) -> dict[str, dict[str, Fraction | str]]:
         values = document.get(field, {})
-        require(type(values) is dict, "PLAN_INVALID", f"{field} 必须是月份映射", str(path))
-        return {_month(key): layer(value, f"{field}/{key}") for key, value in values.items()}
+        require(type(values) is dict, "PLAN_INVALID", f"{field} 必须是月份映射", yaml_key_location(path, field))
+        result = {}
+        for key, value in values.items():
+            try:
+                month_key = _month(key)
+            except BudgetError as exc:
+                raise BudgetError(exc.code, exc.message, yaml_path_location(path, (field, str(key)))) from exc
+            result[month_key] = layer(value, (field, month_key))
+        return result
 
-    targets = layer(document.get("defaults", {}), "defaults")
+    targets = layer(document.get("defaults", {}), ("defaults",))
     effective = dated_layers("effective_templates")
     overrides = dated_layers("months")
     for start in sorted(effective):
