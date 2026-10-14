@@ -114,6 +114,15 @@ class ReviewMigrationMonthTests(unittest.TestCase):
         missing = review_month(self.before, self.after, "2026-10", date(2026, 9, 1))
         self.assertEqual((missing["status"], missing["stage"]),
                          ("REVIEW_CONFIG_REQUIRED", "config"))
+        setup = missing["setup"]
+        self.assertEqual(setup["as_of"], "2026-10-31")
+        self.assertEqual(len(setup["accounts_to_review"]), 1)
+        self.assertEqual(setup["accounts_to_review"][0]["account"], "Assets:Cash")
+        self.assertEqual(setup["untagged_income_expense_postings"], 1)
+        self.assertEqual(setup["classification_groups"][0]["account"], "Income:Salary")
+        self.assertTrue(setup["classification_groups"][0]["first_source"].endswith(
+            "main.bean:10"))
+        self.assertIn("--config", render_text(missing))
         outcome = {"status": "NEEDS_REVIEW", "stage": "metrics", "month": "2026-10",
                    "review_queue": {"items": []}, "report": None,
                    "pending_metrics": [{"metric": "实际可花", "status": "NEEDS_REVIEW",
@@ -127,6 +136,16 @@ class ReviewMigrationMonthTests(unittest.TestCase):
         self.assertEqual((result["status"], result["stage"]),
                          ("NEEDS_REVIEW", "metrics"))
         self.assertIn("EXTERNAL_SCOPE_PENDING", render_text(result))
+
+    def test_setup_preview_ignores_future_month_transactions(self):
+        future = ('2026-11-02 * "future salary"\n'
+                  '  Assets:Cash 200 CNY\n'
+                  '  Income:Salary -200 CNY\n')
+        self.before.write_text(self.ledger + future, encoding="utf-8")
+        self.after.write_text(self.ledger + future, encoding="utf-8")
+        result = review_month(self.before, self.after, "2026-10", date(2026, 9, 1))
+        self.assertEqual(result["status"], "REVIEW_CONFIG_REQUIRED")
+        self.assertEqual(result["setup"]["untagged_income_expense_postings"], 1)
 
     def test_config_must_reference_this_month_and_after_ledger(self):
         for fields, code in (({"month": "2026-09"}, "MIGRATION_MONTH_CONFIG_MISMATCH"),

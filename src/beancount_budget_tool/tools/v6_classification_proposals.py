@@ -34,6 +34,8 @@ def propose(root: Path, cutover: date, through: date | None = None) -> dict:
                 continue
             groups[posting.account].append({
                 "ref": facts.for_posting(posting).as_dict(),
+                "source": f"{(posting.meta or {}).get('filename', '?')}:"
+                          f"{(posting.meta or {}).get('lineno', '?')}",
                 "account": posting.account,
                 "signed_units": str(Fraction(posting.units.number)),
                 "commodity": posting.units.currency,
