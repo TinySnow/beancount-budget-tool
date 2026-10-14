@@ -312,7 +312,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                 items.append({"kind": "liability_opening", "date": cutover.isoformat(),
                               **row, "source": liability_opening_sources.get(
                                   (row["account"], row["commodity"], row["lot"])),
-                              "reason_code": "LIABILITY_OPENING_PENDING"})
+                              "reason_code": row["reason_code"]})
         require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
                     for item, digest in before.items()),
                 "INPUT_CHANGED", "待审清单运行期间配置或审阅文件发生变化", str(config))

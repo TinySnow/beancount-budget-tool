@@ -24,6 +24,7 @@ from ..refs import _lot
 from ..yamlstrict import load_yaml
 from .classification import _key
 from .facts import FactIndex
+from .obligation_opening import compile_obligation_opening, opening_source
 from .ownership import _owners
 from .provenance import valid_digest
 from .source import scan_v6_source
@@ -38,8 +39,8 @@ def audit_simple_obligations(root: Path, cutover: date,
     """Replay reviewed purchases and payments, keeping all other debt pending.
 
     A certified event is a source and responsibility match, not a complete
-    actual-spendable calculation. Nonzero cutover liability coordinates need
-    a separate opening protocol and therefore keep this audit pending.
+    actual-spendable calculation. Reviewed opening residuals seed stable IDs;
+    unmatched cutover liability coordinates remain pending.
     """
     scan_v6_source(root, cutover)
     require(as_of is None or (type(as_of) is date and as_of >= cutover),
@@ -60,6 +61,7 @@ def audit_simple_obligations(root: Path, cutover: date,
     asset_root = fin.options["name_assets"]
     expense_root = fin.options["name_expenses"]
     opening = defaultdict(Fraction)
+    historical_sources = {}
     candidates = {}
     order = []
     for entry in fin.entries:
@@ -72,6 +74,8 @@ def audit_simple_obligations(root: Path, cutover: date,
             amount = exact(posting.units.number)
             if entry.date < cutover:
                 opening[coord] += amount
+                origin = opening_source(entry, posting, fin, facts)
+                historical_sources[_key(origin["liability_ref"])] = origin
                 continue
             ref = facts.for_posting(posting).as_dict()
             key = _key(ref)
@@ -103,10 +107,11 @@ def audit_simple_obligations(root: Path, cutover: date,
 
     claims = {}
     review_sha = None
+    opening_rows, owners = [], set()
     if declarations is not None:
         document = load_yaml(declarations)
-        require(type(document) is dict and set(document) == {
-            "schema", "cutover", "ledger_snapshot", "loader_version", "owners", "events"},
+        required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "events"}
+        require(type(document) is dict and required <= set(document) <= required | {"opening"},
             "OBLIGATION_DECLARATION_INVALID", "责任侧文件字段不完整或含未知字段")
         require(type(document["schema"]) is int and document["schema"] == 6 and
                 type(document["cutover"]) is str and document["cutover"] == cutover.isoformat() and
@@ -115,6 +120,7 @@ def audit_simple_obligations(root: Path, cutover: date,
                 type(document["events"]) is list,
                 "OBLIGATION_DECLARATION_INVALID", "责任侧文件版本或原审快照格式不匹配")
         owners = set(_owners(document["owners"]).values())
+        opening_rows = document.get("opening", [])
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         for row in document["events"]:
             require(type(row) is dict and set(row) in ({
@@ -159,22 +165,30 @@ def audit_simple_obligations(root: Path, cutover: date,
                         "OBLIGATION_CLAIM_INVALID", "责任与代垫清算须使用各自 ID", key)
             claims[key] = row
 
-    balances = {}
-    advances = {}
+    opening_audit = compile_obligation_opening(opening, historical_sources, opening_rows, owners, declarations)
+    balances = opening_audit["debts"]
+    advances = opening_audit["advances"]
+    opening_pending = opening_audit["pending"]
+    pending_coordinates = {(row["account"], row["commodity"], row["lot"]) for row in opening_pending}
     events = []
     for key in order:
         candidate = candidates[key]
         if as_of is not None and date.fromisoformat(candidate["date"]) > as_of:
             continue
         claim = claims.get(key)
+        kind = claim["kind"] if claim else None
+        ident = (claim.get("clearing_id") if kind.startswith("advance_") else claim["obligation_id"]) if claim else None
+        coord = (candidate["account"], candidate["commodity"], candidate["lot"])
+        opening_required = coord in pending_coordinates and (
+            kind == "payment" and ident not in balances or
+            kind == "advance_reimbursement" and ident not in advances)
         state, codes = "NEEDS_REVIEW", ["OBLIGATION_UNCLAIMED"]
         if candidate["shape"] == "unsupported":
             state, codes = "UNSUPPORTED", ["OBLIGATION_EVENT_UNSUPPORTED"]
+        elif opening_required:
+            state, codes = "NEEDS_REVIEW", ["OBLIGATION_OPENING_REQUIRED"]
         elif claim is not None:
-            kind = claim["kind"]
-            ident = claim.get("clearing_id") if kind.startswith("advance_") else claim["obligation_id"]
             amount = Fraction(candidate["signed_units"])
-            coord = (candidate["account"], candidate["commodity"], candidate["lot"])
             if kind == "consumer_purchase":
                 require(ident not in balances, "DUPLICATE_OBLIGATION_CLAIM",
                         "稳定责任 ID 重复用于新消费", key)
@@ -211,18 +225,17 @@ def audit_simple_obligations(root: Path, cutover: date,
                        "owner_id": (claim.get("owner_id") if claim else None),
                        "review_reason": claim["reason"] if claim else None})
 
-    opening_pending = [{"account": account, "commodity": commodity, "lot": lot,
-                        "signed_units": exact_text(value)}
-                       for (account, commodity, lot), value in sorted(opening.items()) if value]
     remaining = [{"obligation_id": ident, "account": item["account"][0],
                   "commodity": item["account"][1], "lot": item["account"][2],
                   "owner_id": item["owner_id"],
+                  "origin": item.get("origin", "current_period"),
                   "remaining_native": exact_text(item["remaining"]),
                   "purchase_ref": item["purchase_ref"]}
                  for ident, item in sorted(balances.items())]
     pending_advances = [{"clearing_id": ident, "account": item["account"][0],
                          "commodity": item["account"][1], "lot": item["account"][2],
                          "remaining_native": exact_text(item["remaining"]),
+                         "origin": item.get("origin", "current_period"),
                          "outflow_ref": item["outflow_ref"]}
                         for ident, item in sorted(advances.items())]
     return {"mode": "v6_simple_booked_obligation_audit", "cutover": cutover.isoformat(),
@@ -231,9 +244,10 @@ def audit_simple_obligations(root: Path, cutover: date,
             "review_state": "complete" if declarations is not None and not opening_pending and all(
                 row["status"] == "CERTIFIED" for row in events) else "pending",
             "opening_pending": opening_pending,
+            "opening_declarations": opening_audit["declarations"],
             "certified_events": sum(row["status"] == "CERTIFIED" for row in events),
             "pending_events": sum(row["status"] == "NEEDS_REVIEW" for row in events),
             "unsupported_events": sum(row["status"] == "UNSUPPORTED" for row in events),
             "events": events, "obligations": remaining,
             "clearing_advances": pending_advances,
-            "note": "仅认证简单已 booked 消费责任／还款和另经批准的代垫清算；未处理账单、期初、到期、覆盖、外币清偿价或首页"}
+            "note": "认证简单已 booked 消费责任／还款、代垫清算及已审期初未结 ID；不重算 cutover 前费用；账单、到期、外币清偿及完整首页仍另审"}
