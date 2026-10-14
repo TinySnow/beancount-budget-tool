@@ -16,6 +16,17 @@ ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 AMOUNT = re.compile(r"(?:0|[1-9]\d*)(?:\.\d+)?\Z")
 
 
+def paired_price_value(fin, first, second) -> bool:
+    """Preserve exact raw totals when prices accompany a native two-leg debt."""
+    def value(posting):
+        notation, amount, currency = fin.raw_price(posting)
+        units = abs(exact(posting.units.number))
+        if notation == "none":
+            return posting.units.currency, units
+        return currency, amount * units if notation == "@" else amount
+    return value(first) == value(second)
+
+
 def opening_source(entry, posting, fin, facts) -> dict:
     """Recognize original consumer/advance or explicit accounting carry-in legs.
 
@@ -25,22 +36,31 @@ def opening_source(entry, posting, fin, facts) -> dict:
     amount = exact(posting.units.number)
     counterpart = next((p for p in entry.postings if p is not posting), None) if len(entry.postings) == 2 else None
     kind = "unsupported"
+    purchase_date = None
+    price_mismatch = False
     if counterpart is not None and amount and (
-            posting.cost is None and posting.price is None and
-            counterpart.cost is None and counterpart.price is None and
+            posting.cost is None and counterpart.cost is None and
             counterpart.units.currency == posting.units.currency and
-            exact(counterpart.units.number) == -amount and
-            fin.raw_price(posting)[0] == fin.raw_price(counterpart)[0] == "none"):
+            exact(counterpart.units.number) == -amount):
         other_root = counterpart.account.split(":", 1)[0]
-        if amount < 0 and other_root in (fin.options["name_expenses"], fin.options["name_equity"]):
-            kind = "consumer_debt"
-        elif amount > 0 and other_root in (fin.options["name_assets"], fin.options["name_equity"]):
-            kind = "advance_receivable"
+        if amount < 0 and other_root == fin.options["name_expenses"]:
+            price_mismatch = not paired_price_value(fin, posting, counterpart)
+            if not price_mismatch:
+                kind = "consumer_debt"
+                purchase_date = entry.date.isoformat()
+        elif (posting.price is None and counterpart.price is None and
+              fin.raw_price(posting)[0] == fin.raw_price(counterpart)[0] == "none"):
+            if amount < 0 and other_root == fin.options["name_equity"]:
+                kind = "consumer_debt"
+            elif amount > 0 and other_root in (fin.options["name_assets"], fin.options["name_equity"]):
+                kind = "advance_receivable"
     meta = posting.meta or entry.meta
     return {"liability_ref": facts.for_posting(posting).as_dict(),
             "account": posting.account, "commodity": posting.units.currency,
             "lot": _lot(posting), "signed_units": exact_text(amount),
             "date": entry.date.isoformat(), "kind": kind,
+            "purchase_date": purchase_date,
+            "price_mismatch": price_mismatch,
             "source": f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"}
 
 
@@ -66,6 +86,8 @@ def compile_obligation_opening(booked: dict, sources: dict, rows: object,
         require(key in sources, "OBLIGATION_OPENING_REF_INVALID", "期初来源不存在、已过期或并非 cutover 前负债分录",
                 location(index, "liability_ref"))
         origin = sources[key]
+        require(not origin["price_mismatch"], "OBLIGATION_PRICE_MISMATCH",
+                "期初消费与负债原始价格权重不相等；核对原始交易计价残差", where)
         require(set(ref) == set(origin["liability_ref"]) and
                 all(type(value) is type(origin["liability_ref"][field]) for field, value in ref.items()),
                 "OBLIGATION_OPENING_REF_INVALID", "期初来源字段类型不符", location(index, "liability_ref"))
@@ -101,7 +123,8 @@ def compile_obligation_opening(booked: dict, sources: dict, rows: object,
         coordinate_locations[coordinate] = where
         used_sources.add(key)
         registry[ident] = {"account": coordinate, "remaining": amount, "origin": "opening",
-                           **({"owner_id": row["owner_id"], "purchase_ref": ref} if debt else {"outflow_ref": ref})}
+                           **({"owner_id": row["owner_id"], "purchase_ref": ref,
+                               "purchase_date": origin["purchase_date"]} if debt else {"outflow_ref": ref})}
         declared.append({**row, "account": coordinate[0], "commodity": coordinate[1],
                          "lot": coordinate[2], "source": origin["source"], "review_source": where})
     for coordinate, value in reviewed.items():
@@ -122,5 +145,7 @@ def compile_obligation_opening(booked: dict, sources: dict, rows: object,
         pending.append({"account": account, "commodity": commodity, "lot": lot,
                         "signed_units": exact_text(value), "origin_source": origins[-1]["source"],
                         "source_candidates": candidates,
-                        "reason_code": "LIABILITY_OPENING_PENDING" if candidates else "OBLIGATION_OPENING_SOURCE_UNSUPPORTED"})
+                        "reason_code": "LIABILITY_OPENING_PENDING" if candidates else
+                        "OBLIGATION_PRICE_MISMATCH" if any(row["price_mismatch"] for row in origins) else
+                        "OBLIGATION_OPENING_SOURCE_UNSUPPORTED"})
     return {"debts": debts, "advances": advances, "pending": pending, "declarations": declared}

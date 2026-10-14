@@ -22,7 +22,9 @@ MESSAGES = {
     "PAYABLE_CASH_PENDING": "可直接支付账户的用途库存尚未审定；核对期初用途、分录归属或支付范围。",
     "BOOKED_OBLIGATIONS_PENDING": "已入账责任尚未审定；核对消费责任、还款和代垫清算的来源。",
     "BOOKED_LIABILITY_UNMATCHED": "该账户的账本余额与已审代垫应收减去本人未偿责任不一致；核对所有消费、还款、代垫和报销来源。",
-    "SETTLEMENT_VALUE_MISSING": "外币责任尚未清偿；当前实际可花入口尚未支持报告日外币清偿价值。",
+    "SETTLEMENT_VALUE_MISSING": "外币责任缺少报告日清偿决定；账单已锁定报告货币金额时填 debt_settlements，尚未锁定时明确声明 unlocked。",
+    "SETTLEMENT_PATH_UNSUPPORTED": "这笔外币责任尚未锁定报告货币金额；可执行兑换路径及费用的报告日计价仍需继续实现，不能拿历史消费价或未来还款价代替。",
+    "OBLIGATION_PRICE_MISMATCH": "消费与负债两腿的原始价格权重不相等；核对该交易计价残差，不能通过 loader 容差放行。",
     "DEBT_COVERAGE_PENDING": "专项责任缺少覆盖决定；在 debt_coverage 中逐笔声明专用支付资源，或明确 resources: [] 表示没有专用覆盖。",
     "EXTERNAL_SCOPE_PENDING": "缺少本月末的完整性声明；核对截至该日已发生但漏记的责任或在途付款，再提供 completeness。",
     "CLASSIFICATION_PENDING": "这条收入或费用尚未确定预算类别。",
@@ -51,7 +53,7 @@ MESSAGES = {
     "NAMED_H_EVENT_UNSUPPORTED": "该资金事件尚未匹配已审用途协议；核对责任、转账、申赎或购汇审阅。",
 }
 IMPLEMENTATION_LIMITS = frozenset((
-    "SETTLEMENT_VALUE_MISSING",
+    "SETTLEMENT_PATH_UNSUPPORTED",
     "OBLIGATION_EVENT_UNSUPPORTED", "OBLIGATION_OPENING_SOURCE_UNSUPPORTED",
     "K_EVENT_SHAPE_UNSUPPORTED",
     "H_TRANSFER_SHAPE_UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED",

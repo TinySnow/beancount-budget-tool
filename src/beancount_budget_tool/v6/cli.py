@@ -72,6 +72,7 @@ def main(argv=None) -> int:
     parser.add_argument("--obligations", type=Path, help="schema 6 已审期初未结责任、简单消费、还款或代垫事件")
     parser.add_argument("--completeness", type=Path, help="schema 6 报告日末未入账责任与在途付款完整性声明；须配合 --actual-audit")
     parser.add_argument("--debt-coverage", type=Path, help="schema 6 报告日已审责任覆盖；须配合 --actual-audit")
+    parser.add_argument("--debt-settlements", type=Path, help="schema 6 外币债务锁定清偿账单；须配合 --actual-audit")
     parser.add_argument("--classifications", type=Path, help="schema 6 分类侧文件；供分类、计价、收益或月度审计使用")
     parser.add_argument("--benefit-groups", type=Path, help="schema 6 已审复杂收益来源组；供收益或月度审计使用")
     parser.add_argument("--plans", type=Path, help="schema 6 消费或用途目标；须配合对应目标审计")
@@ -143,6 +144,8 @@ def main(argv=None) -> int:
         parser.error("--completeness 只能与 --actual-audit 一起使用")
     if args.debt_coverage and not args.actual_audit:
         parser.error("--debt-coverage 只能与 --actual-audit 一起使用")
+    if args.debt_settlements and not args.actual_audit:
+        parser.error("--debt-settlements 只能与 --actual-audit 一起使用")
     if args.classifications and not (args.classification_audit or args.valuation_audit or
                                      args.benefit_audit or args.spending_audit or args.target_audit):
         parser.error("--classifications 只能与分类、计价、经济利益或月度审计一起使用")
@@ -261,7 +264,7 @@ def main(argv=None) -> int:
         elif args.actual_audit:
             result = audit_actual_snapshot(args.ledger, cutover, as_of, args.accounts,
                                            args.opening, args.ownership,
-                                           args.obligations, args.completeness, args.debt_coverage)
+                                           args.obligations, args.completeness, args.debt_coverage, args.debt_settlements)
         elif args.facts_audit:
             if cutover.day != 1:
                 raise BudgetError("CUTOVER_INVALID", "v6 cutover 必须是自然月第一天")

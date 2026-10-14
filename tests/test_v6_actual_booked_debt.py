@@ -115,7 +115,7 @@ class BookedDebtSnapshotTests(unittest.TestCase):
             issue = next(row for row in foreign["review_items"]
                          if row["reason_code"] == "SETTLEMENT_VALUE_MISSING")
             self.assertEqual((issue["source"], issue["reason_kind"]),
-                             (f"{(base / 'main.bean').resolve()}:11", "implementation_limit"))
+                             (f"{(base / 'main.bean').resolve()}:11", "data_review"))
             protected = self._audit(base, self._fixture(base, owner="savings"),
                                     date(2026, 9, 30))
             self.assertEqual(protected["status"], "NEEDS_REVIEW")
@@ -125,7 +125,7 @@ class BookedDebtSnapshotTests(unittest.TestCase):
             self.assertEqual(issue["source"], f"{(base / 'main.bean').resolve()}:11")
             self.assertEqual(issue["owner_id"], "savings")
 
-    def test_foreign_month_lists_data_gap_and_implementation_limit_with_source_lines(self):
+    def test_foreign_month_lists_missing_evidence_and_complex_implementation_limit(self):
         with TemporaryDirectory() as folder:
             base = Path(folder)
             paths = self._fixture(base, currency="USD", payment=False)
@@ -158,7 +158,7 @@ class BookedDebtSnapshotTests(unittest.TestCase):
                                     "h_fx", "k_events", "purpose_pools")}})
             result = audit_month_workflow(base / "month.yaml")
             self.assertEqual((result["status"], result["stage"]),
-                             ("IMPLEMENTATION_BLOCKED", "metrics"))
+                             ("NEEDS_REVIEW", "metrics"))
             self.assertIsNone(result["report"])
             items = {row["reason_code"]: row for row in result["review_items"]}
             self.assertEqual(items["VALUATION_MISSING"]["source"],
@@ -167,7 +167,7 @@ class BookedDebtSnapshotTests(unittest.TestCase):
             self.assertEqual(items["SETTLEMENT_VALUE_MISSING"]["source"],
                              f"{(base / 'main.bean').resolve()}:11")
             rendered = render_workflow_text(result)
-            self.assertIn("程序实现缺口", rendered)
+            self.assertNotIn("程序实现缺口", rendered)
             self.assertIn("缺少有来源的报告货币计价", rendered)
             self.assertNotIn("v6 已审月报", rendered)
 

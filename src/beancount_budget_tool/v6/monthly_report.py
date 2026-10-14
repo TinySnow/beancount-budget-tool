@@ -34,7 +34,7 @@ REQUIRED = {"schema", "ledger", "cutover", "month", "report_currency",
             "accounts", "opening", "ownership", "obligations", "classifications",
             "expense_plans", "purpose_plans", "h_transfers", "k_events", "h_fx",
             "purpose_pools"}
-OPTIONAL = {"completeness", "benefit_groups", "debt_coverage"}
+OPTIONAL = {"completeness", "benefit_groups", "debt_coverage", "debt_settlements"}
 
 
 def _config_month(document: dict, config: Path) -> str:
@@ -150,7 +150,7 @@ def audit_reviewed_month(config: Path) -> dict:
     obligations, h_fx = path("obligations"), path("h_fx")
     with frozen_financial(root), frozen_fact_indices():
         actual = audit_actual_snapshot(root, cutover, as_of, accounts, opening,
-                                       ownership, obligations, path("completeness"), path("debt_coverage"))
+                                       ownership, obligations, path("completeness"), path("debt_coverage"), path("debt_settlements"))
         expense = audit_monthly_expense_targets(
             root, cutover, month, path("classifications"), path("expense_plans"),
             currency, path("benefit_groups"), accounts, ownership, obligations, h_fx)
@@ -297,6 +297,8 @@ def render_workflow_text(outcome: dict) -> str:
                     context = f"责任 {item['obligation_id']}，" + context
                 if "remaining_native" in item:
                     context += f" 未结金额 {item['remaining_native']} {item.get('commodity', '')}"
+                    if item.get("settlement_currency") != item.get("commodity") and "remaining_report" in item:
+                        context += f"；清偿金额 {item['remaining_report']} {item['settlement_currency']}"
                 elif "signed_booked_units" in item:
                     context += (f" 账本余额 {item['signed_booked_units']} {item.get('commodity', '')}；"
                                 f"已审责任未偿额 {item['reviewed_remaining']}")
@@ -307,7 +309,9 @@ def render_workflow_text(outcome: dict) -> str:
                     context += f" {item['signed_units']} {item.get('commodity', '')}"
                 if context:
                     lines.append(f"    {context}")
-            lines.append("本次不签发完整月报；处理上述待审事实或程序实现缺口后重跑。")
+            lines.append("本次不签发完整月报；" + (
+                "处理上述程序实现缺口与待审事实后重跑。" if outcome["status"] == "IMPLEMENTATION_BLOCKED"
+                else "处理上述待审事实后重跑。"))
             return "\n".join(lines)
         lines = [f"v6 {outcome['month']} 月报待审：以下指标尚未认证"]
         for item in outcome["pending_metrics"]:
@@ -382,12 +386,17 @@ def render_text(report: dict) -> str:
             for row in actual["clearing_receivables"]), ""]
     if actual["status"] == "CERTIFIED" and actual.get("booked_debts"):
         coverage = {row["obligation_id"]: row for row in actual.get("obligation_coverage") or []}
+        settlements = {row["obligation_id"]: row for row in actual.get("settlement_allocations") or []}
         lines[2:2] = ["未清已记消费责任（未覆盖部分占用实际可花）", *(
             f"  {row['obligation_id']}：{amount(row['remaining_native'])} "
             f"{row['commodity']}，{row['account']}" +
             ("（期初结转）" if row.get("origin") == "opening" else "") +
+            (f"；锁定清偿 {amount(settlements[row['obligation_id']]['report_amount'])} {currency}"
+             f"（账单 {settlements[row['obligation_id']]['statement_id']}）"
+             if row["obligation_id"] in settlements else "") +
             (f"；专用覆盖 {amount(coverage[row['obligation_id']]['covered'])}，"
              f"未覆盖 {amount(coverage[row['obligation_id']]['uncovered'])}"
+             + (f" {currency}（覆盖与未覆盖均按锁定清偿金额）" if row["commodity"] != currency else "")
              if row["obligation_id"] in coverage else "")
             for row in actual["booked_debts"]), ""]
         if actual.get("purpose_available"):
