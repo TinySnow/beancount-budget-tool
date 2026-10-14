@@ -62,7 +62,7 @@ def main(argv=None) -> int:
     parser.add_argument("--h-gain-audit", action="store_true", help="逐笔核对已审 H 损益的 Income 来源")
     parser.add_argument("--h-fx-audit", action="store_true", help="逐笔核对有原文总价的单用途 H 购汇")
     parser.add_argument("--payable-cash-audit", action="store_true", help="核对报告货币可直接支付的完整 H 现金用途库存")
-    parser.add_argument("--actual-audit", action="store_true", help="编译无未偿责任日末的首页实际可花")
+    parser.add_argument("--actual-audit", action="store_true", help="编译可支付现金、已记消费责任和已审覆盖的日末实际可花")
     parser.add_argument("--accounts", type=Path, help="schema 6 人工账户声明；供资产相关审计使用")
     parser.add_argument("--opening", type=Path, help="schema 6 人工期初声明；亦可供归属与 H 转账继承已审期初用途")
     parser.add_argument("--ownership", type=Path, help="schema 6 H 资产逐腿归属；供资产相关审计使用")
@@ -71,6 +71,7 @@ def main(argv=None) -> int:
     parser.add_argument("--h-fx", type=Path, help="schema 6 已审单用途购汇事件；须配合 --h-fx-audit")
     parser.add_argument("--obligations", type=Path, help="schema 6 已审简单消费责任、还款或代垫事件")
     parser.add_argument("--completeness", type=Path, help="schema 6 报告日末未入账责任与在途付款完整性声明；须配合 --actual-audit")
+    parser.add_argument("--debt-coverage", type=Path, help="schema 6 报告日已审责任覆盖；须配合 --actual-audit")
     parser.add_argument("--classifications", type=Path, help="schema 6 分类侧文件；供分类、计价、收益或月度审计使用")
     parser.add_argument("--benefit-groups", type=Path, help="schema 6 已审复杂收益来源组；供收益或月度审计使用")
     parser.add_argument("--plans", type=Path, help="schema 6 消费或用途目标；须配合对应目标审计")
@@ -140,6 +141,8 @@ def main(argv=None) -> int:
         parser.error("--obligations 只能与责任、实际可花或用途划拨审计一起使用")
     if args.completeness and not args.actual_audit:
         parser.error("--completeness 只能与 --actual-audit 一起使用")
+    if args.debt_coverage and not args.actual_audit:
+        parser.error("--debt-coverage 只能与 --actual-audit 一起使用")
     if args.classifications and not (args.classification_audit or args.valuation_audit or
                                      args.benefit_audit or args.spending_audit or args.target_audit):
         parser.error("--classifications 只能与分类、计价、经济利益或月度审计一起使用")
@@ -258,7 +261,7 @@ def main(argv=None) -> int:
         elif args.actual_audit:
             result = audit_actual_snapshot(args.ledger, cutover, as_of, args.accounts,
                                            args.opening, args.ownership,
-                                           args.obligations, args.completeness)
+                                           args.obligations, args.completeness, args.debt_coverage)
         elif args.facts_audit:
             if cutover.day != 1:
                 raise BudgetError("CUTOVER_INVALID", "v6 cutover 必须是自然月第一天")

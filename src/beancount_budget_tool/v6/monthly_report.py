@@ -34,7 +34,7 @@ REQUIRED = {"schema", "ledger", "cutover", "month", "report_currency",
             "accounts", "opening", "ownership", "obligations", "classifications",
             "expense_plans", "purpose_plans", "h_transfers", "k_events", "h_fx",
             "purpose_pools"}
-OPTIONAL = {"completeness", "benefit_groups"}
+OPTIONAL = {"completeness", "benefit_groups", "debt_coverage"}
 
 
 def _config_month(document: dict, config: Path) -> str:
@@ -150,7 +150,7 @@ def audit_reviewed_month(config: Path) -> dict:
     obligations, h_fx = path("obligations"), path("h_fx")
     with frozen_financial(root), frozen_fact_indices():
         actual = audit_actual_snapshot(root, cutover, as_of, accounts, opening,
-                                       ownership, obligations, path("completeness"))
+                                       ownership, obligations, path("completeness"), path("debt_coverage"))
         expense = audit_monthly_expense_targets(
             root, cutover, month, path("classifications"), path("expense_plans"),
             currency, path("benefit_groups"), accounts, ownership, obligations, h_fx)
@@ -293,6 +293,8 @@ def render_workflow_text(outcome: dict) -> str:
                 lines.append(f"  {'、'.join(item['metrics'])}／{label}（{item['reason_code']}）："
                              f"{item['detail']} [{item['source']}]")
                 context = item.get("account", "")
+                if item.get("obligation_id"):
+                    context = f"责任 {item['obligation_id']}，" + context
                 if "remaining_native" in item:
                     context += f" 未结金额 {item['remaining_native']} {item.get('commodity', '')}"
                 elif "signed_booked_units" in item:
@@ -370,10 +372,20 @@ def render_text(report: dict) -> str:
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
              headline, "", "消费目标（目标 − 实际；负数为超支）"]
     if actual["status"] == "CERTIFIED" and actual.get("booked_debts"):
-        lines[2:2] = ["未清已记消费责任（已从实际可花扣减）", *(
+        coverage = {row["obligation_id"]: row for row in actual.get("obligation_coverage") or []}
+        lines[2:2] = ["未清已记消费责任（未覆盖部分占用实际可花）", *(
             f"  {row['obligation_id']}：{amount(row['remaining_native'])} "
-            f"{row['commodity']}，{row['account']}"
+            f"{row['commodity']}，{row['account']}" +
+            (f"；专用覆盖 {amount(coverage[row['obligation_id']]['covered'])}，"
+             f"未覆盖 {amount(coverage[row['obligation_id']]['uncovered'])}"
+             if row["obligation_id"] in coverage else "")
             for row in actual["booked_debts"]), ""]
+        if actual.get("purpose_available"):
+            lines[2:2] = ["其他用途可动用现金（支付范围内；已扣债务预留与未覆盖责任）", *(
+                f"  {owner_names.get(row['owner_id'], row['owner_id'])}："
+                f"{amount(row['units'])} {currency}" +
+                ("（警告：可动用现金为负）" if Fraction(row["units"]) < 0 else "")
+                for row in actual["purpose_available"]), ""]
     shown = 0
     for row in expense["categories"]:
         if row["subtree_target_kind"] != "explicit" and row["direct_target"] is None:
