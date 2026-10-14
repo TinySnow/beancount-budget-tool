@@ -133,6 +133,19 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
                                   "owner_id": "living", "units": "-10"}])
             self.assertIn("Assets:Bank：自由资金 100 CNY", render_workflow_text(outcome))
             self.assertIn("Assets:Bank：生活费 -10 CNY", render_workflow_text(outcome))
+            purpose_rows = {row["owner_id"]: row
+                            for row in outcome["report"]["purpose_balances"]["purposes"]}
+            self.assertEqual(purpose_rows["free"]["h_native_balances"][0]["units"], "100")
+            self.assertEqual(purpose_rows["living"]["h_native_balances"][0]["units"], "-10")
+            self.assertEqual(purpose_rows["savings"]["h_native_balances"], [])
+            self.assertEqual(purpose_rows["savings"]["pool_book_cost_balances"][0]["units"], "1")
+            self.assertEqual(purpose_rows["investment"]["pool_book_cost_balances"][0]["units"], "9")
+            self.assertIn("自由资金（默认收入用途）：\n    H 用途余额：100 CNY",
+                          render_workflow_text(outcome))
+            self.assertIn("生活费（默认支出用途）：", render_workflow_text(outcome))
+            self.assertIn("H 用途余额：-10 CNY", render_workflow_text(outcome))
+            self.assertIn("储蓄：\n    H 用途余额：0（无余额）\n    证券池账面成本：1 CNY",
+                          render_workflow_text(outcome))
             self.assertIn("警告：Assets:Bank 的 生活费 用途份额为 -10 CNY",
                           render_workflow_text(outcome))
             self.assertIn("实际 10，差额 -10 CNY（支出 10，退款／冲回 0）",
