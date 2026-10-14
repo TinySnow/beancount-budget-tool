@@ -136,7 +136,7 @@ class MonthlyReportTextTests(unittest.TestCase):
                              ("NEEDS_REVIEW", "metrics"))
             self.assertEqual(outcome["pending_metrics"][0]["reason_codes"],
                              ["SPENDABLE_CAP_TARGET_MISSING"])
-            self.assertIn(str((Path(folder) / "plans.yaml").resolve()),
+            self.assertIn(f"{config.resolve()}:2",
                           render_workflow_text(outcome))
 
     def test_pending_purpose_event_text_shows_ledger_line(self):

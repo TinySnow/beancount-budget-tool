@@ -13,6 +13,7 @@ from beancount_budget_tool.v6.actual_snapshot import audit_actual_snapshot
 from beancount_budget_tool.v6.obligations import audit_simple_obligations
 from beancount_budget_tool.v6.ownership import audit_ownership
 from beancount_budget_tool.v6.purpose_flows import audit_monthly_purpose_flows
+from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 
 
 CUTOVER = date(2026, 9, 1)
@@ -111,10 +112,78 @@ class BookedDebtSnapshotTests(unittest.TestCase):
                                   date(2026, 9, 30))
             self.assertEqual(foreign["status"], "NEEDS_REVIEW")
             self.assertIn("SETTLEMENT_VALUE_MISSING", foreign["reason_codes"])
+            issue = next(row for row in foreign["review_items"]
+                         if row["reason_code"] == "SETTLEMENT_VALUE_MISSING")
+            self.assertEqual((issue["source"], issue["reason_kind"]),
+                             (f"{(base / 'main.bean').resolve()}:11", "implementation_limit"))
             protected = self._audit(base, self._fixture(base, owner="savings"),
                                     date(2026, 9, 30))
             self.assertEqual(protected["status"], "NEEDS_REVIEW")
             self.assertIn("DEBT_COVERAGE_PENDING", protected["reason_codes"])
+            issue = next(row for row in protected["review_items"]
+                         if row["reason_code"] == "DEBT_COVERAGE_PENDING")
+            self.assertEqual(issue["source"], f"{(base / 'main.bean').resolve()}:11")
+            self.assertEqual(issue["owner_id"], "savings")
+
+    def test_foreign_month_lists_data_gap_and_implementation_limit_with_source_lines(self):
+        with TemporaryDirectory() as folder:
+            base = Path(folder)
+            paths = self._fixture(base, currency="USD", payment=False)
+            self._audit(base, paths, date(2026, 9, 30))  # Writes the reviewed scope statement.
+
+            def save(name, value):
+                (base / name).write_text(yaml.safe_dump(value, allow_unicode=True), encoding="utf-8")
+
+            save("classifications.yaml", {
+                "schema": 6, "cutover": CUTOVER.isoformat(), "loader_version": BEANCOUNT_VERSION,
+                "categories": [{"id": "food", "name": "餐饮", "parent": None, "aliases": []}],
+                "defaults": {"income_category_id": "food", "expense_category_id": "food"},
+                "classifications": []})
+            save("expense_plans.yaml", {"schema": 6, "report_currency": "CNY",
+                                        "defaults": {"expense_targets": {"food": "500"}}})
+            save("purpose_plans.yaml", {"schema": 6, "report_currency": "CNY",
+                                        "defaults": {"allocation_targets": {
+                                            "free": "not_assessed", "savings": "not_assessed"}}})
+            for name in ("h_transfers", "h_fx", "k_events"):
+                save(name + ".yaml", {"schema": 6, "cutover": CUTOVER.isoformat(),
+                                      "ledger_snapshot": paths[-1],
+                                      "loader_version": BEANCOUNT_VERSION, "events": []})
+            save("purpose_pools.yaml", {"schema": 6, "cutover": CUTOVER.isoformat(),
+                                        "report_currency": "CNY", "pools": []})
+            save("month.yaml", {"schema": 6, "ledger": "main.bean", "month": "2026-09",
+                                "cutover": CUTOVER.isoformat(), "report_currency": "CNY",
+                                **{name: name + ".yaml" for name in (
+                                    "accounts", "opening", "ownership", "obligations", "completeness",
+                                    "classifications", "expense_plans", "purpose_plans", "h_transfers",
+                                    "h_fx", "k_events", "purpose_pools")}})
+            result = audit_month_workflow(base / "month.yaml")
+            self.assertEqual((result["status"], result["stage"]),
+                             ("IMPLEMENTATION_BLOCKED", "metrics"))
+            self.assertIsNone(result["report"])
+            items = {row["reason_code"]: row for row in result["review_items"]}
+            self.assertEqual(items["VALUATION_MISSING"]["source"],
+                             f"{(base / 'main.bean').resolve()}:10")
+            self.assertEqual(items["VALUATION_MISSING"]["reason_kind"], "data_review")
+            self.assertEqual(items["SETTLEMENT_VALUE_MISSING"]["source"],
+                             f"{(base / 'main.bean').resolve()}:11")
+            rendered = render_workflow_text(result)
+            self.assertIn("程序实现缺口", rendered)
+            self.assertIn("缺少有来源的报告货币计价", rendered)
+            self.assertNotIn("v6 已审月报", rendered)
+
+            ledger = base / "main.bean"
+            ledger.write_text(ledger.read_text(encoding="utf-8") +
+                              '2026-09-23 * "complex card purchase"\n'
+                              '  Expenses:Food 10 CNY\n'
+                              '  Assets:Bank -2 CNY\n'
+                              '  Liabilities:Card -8 CNY\n', encoding="utf-8")
+            source_blocked = audit_month_workflow(base / "month.yaml")
+            self.assertEqual((source_blocked["status"], source_blocked["stage"]),
+                             ("IMPLEMENTATION_BLOCKED", "source"))
+            issue = next(row for row in source_blocked["review_items"]
+                         if row["reason_code"] == "OBLIGATION_EVENT_UNSUPPORTED")
+            self.assertTrue(issue["source"].endswith("main.bean:15"))
+            self.assertIn("程序实现缺口", render_workflow_text(source_blocked))
 
     def test_reviewed_card_payment_is_not_a_new_purpose_allocation(self):
         with TemporaryDirectory() as folder:

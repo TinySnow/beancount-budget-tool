@@ -9,6 +9,8 @@ from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.yamlstrict import load_yaml
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, audit_reviewed_month
 from beancount_budget_tool.v6.review_queue import audit_review_queue
+from beancount_budget_tool.v6.targets import load_expense_targets
+from beancount_budget_tool.v6.purpose_targets import load_purpose_targets
 
 
 class ConfigLocationTests(unittest.TestCase):
@@ -66,6 +68,27 @@ class ConfigLocationTests(unittest.TestCase):
             self.assertEqual((caught.exception.code, caught.exception.source),
                              ("MONTH_REPORT_CONFIG_INVALID",
                               f"{config.resolve()}:{lines.index('ownership: ownership.yaml') + 1}"))
+
+    def test_nested_target_errors_identify_the_amount_or_unknown_id(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "plans.yaml"
+            categories = [{"id": "food", "name": "餐饮", "parent": None, "aliases": []}]
+            for ident, amount, code in (("food", "-1", "PLAN_AMOUNT_INVALID"),
+                                        ("unknown", "'10'", "PLAN_CATEGORY_UNKNOWN")):
+                path.write_text("schema: 6\nreport_currency: CNY\nmonths:\n"
+                                f"  '2026-10':\n    expense_targets:\n      {ident}: {amount}\n",
+                                encoding="utf-8")
+                with self.assertRaises(BudgetError) as caught:
+                    load_expense_targets(path, "2026-10", "CNY", categories)
+                self.assertEqual((caught.exception.code, caught.exception.source),
+                                 (code, f"{path.resolve()}:6"))
+            path.write_text("schema: 6\nreport_currency: CNY\neffective_templates:\n"
+                            "  '2026-10':\n    allocation_targets:\n      savings: -1\n",
+                            encoding="utf-8")
+            with self.assertRaises(BudgetError) as caught:
+                load_purpose_targets(path, "2026-10", "CNY", {"savings"})
+            self.assertEqual((caught.exception.code, caught.exception.source),
+                             ("PLAN_AMOUNT_INVALID", f"{path.resolve()}:6"))
 
 
 if __name__ == "__main__":

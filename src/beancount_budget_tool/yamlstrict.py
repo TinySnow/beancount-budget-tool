@@ -49,17 +49,32 @@ def load_yaml(path: Path) -> Any:
 
 def yaml_key_location(path: Path, key: str) -> str:
     """Locate a top-level config key; missing keys point at the document start."""
+    return yaml_path_location(path, (key,))
+
+
+def yaml_path_location(path: Path, keys: tuple[str | int, ...]) -> str:
+    """Locate a nested field; an absent field points at its closest ancestor."""
     try:
         node = yaml.compose(path.read_text(encoding="utf-8-sig"), Loader=StrictLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
         source = f"{path.resolve()}:{mark.line + 1}" if mark else str(path.resolve())
         raise BudgetError("YAML_INVALID", str(exc), source) from exc
-    if isinstance(node, yaml.MappingNode):
-        for name, _ in node.value:
-            if name.value == key:
-                return f"{path.resolve()}:{name.start_mark.line + 1}"
-    return f"{path.resolve()}:1"
+    line = 1
+    for key in keys:
+        if isinstance(node, yaml.MappingNode):
+            match = next(((name, value) for name, value in node.value
+                          if name.value == str(key)), None)
+            if match is None:
+                break
+            name, node = match
+            line = name.start_mark.line + 1
+        elif isinstance(node, yaml.SequenceNode) and type(key) is int and 0 <= key < len(node.value):
+            node = node.value[key]
+            line = node.start_mark.line + 1
+        else:
+            break
+    return f"{path.resolve()}:{line}"
 
 
 def require_quoted_month_keys(path: Path) -> None:

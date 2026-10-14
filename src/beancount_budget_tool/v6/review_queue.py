@@ -20,7 +20,7 @@ from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import frozen_financial, load_financial
 from ..yamlstrict import load_yaml, yaml_key_location
-from .accounts import audit_accounts
+from .accounts import _lot, audit_accounts
 from .classification import _key, audit_classification
 from .facts import FactIndex, frozen_fact_indices
 from .h_fx import audit_h_fx
@@ -30,6 +30,7 @@ from .k_events import audit_k_events
 from .obligations import audit_simple_obligations
 from .ownership import audit_ownership
 from .purpose_pools import audit_purpose_pools
+from .review_diagnostics import annotate_source_items
 
 
 NEEDED = {"schema", "ledger", "cutover", "accounts", "ownership",
@@ -86,6 +87,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
         dated = {}
         first_asset_date = {}
         first_asset_source = {}
+        liability_opening_sources = {}
         source_by_ref = {}
         posting_by_ref = {}
         transaction_by_ref = {}
@@ -110,6 +112,8 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                           if isinstance(filename, str) and isinstance(lineno, int)
                           else None)
                 source_by_ref[key] = source
+                if posting.account.split(":", 1)[0] == liability_root and entry.date < cutover:
+                    liability_opening_sources[(posting.account, posting.units.currency, _lot(posting))] = source
                 if posting.account.split(":", 1)[0] == asset_root:
                     previous = first_asset_date.get(posting.account)
                     if previous is None or entry.date < previous:
@@ -306,13 +310,16 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
         if since == cutover:
             for row in obligations["opening_pending"]:
                 items.append({"kind": "liability_opening", "date": cutover.isoformat(),
-                              **row, "reason_code": "LIABILITY_OPENING_PENDING"})
+                              **row, "source": liability_opening_sources.get(
+                                  (row["account"], row["commodity"], row["lot"])),
+                              "reason_code": "LIABILITY_OPENING_PENDING"})
         require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
                     for item, digest in before.items()),
                 "INPUT_CHANGED", "待审清单运行期间配置或审阅文件发生变化", str(config))
 
     items.sort(key=lambda row: (row["date"], row["kind"], row["account"],
                                 json.dumps(row.get("ref", {}), sort_keys=True)))
+    items = annotate_source_items(items)
     return {"mode": "v6_import_review_queue", "since": since.isoformat(),
             "through": through.isoformat(), "ledger_snapshot": fin.digest,
             "latest_booked_transaction_date": max(booked_dates).isoformat() if booked_dates else None,
@@ -343,6 +350,8 @@ def render_text(report: dict) -> str:
         lines.append(f"查询区间没有已记交易；最近已记交易日 {latest}。请核对 importer 是否已覆盖查询区间。")
     for item in report["items"]:
         description = LABELS[item["kind"]]
+        if item.get("reason_kind") == "implementation_limit":
+            description += "／程序实现缺口"
         amount = (f" {item['signed_units']} {item['commodity']}"
                   if "signed_units" in item and "commodity" in item else "")
         if item["kind"] == "h_fx":

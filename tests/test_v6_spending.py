@@ -66,6 +66,10 @@ class MonthlySpendingTests(unittest.TestCase):
             self.assertEqual(net["status"], "NEEDS_REVIEW")
             self.assertIsNone(net["report_total"])
             self.assertEqual(net["reason_codes"], ["VALUATION_MISSING"])
+            self.assertEqual(len(net["review_items"]), 1)
+            item = net["review_items"][0]
+            self.assertEqual((item["reason_code"], item["source"], item["commodity"]),
+                             ("VALUATION_MISSING", f"{root.resolve()}:16", "USD"))
             self.assertIn({"month": "2026-10", "role": "net_expense", "category_id": "food",
                            "commodity": "USD", "signed_units": "1"}, net["native_totals"])
             parent = next(row for row in net["categories"] if row["id"] == "living")

@@ -13,11 +13,13 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml
+from ..yamlstrict import load_yaml, yaml_key_location
 from .accounts import _lot
 from .core import ActualInput, CashResource, Obligation, calculate_actual
 from .obligations import audit_simple_obligations
 from .payable_cash import audit_payable_cash
+from .classification import _key
+from .review_diagnostics import posting_sources, review_item
 
 
 def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
@@ -35,13 +37,18 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
     require(cash["ledger_snapshot"] == debt["ledger_snapshot"] == fin.digest,
             "ACTUAL_SNAPSHOT_MISMATCH", "现金与责任证据不属于同一账本快照")
     liability_root = fin.options["name_liabilities"]
+    sources = posting_sources(fin)
+    liability_sources = {}
     balances: dict[tuple[str, str, str], Fraction] = defaultdict(Fraction)
     for entry in fin.entries:
         if not isinstance(entry, data.Transaction) or entry.date > as_of:
             continue
         for posting in entry.postings:
             if posting.account.split(":", 1)[0] == liability_root:
-                balances[(posting.account, posting.units.currency, _lot(posting))] += exact(posting.units.number)
+                coordinate = (posting.account, posting.units.currency, _lot(posting))
+                balances[coordinate] += exact(posting.units.number)
+                meta = posting.meta or entry.meta
+                liability_sources[coordinate] = f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
     unresolved_liabilities = [
         {"account": account, "commodity": commodity, "lot": lot,
          "signed_booked_units": exact_text(amount)}
@@ -78,14 +85,17 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
             "unbooked_obligations", "inflight_payments", "reason"}
         require(type(document) is dict and required <= set(document) <=
                 required | {"ledger_snapshot", "as_of_booked_fingerprint"},
-            "ACTUAL_SCOPE_INVALID", "完整性声明字段无效")
-        require(type(document["schema"]) is int and document["schema"] == 6 and
-                type(document["cutover"]) is str and document["cutover"] == cutover.isoformat() and
-                type(document["as_of"]) is str and document["as_of"] == as_of.isoformat() and
-                document["unbooked_obligations"] == "none" and
-                document["inflight_payments"] == "none" and
-                type(document["reason"]) is str and bool(document["reason"].strip()),
-                "ACTUAL_SCOPE_INVALID", "完整性声明时点或事实决定无效")
+            "ACTUAL_SCOPE_INVALID", "完整性声明字段无效", f"{completeness.resolve()}:1")
+        for key, valid in (
+            ("schema", type(document["schema"]) is int and document["schema"] == 6),
+            ("cutover", document["cutover"] == cutover.isoformat()),
+            ("as_of", document["as_of"] == as_of.isoformat()),
+            ("unbooked_obligations", document["unbooked_obligations"] == "none"),
+            ("inflight_payments", document["inflight_payments"] == "none"),
+            ("reason", type(document["reason"]) is str and bool(document["reason"].strip())),
+        ):
+            require(valid, "ACTUAL_SCOPE_INVALID", f"完整性声明 {key} 无效",
+                    yaml_key_location(completeness, key))
         declaration_sha = sha256(completeness.read_bytes()).hexdigest()
         complete_statement = True
 
@@ -104,6 +114,62 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         reasons.append("DEBT_COVERAGE_PENDING")
     if not complete_statement:
         reasons.append("EXTERNAL_SCOPE_PENDING")
+    review_items = []
+    if cash["review_state"] != "complete":
+        for row in cash["pending_payable_positions"]:
+            refs = [ref for reason in row.get("reasons", []) for ref in reason.get("refs", [])]
+            if refs:
+                for ref in refs:
+                    review_items.append(review_item(
+                        "OWNERSHIP_PENDING", sources.get(_key(ref)), ref=ref,
+                        account=row["account"], commodity=row["commodity"],
+                        blocking_reason_code="PAYABLE_CASH_PENDING"))
+            else:
+                opening_pending = "OPENING_PENDING" in row["reason_codes"]
+                review_items.append(review_item(
+                    "OPENING_PENDING" if opening_pending else "PAYABLE_CASH_PENDING",
+                    yaml_key_location(opening if opening_pending else accounts,
+                                      "h_holdings" if opening_pending else "accounts"),
+                    account=row["account"], commodity=row["commodity"],
+                    blocking_reason_code="PAYABLE_CASH_PENDING"))
+        if not cash["pending_payable_positions"]:
+            review_items.append(review_item("PAYABLE_CASH_PENDING", yaml_key_location(accounts, "accounts")))
+    if debt["review_state"] != "complete":
+        for row in debt["events"]:
+            if row["status"] != "CERTIFIED":
+                ref = row["liability_ref"]
+                review_items.append(review_item(
+                    row["reason_codes"][0], sources.get(_key(ref)), ref=ref,
+                    account=row["account"], commodity=row["commodity"], signed_units=row["signed_units"],
+                    blocking_reason_code="BOOKED_OBLIGATIONS_PENDING"))
+        for row in debt["opening_pending"]:
+            coordinate = (row["account"], row["commodity"], row["lot"])
+            review_items.append(review_item(
+                "LIABILITY_OPENING_PENDING", liability_sources.get(coordinate), **row,
+                blocking_reason_code="BOOKED_OBLIGATIONS_PENDING"))
+    if not liability_matches:
+        for coordinate in sorted(set(balances) | set(obligation_by_coordinate)):
+            if balances[coordinate] == -obligation_by_coordinate[coordinate]:
+                continue
+            account, commodity, lot = coordinate
+            review_items.append(review_item(
+                "BOOKED_LIABILITY_UNMATCHED", liability_sources.get(coordinate), account=account,
+                commodity=commodity, lot=lot, signed_booked_units=exact_text(balances[coordinate]),
+                reviewed_remaining=exact_text(obligation_by_coordinate[coordinate])))
+    for row in unresolved_clearings:
+        review_items.append(review_item("CLEARING_NONZERO", sources.get(_key(row["outflow_ref"])),
+                                        ref=row["outflow_ref"], account=row["account"],
+                                        commodity=row["commodity"], remaining_native=row["remaining_native"]))
+    for row in booked_debts:
+        for code, applies in (("SETTLEMENT_VALUE_MISSING", row["commodity"] != cash["report_currency"]),
+                              ("DEBT_COVERAGE_PENDING", row["owner_id"] not in cash["spendable_owner_ids"])):
+            if applies:
+                review_items.append(review_item(code, sources.get(_key(row["purchase_ref"])),
+                                                ref=row["purchase_ref"], account=row["account"],
+                                                commodity=row["commodity"], owner_id=row["owner_id"],
+                                                remaining_native=row["remaining_native"]))
+    if not complete_statement:
+        review_items.append(review_item("EXTERNAL_SCOPE_PENDING", None))
     actual = None
     protected_shortfall = None
     if not reasons:
@@ -145,6 +211,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
             "outside_budget_cash": cash["outside_budget_cash"],
             "report_currency": cash["report_currency"],
             "reason_codes": reasons,
+            "review_items": review_items,
             "payable_cash_state": cash["review_state"],
             "booked_obligation_state": debt["review_state"],
             "unresolved_liabilities": unresolved_liabilities,

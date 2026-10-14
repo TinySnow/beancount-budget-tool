@@ -9,6 +9,7 @@ from beancount import __version__ as BEANCOUNT_VERSION
 import yaml
 
 from beancount_budget_tool.financial import load_financial
+from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.actual_snapshot import audit_actual_snapshot
 from beancount_budget_tool.v6.ownership import audit_ownership
 from beancount_budget_tool.v6.provenance import asset_opening_fingerprint, as_of_booked_fingerprint
@@ -95,6 +96,16 @@ class ActualSnapshotTests(unittest.TestCase):
         self.assertEqual(report["status"], "NEEDS_REVIEW")
         self.assertIsNone(report["actual_spendable"])
         self.assertIn("EXTERNAL_SCOPE_PENDING", report["reason_codes"])
+
+    def test_incorrect_scope_date_identifies_its_yaml_line(self):
+        self.write_completeness()
+        source = self.completeness.read_text(encoding="utf-8")
+        self.completeness.write_text(source.replace("2026-09-30", "2026-09-29"), encoding="utf-8")
+        line = next(i + 1 for i, text in enumerate(source.splitlines()) if text.startswith("as_of:"))
+        with self.assertRaises(BudgetError) as caught:
+            self.audit(self.completeness)
+        self.assertEqual((caught.exception.code, caught.exception.source),
+                         ("ACTUAL_SCOPE_INVALID", f"{self.completeness.resolve()}:{line}"))
 
     def test_dated_scope_declaration_does_not_depend_on_ledger_hash(self):
         self.write_completeness("0" * 64)
