@@ -16,16 +16,44 @@ import sys
 import time
 
 from beancount_budget_tool.errors import BudgetError, require
+from beancount_budget_tool.financial import booked_through, frozen_financial
+from beancount_budget_tool.v6.accounts import audit_accounts
+from beancount_budget_tool.v6.facts import frozen_fact_indices
 from beancount_budget_tool.v6.monthly_report import (
     audit_month_workflow, render_workflow_text,
 )
 from beancount_budget_tool.yamlstrict import load_yaml, yaml_key_location
 
 from .v6_check_migration_month import _month, check_month
+from .v6_classification_proposals import propose as propose_classifications
 
 
 WATCH_SUFFIXES = frozenset((".bean", ".beancount", ".yaml", ".yml"))
 WATCH_IGNORED_DIRS = frozenset((".git", ".venv", "__pycache__", "node_modules"))
+
+
+def _setup_preview(after: Path, month: str, cutover: date) -> dict:
+    """Show the next review inputs without approving any ledger interpretation."""
+    _, last = _month(month)
+    with booked_through(last), frozen_financial(after), frozen_fact_indices():
+        accounts = audit_accounts(after, cutover)
+        classifications = propose_classifications(after, cutover, last)
+    groups = classifications["groups"]
+    return {
+        "as_of": last.isoformat(),
+        "accounts_to_review": [
+            {"account": row["account"], "commodities": row["commodities"],
+             "first_source": row["first_source"]}
+            for row in accounts["accounts"]
+        ],
+        "untagged_income_expense_postings": sum(group["count"] for group in groups),
+        "classification_groups": [
+            {"account": group["account"], "count": group["count"],
+             "first_source": group["candidates"][0]["source"]}
+            for group in groups
+        ],
+        "note": "未写行内 budget 的笔数不等于必须逐笔补标签；已审默认分类可覆盖普通收支。账户语义、期初用途、逐腿用途、责任和计划仍须审阅。",
+    }
 
 
 def _watch_snapshot(before: Path, after: Path, config: Path | None) -> dict[Path, tuple[int, int] | None]:
@@ -109,7 +137,14 @@ def review_month(before: Path, after: Path, month: str, cutover: date,
                               "先修正这些账本标签并重跑；本次尚未检查用途、计划和月报。"})
         return result
     if config is None:
-        result.update(status="REVIEW_CONFIG_REQUIRED", stage="config")
+        try:
+            setup = _setup_preview(after, month, cutover)
+        except BudgetError as exc:
+            result.update(status="REVIEW_INPUT_BLOCKED", stage="review_input",
+                          error={"code": exc.code, "message": exc.message,
+                                 "source": exc.source})
+            return result
+        result.update(status="REVIEW_CONFIG_REQUIRED", stage="config", setup=setup)
         return result
 
     try:
@@ -169,7 +204,24 @@ def render_text(result: dict) -> str:
                          f"[{item['source']}]")
         lines.append(result["review"]["note"])
     elif result["stage"] == "config":
-        lines.append("本月已到 cutover：提供指向修改后账本的已审月报配置，继续来源待审与月报。")
+        setup = result["setup"]
+        lines.append(f"截至 {setup['as_of']} 的首轮盘点（未作人工批准）：")
+        lines.append(f"  账户语义和支付范围待审：{len(setup['accounts_to_review'])} 户")
+        for row in setup["accounts_to_review"]:
+            lines.append(f"    {row['account']} ({', '.join(row['commodities'])}) "
+                         f"[{row['first_source']}]")
+        lines.append(f"  本月未写行内 budget 的收支分录："
+                     f"{setup['untagged_income_expense_postings']} 条")
+        for row in setup["classification_groups"]:
+            lines.append(f"    {row['account']}：{row['count']} 条 "
+                         f"[首条 {row['first_source']}]")
+        lines.append(setup["note"])
+        lines.append("下一步：审定账户、期初用途、资产和负债归属、分类默认值与月度计划；"
+                     "建立本月月报配置后，用原命令加 --config 配置路径重跑。")
+        lines.append("逐笔分类候选：python -m "
+                     "beancount_budget_tool.tools.v6_classification_proposals "
+                     f"--ledger \"{check['after']}\" --month {result['month']} "
+                     "--output review-candidates.json")
     elif result["stage"] == "review_input":
         error = result["error"]
         lines.append(f"复审输入阻断：{error['code']}：{error['message']} "
