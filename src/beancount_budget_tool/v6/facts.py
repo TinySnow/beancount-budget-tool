@@ -7,16 +7,17 @@ the originating pad directive and the pinned loader version instead.
 """
 
 from dataclasses import dataclass
+from datetime import date
 from contextlib import contextmanager
 from contextvars import ContextVar
 from hashlib import sha256
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Iterator, Optional, Union
 
 from beancount.core import data
 
 from ..errors import BudgetError, require
-from ..financial import FinancialInput
+from ..financial import FinancialInput, reference_financial
 from ..refs import BookedRef, ReferenceIndex, TransactionRef, _fact, _lot
 
 
@@ -47,6 +48,27 @@ class GeneratedPostingRef:
 
 TransactionIdentity = Union[TransactionRef, GeneratedTransactionRef]
 PostingIdentity = Union[BookedRef, GeneratedPostingRef]
+
+
+def future_posting_refs(fin: FinancialInput, cutover: date) -> Iterator[tuple[data.Posting, dict]]:
+    """Identify existing future facts without including them in report totals.
+
+    Only a report-bounded financial input has invisible entries. Consumers
+    still check their claim domain; a missing or changed reference is never
+    accepted merely because the reviewer calls it a future transaction.
+    """
+    if fin.reference_entries is None:
+        return
+    visible = {id(entry) for entry in fin.entries}
+    future = [entry for entry in fin.reference_entries
+              if isinstance(entry, data.Transaction) and entry.date >= cutover
+              and id(entry) not in visible]
+    if not future:
+        return
+    facts = FactIndex(reference_financial(fin))
+    for entry in future:
+        for posting in entry.postings:
+            yield posting, facts.for_posting(posting).as_dict()
 
 
 _FACT_INDEX_CACHE: ContextVar[Optional[Dict[int, "FactIndex"]]] = ContextVar(
