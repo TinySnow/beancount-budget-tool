@@ -1,0 +1,24 @@
+# 仅用于相邻的虚拟示例账本；这些批准不适用于任何真实账本。
+schema: 6
+ledger: first-month.bean
+cutover: '2026-09-01'
+month: "2026-09"
+report_currency: CNY
+defaults:
+  income_purpose: 已收入资金
+  expense_purpose: 待支出资金
+  expense_category: 日常开销
+  confirmed: true
+accounts:
+  - account: Assets:Cash
+    semantics: H
+    payment_scope:
+      CNY: payable
+    opening: []
+    reason: 虚拟示例中的真实可支付现金，期初为零
+expense_targets:
+  日常开销: '200'
+allocation_targets:
+  已收入资金: not_assessed
+  待支出资金: '200'
+completeness_confirmed: true

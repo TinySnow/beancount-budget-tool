@@ -28,6 +28,39 @@ Windows 安装会一并安装 TUI 所需的 `windows-curses`。账本及审阅 Y
 
 最后一条只做**来源与标签语法审计**，不会生成预算余额。示例账本见 [labeling.bean](examples/v6/labeling.bean)。当前测试环境使用项目依赖指定的 Beancount 3.2.3。
 
+### 首次建立配置：先填一张表
+
+安装或更新项目后，用 `beancount-budget-init` 生成首月填写表。下面的默认名称是可配置的示例，程序不会按账户名称猜用途：
+
+```bash
+beancount-budget-init --ledger path/to/main.bean --month 2023-07 --currency CNY --income-purpose 自由资金 --expense-purpose 生活费 --expense-category 生活开销 --output budget-setup
+```
+
+Windows 未激活虚拟环境时，把开头替换成 `.\.venv\Scripts\beancount-budget-init.exe`；macOS 可使用 `.venv/bin/beancount-budget-init`。没有新命令时，重新运行 `python -m pip install -e .` 更新入口。
+
+打开 `budget-setup/START_HERE.md`，按说明填写同目录的 `setup.yaml`：账户选 H／K、是否可直接支付、期初各用途金额、本月消费及划拨目标。未确定的字段保留 `null` 或 `false`。然后运行：
+
+```bash
+beancount-budget-init --apply budget-setup/setup.yaml
+```
+
+没填完会列出**填写表或账本的文件和行号**；填齐后生成 `budget-setup/compiled/month.yaml` 及所需侧文件：
+
+```bash
+beancount-budget-tool --config budget-setup/compiled/month.yaml
+```
+
+这一步仍会审核交易、负债和计价，生成配置不等于月报已经通过。初始化只在第一次做；生成过的目录不会覆盖，已有决定请在原配置中维护，或用 `--output` 指定新目录。默认 cutover 是首月第一天，所以这套命令从 2023 年 7 月开始，不继承此前用途。
+
+想先体验完整流程，可运行公开的虚拟示例（已填好的决定仅适用于示例）：
+
+```bash
+beancount-budget-init --apply examples/v6/first-month-setup.yaml --output demo-budget
+beancount-budget-tool --config demo-budget/month.yaml
+```
+
+预期：工资 500 元，正式留出 200 元，餐饮花 10 元，**最多能花 190 元**。
+
 ## 2. 导入后怎么写标签
 
 先保留 importer 生成的账户、金额、日期和成本；只在确认含义后给**对应分录**加 metadata。`budget` 与 `fund` 回答不同的问题：
