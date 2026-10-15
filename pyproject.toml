@@ -19,6 +19,7 @@ beancount-budget-audit = "beancount_budget_tool.v6.cli:main"
 beancount-budget-review-month = "beancount_budget_tool.tools.v6_review_migration_month:main"
 beancount-budget-review-refs = "beancount_budget_tool.tools.v6_review_source_refs:main"
 beancount-budget-review = "beancount_budget_tool.tools.v6_review_decisions:main"
+beancount-budget-next-month = "beancount_budget_tool.tools.v6_next_month:main"
 beancount-budget-init = "beancount_budget_tool.tools.v6_init:main"
 
 [tool.setuptools.packages.find]
