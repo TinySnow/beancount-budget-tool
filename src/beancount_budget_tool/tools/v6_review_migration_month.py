@@ -216,6 +216,9 @@ def render_text(result: dict) -> str:
             lines.append(f"    {row['account']}：{row['count']} 条 "
                          f"[首条 {row['first_source']}]")
         lines.append(setup["note"])
+        lines.append("生成首月集中填写表：beancount-budget-init "
+                     f'--ledger "{check["after"]}" --month {result["month"]} '
+                     f'--cutover {result["cutover"]} --output budget-setup')
         lines.append("下一步：审定账户、期初用途、资产和负债归属、分类默认值与月度计划；"
                      "建立本月月报配置后，用原命令加 --config 配置路径重跑。")
         lines.append("逐笔分类候选：python -m "
