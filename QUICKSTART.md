@@ -107,6 +107,35 @@ beancount-budget-tool --config demo-budget/month.yaml
 
 ## 3. 导入新月后复核
 
+### 先准备下一月
+
+用上一月**最后使用的配置**生成下一月填写表；程序自动处理月份和跨年，保留原 cutover 及已审决定：
+
+```bash
+beancount-budget-next-month --config path/to/latest-month.yaml --output next-month
+```
+
+打开 `next-month/next-month.yaml`：
+
+- 核对消费目标、含子类别的总消费上限、用途划拨目标，然后把 `targets_confirmed` 改为 `true`。优先提取已写的新月计划；没有声明时参考上月作提议，不自动批准，也不会把目标当作到账金额。
+- `account_changes` 只列新增账户、新币种或原来未确定的支付范围。按说明填 H／K、`payable`／`excluded` 和理由；没有变化时不用重填旧账户。
+- 已确认账单覆盖到该月末、截至该日没有漏记责任或在途付款时，填 `completeness_confirmed: true` 及 `completeness_reason`。尚未核对可以保持 `false`，先审交易，月报仍保留完整性待审。
+
+```bash
+beancount-budget-next-month --apply next-month/next-month.yaml
+beancount-budget-tool --config next-month/compiled/month.yaml
+```
+
+此后以 `compiled/month.yaml` 继续导出下面的交易待审表。余额沿原 cutover 重放，不需要把上月余额另记一次期初；原有分类、用途、责任与事件认领继续复用。上月的完整性声明、专项债务覆盖、外币清偿报价不自动作为新月证据。
+
+**先审交易、后来补月末确认时，要用本月最新的已审配置：**
+
+```bash
+beancount-budget-next-month --confirm-completeness path/to/latest-reviewed-month.yaml --reason "已核对截至本月末全部账单，无漏记责任或在途付款" --output closed-month
+```
+
+这会保留本月已审交易和目标，生成 `closed-month/month.yaml` 并重跑月报；其他待审仍须解决。不用重新编译最初的下一月填写表，以免回到旧配置。所有输出目录均不会覆盖；Windows 未激活环境时将命令换成 `.\.venv\Scripts\beancount-budget-next-month.exe`。
+
 ### 待审的类别／用途：只填决定，不复制来源引用
 
 已有月报配置后，可以把当前待审导出成填写表：
