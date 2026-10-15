@@ -42,7 +42,8 @@ def compare_purpose_progress(targets: dict, flows: dict) -> dict:
                      "remaining_q_minus_g": exact_text(Fraction(target["target"]) - Fraction(g))
                      if status == "CERTIFIED" else None,
                      "status": status})
-    return {"mode": "v6_monthly_purpose_progress", "month": targets["month"],
+    evidence = ({"_transaction_evidence": flows["_transaction_evidence"]} if "_transaction_evidence" in flows else {})
+    return {**evidence, "mode": "v6_monthly_purpose_progress", "month": targets["month"],
             "report_currency": targets["report_currency"],
             "ledger_snapshot": flows["ledger_snapshot"],
             "plan_sha256": targets["plan_sha256"],
@@ -62,10 +63,10 @@ def audit_monthly_purpose_progress(root: Path, cutover: date, month: str,
                                    k_events: Path | None = None,
                                    h_fx: Path | None = None,
                                    purpose_pools: Path | None = None,
-                                   obligations: Path | None = None) -> dict:
+                                   obligations: Path | None = None, *, include_evidence: bool = False) -> dict:
     flows = audit_monthly_purpose_flows(root, cutover, month, accounts, opening,
                                         ownership, h_transfers, k_events, h_fx,
-                                        purpose_pools, obligations)
+                                        purpose_pools, obligations, include_evidence=include_evidence)
     require(report_currency == flows["report_currency"],
             "REPORT_CURRENCY_INVALID", "用途进度货币须与账户声明一致")
     owners = set(_owners(load_yaml(ownership)["owners"]).values())

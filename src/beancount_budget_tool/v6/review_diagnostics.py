@@ -24,6 +24,7 @@ MESSAGES = {
     "H_TRANSFER_MIXED_REMAP_PENDING": "跨账户转账的多用途金额不一致；核对两侧 fund，重新分配用途须另记同账户虚拟调拨。",
     "H_TRANSFER_SHAPE_UNSUPPORTED": "该复合资产转账不符合当前简单转账协议，需补程序实现。",
     "H_FX_SHAPE_UNSUPPORTED": "该复合购汇交易不符合当前简单购汇协议，需补程序实现。",
+    "H_FX_PENDING": "该购汇事件尚未审阅；在 h_fx 中核对两条来源、原文价格、资金用途和金额。",
     "PAYABLE_CASH_PENDING": "可直接支付账户的用途库存尚未审定；核对期初用途、分录归属或支付范围。",
     "BOOKED_OBLIGATIONS_PENDING": "已入账责任尚未审定；核对消费责任、还款和代垫清算的来源。",
     "BOOKED_LIABILITY_UNMATCHED": "该账户的账本余额与已审代垫应收减去本人未偿责任不一致；核对所有消费、还款、代垫和报销来源。",

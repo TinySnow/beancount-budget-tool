@@ -236,7 +236,8 @@ class ReportBrowserTests(unittest.TestCase):
              patch("beancount_budget_tool.v6.monthly_report.audit_month_workflow") as audit:
             self.assertEqual(main(["--config", "september.yaml", "--format", "tui", "--tui-config", "october.yaml"]), 0)
             self.assertEqual(tui.call_args.args[0], [Path("september.yaml"), Path("october.yaml")])
-            self.assertIs(tui.call_args.args[1], audit)
+            self.assertIs(tui.call_args.args[1].func, audit)
+            self.assertEqual(tui.call_args.args[1].keywords, {"include_transactions": True})
             audit.assert_not_called()
         with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
             main(["--config", "september.yaml", "--format", "json", "--tui-config", "october.yaml"])

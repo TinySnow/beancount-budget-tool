@@ -103,7 +103,7 @@ def summarize_max_spendable(actual: dict, expense: dict) -> dict:
             "note": "最多能花取已审可支付能力与指定消费目标子树差额的较小值；负数表示超支或资金缺口"}
 
 
-def audit_reviewed_month(config: Path) -> dict:
+def audit_reviewed_month(config: Path, *, include_transactions: bool = False) -> dict:
     """Run existing audits without promoting a partial metric to a complete home."""
     document = load_yaml(config)
     require(type(document) is dict, "MONTH_REPORT_CONFIG_INVALID",
@@ -154,11 +154,11 @@ def audit_reviewed_month(config: Path) -> dict:
                                        ownership, obligations, path("completeness"), path("debt_coverage"), path("debt_settlements"))
         expense = audit_monthly_expense_targets(
             root, cutover, month, path("classifications"), path("expense_plans"),
-            currency, path("benefit_groups"), accounts, ownership, obligations, h_fx)
+            currency, path("benefit_groups"), accounts, ownership, obligations, h_fx, include_evidence=include_transactions)
         purpose = audit_monthly_purpose_progress(
             root, cutover, month, accounts, opening, ownership, path("purpose_plans"),
             currency, path("h_transfers"), path("k_events"), h_fx, path("purpose_pools"),
-            obligations)
+            obligations, include_evidence=include_transactions)
         pool = audit_purpose_pools(root, cutover, as_of, path("purpose_pools"))
         k_book = audit_k_book_purposes(root, cutover, as_of, accounts, opening,
                                        ownership, path("k_events"))
@@ -179,6 +179,11 @@ def audit_reviewed_month(config: Path) -> dict:
         purpose_balances = summarize_purpose_balances(account_purposes, pool, k_book,
                                                       owner_document,
                                                       yaml_key_location(ownership, "owners"))
+        details = {}
+        if include_transactions:
+            from .transaction_details import project_transactions
+            details["transactions"] = project_transactions(load_financial(root), month, expense, purpose, pool,
+                tracking, outflows, owner_names, load_yaml(accounts))
         require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
                     for item, digest in before.items()),
                 "INPUT_CHANGED", "月报运行期间配置或审阅文件发生变化", str(config))
@@ -189,7 +194,7 @@ def audit_reviewed_month(config: Path) -> dict:
             all(row["report_currency"] == currency for row in (actual, expense, purpose, pool)),
             "MONTH_REPORT_MISMATCH", "月报各项审计的来源快照或报告货币不一致")
     max_spendable = summarize_max_spendable(actual, expense)
-    return {"mode": "v6_reviewed_month", "month": month, "as_of": as_of.isoformat(),
+    return {**details, "mode": "v6_reviewed_month", "month": month, "as_of": as_of.isoformat(),
             "report_currency": currency, "ledger_snapshot": actual["ledger_snapshot"],
             "owner_names": owner_names,
             "actual_spendable": actual,
@@ -205,7 +210,7 @@ def audit_reviewed_month(config: Path) -> dict:
             "note": "各项独立认证；此报表不签发完整首页或证券市值。历史日末数字不代表今天余额。"}
 
 
-def audit_month_workflow(config: Path) -> dict:
+def audit_month_workflow(config: Path, *, include_transactions: bool = False) -> dict:
     """Give a new month one entry point, without presenting partial audits as complete."""
     document = load_yaml(config)
     require(type(document) is dict, "MONTH_REPORT_CONFIG_INVALID",
@@ -215,11 +220,12 @@ def audit_month_workflow(config: Path) -> dict:
     last_day = calendar.monthrange(first_day.year, first_day.month)[1]
     as_of = date(first_day.year, first_day.month, last_day)
     with booked_through(as_of):
-        return _audit_month_workflow_bounded(config, document, month, first_day, as_of)
+        return _audit_month_workflow_bounded(config, document, month, first_day, as_of,
+                                            include_transactions=include_transactions)
 
 
 def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
-                                  first_day: date, as_of: date) -> dict:
+                                  first_day: date, as_of: date, *, include_transactions: bool = False) -> dict:
     review = audit_review_queue(config, first_day, as_of)
     if review["items"]:
         review["items"] = annotate_source_items(review["items"])
@@ -230,7 +236,7 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
                 "review_items": review["items"],
                 "pending_metrics": []}
 
-    report = audit_reviewed_month(config)
+    report = (audit_reviewed_month(config, include_transactions=True) if include_transactions else audit_reviewed_month(config))
     require(report["ledger_snapshot"] == review["ledger_snapshot"],
             "MONTH_REPORT_MISMATCH", "待审清单与月报不属于同一账本快照")
     pending = []
@@ -523,28 +529,40 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="从已审侧文件生成 v6 月报")
     parser.add_argument("--config", required=True, type=Path, help="schema 6 月报配置 YAML")
     parser.add_argument("--format", choices=("text", "json", "tui"), default="text")
+    parser.add_argument("--transactions", action="store_true", help="已签发时附逐笔来源详情；TUI 自动启用，可按 a 浏览")
     parser.add_argument("--tui-config", type=Path, action="append", default=[],
                         help="TUI 中可切换的其他已准备月报配置，可重复指定；按所给顺序浏览")
     args = parser.parse_args(argv)
     if args.tui_config and args.format != "tui":
         parser.error("--tui-config 仅用于 --format tui")
     if args.format == "tui":
+        from functools import partial
         from .tui import run_report_tui
         try:
-            run_report_tui([args.config, *args.tui_config], audit_month_workflow, render_workflow_text)
+            run_report_tui([args.config, *args.tui_config],
+                           partial(audit_month_workflow, include_transactions=True), render_workflow_text)
         except BudgetError as exc:
             print(json.dumps({"error": {"code": exc.code, "message": exc.message,
                                         "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
             return 2
         return 0
     try:
-        outcome = audit_month_workflow(args.config.resolve())
+        outcome = (audit_month_workflow(args.config.resolve(), include_transactions=True) if args.transactions
+                   else audit_month_workflow(args.config.resolve()))
     except BudgetError as exc:
         print(json.dumps({"error": {"code": exc.code, "message": exc.message,
                                     "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
         return 2
-    print(render_workflow_text(outcome) if args.format == "text" else
-          json.dumps(outcome, ensure_ascii=False, indent=2, sort_keys=True))
+    if args.format == "text":
+        text = render_workflow_text(outcome)
+        if args.transactions and outcome["report"]:
+            from .transaction_details import render_transaction
+            report = outcome["report"]
+            text += "\n\n已签发月报的逐笔来源：\n" + "\n\n".join(
+                "\n".join(render_transaction(row, report["owner_names"])) for row in report["transactions"]["rows"])
+        print(text)
+    else:
+        print(json.dumps(outcome, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
 

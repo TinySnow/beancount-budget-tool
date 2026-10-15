@@ -24,7 +24,7 @@ python examples/v6/acceptance/run.py --output demo-result
 beancount-budget-tool --config demo-result/initial/compiled/month.yaml --format tui --tui-config demo-result/2026-11/compiled/month.yaml --tui-config demo-result/2026-12/compiled/month.yaml
 ```
 
-`[`／`]` 切月份，`r` 重算，`/` 筛选，`Enter` 看待审详情。
+`[`／`]` 切月份，`r` 重算，`/` 筛选。签发后按 `a` 看当月交易，再按 Enter 看逐腿分类、资金用途、责任和原始账本；待审时 Enter 仍打开待审详情。
 
 比较三个月并导出 CSV：
 
