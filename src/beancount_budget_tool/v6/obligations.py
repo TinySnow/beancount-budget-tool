@@ -109,7 +109,14 @@ def audit_simple_obligations(root: Path, cutover: date,
             candidates[key] = candidate
             order.append(key)
 
-    claims = {}
+    claims, claim_locations = {}, {}
+
+    def check_event(condition, code, message, location):
+        # Resolve YAML positions only on failure: a shared event file may contain
+        # years of later settlements, and location lookup parses the source.
+        if not condition:
+            require(False, code, message, yaml_path_location(declarations, location))
+
     review_sha = None
     opening_rows, owners = [], set()
     if declarations is not None:
@@ -127,50 +134,54 @@ def audit_simple_obligations(root: Path, cutover: date,
         opening_rows = document.get("opening", [])
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         for row_index, row in enumerate(document["events"]):
-            require(type(row) is dict and set(row) in ({
+            location = ("events", row_index)
+            check_event(type(row) is dict and set(row) in ({
                 "liability_ref", "counterpart_ref", "kind", "obligation_id",
                 "owner_id", "reason"}, {
                 "liability_ref", "counterpart_ref", "kind", "obligation_id", "reason"}, {
                 "liability_ref", "counterpart_ref", "kind", "clearing_id", "reason"}),
-                "OBLIGATION_CLAIM_INVALID", "责任事件字段无效")
-            require(type(row["liability_ref"]) is dict and type(row["counterpart_ref"]) is dict,
-                    "OBLIGATION_CLAIM_INVALID", "责任事件必须绑定两侧完整 booked 来源")
+                "OBLIGATION_CLAIM_INVALID", "责任事件字段无效", location)
+            check_event(type(row["liability_ref"]) is dict and type(row["counterpart_ref"]) is dict,
+                    "OBLIGATION_CLAIM_INVALID", "责任事件必须绑定两侧完整 booked 来源", location)
             key = _key(row["liability_ref"])
             if key in future_pairs:
-                require(_key(row["counterpart_ref"]) in future_pairs[key],
+                check_event(_key(row["counterpart_ref"]) in future_pairs[key],
                         "OBLIGATION_COUNTERPART_INVALID", "未来负债对手须为同一交易的完整来源",
-                        yaml_path_location(declarations, ("events", row_index, "counterpart_ref")))
+                        (*location, "counterpart_ref"))
                 continue  # Existing source after the report date; do not apply its claim.
-            require(key in candidates, "OBLIGATION_REF_INVALID", "负债来源不存在或过期", key)
-            require(key not in claims, "DUPLICATE_OBLIGATION_CLAIM", "负债腿被重复认领", key)
+            check_event(key in candidates, "OBLIGATION_REF_INVALID", "负债来源不存在或过期",
+                        (*location, "liability_ref"))
+            check_event(key not in claims, "DUPLICATE_OBLIGATION_CLAIM", "负债腿被重复认领", location)
             candidate = candidates[key]
-            require(candidate["shape"] != "unsupported", "OBLIGATION_EVENT_UNSUPPORTED",
-                    "本事件不符合简单消费刷卡／付款协议", key)
-            require(_key(row["counterpart_ref"]) == _key(candidate["counterpart_ref"]),
-                    "OBLIGATION_COUNTERPART_INVALID", "负债对手来源错误或过期", key)
+            check_event(candidate["shape"] != "unsupported", "OBLIGATION_EVENT_UNSUPPORTED",
+                    "本事件不符合简单消费刷卡／付款协议", location)
+            check_event(_key(row["counterpart_ref"]) == _key(candidate["counterpart_ref"]),
+                    "OBLIGATION_COUNTERPART_INVALID", "负债对手来源错误或过期",
+                    (*location, "counterpart_ref"))
             kind = row["kind"]
             allowed = {"consumer_purchase": {"consumer_purchase"},
                        "asset_outflow": {"payment", "advance_outflow"},
                        "asset_inflow": {"advance_reimbursement"}}
-            require(type(kind) is str and kind in allowed[candidate["shape"]] and
+            check_event(type(kind) is str and kind in allowed[candidate["shape"]] and
                     type(row["reason"]) is str and bool(row["reason"].strip()),
-                    "OBLIGATION_CLAIM_INVALID", "责任 ID、类型或理由无效", key)
+                    "OBLIGATION_CLAIM_INVALID", "责任 ID、类型或理由无效", location)
             ident = row.get("clearing_id") if kind.startswith("advance_") else row.get("obligation_id")
-            require(type(ident) is str and bool(ID.fullmatch(ident)),
-                    "OBLIGATION_CLAIM_INVALID", "责任或清算 ID 非法", key)
+            check_event(type(ident) is str and bool(ID.fullmatch(ident)),
+                    "OBLIGATION_CLAIM_INVALID", "责任或清算 ID 非法", location)
             if kind == "consumer_purchase":
-                require("obligation_id" in row and "clearing_id" not in row,
-                        "OBLIGATION_CLAIM_INVALID", "消费须使用责任 ID", key)
-                require("owner_id" in row and type(row["owner_id"]) is str and
+                check_event("obligation_id" in row and "clearing_id" not in row,
+                        "OBLIGATION_CLAIM_INVALID", "消费须使用责任 ID", location)
+                check_event("owner_id" in row and type(row["owner_id"]) is str and
                         row["owner_id"] in owners,
-                        "OBLIGATION_OWNER_INVALID", "消费责任须声明已登记用途", key)
+                        "OBLIGATION_OWNER_INVALID", "消费责任须声明已登记用途", location)
             else:
-                require("owner_id" not in row, "OBLIGATION_CLAIM_INVALID",
-                        "还款沿用原责任用途，不得重写", key)
-                require((kind == "payment" and "obligation_id" in row and "clearing_id" not in row) or
+                check_event("owner_id" not in row, "OBLIGATION_CLAIM_INVALID",
+                        "还款沿用原责任用途，不得重写", location)
+                check_event((kind == "payment" and "obligation_id" in row and "clearing_id" not in row) or
                         (kind.startswith("advance_") and "clearing_id" in row and "obligation_id" not in row),
-                        "OBLIGATION_CLAIM_INVALID", "责任与代垫清算须使用各自 ID", key)
+                        "OBLIGATION_CLAIM_INVALID", "责任与代垫清算须使用各自 ID", location)
             claims[key] = row
+            claim_locations[key] = location
 
     opening_audit = compile_obligation_opening(opening, historical_sources, opening_rows, owners, declarations)
     balances = opening_audit["debts"]
@@ -195,35 +206,36 @@ def audit_simple_obligations(root: Path, cutover: date,
         elif opening_required:
             state, codes = "NEEDS_REVIEW", ["OBLIGATION_OPENING_REQUIRED"]
         elif claim is not None:
+            location = claim_locations[key]
             amount = Fraction(candidate["signed_units"])
             if kind == "consumer_purchase":
-                require(ident not in balances, "DUPLICATE_OBLIGATION_CLAIM",
-                        "稳定责任 ID 重复用于新消费", key)
+                check_event(ident not in balances, "DUPLICATE_OBLIGATION_CLAIM",
+                        "稳定责任 ID 重复用于新消费", location)
                 balances[ident] = {"account": coord, "owner_id": claim["owner_id"],
                                    "remaining": -amount, "purchase_ref": candidate["liability_ref"],
                                    "purchase_date": candidate["date"]}
             elif kind == "payment":
-                require(ident in balances, "OBLIGATION_SETTLEMENT_UNKNOWN",
-                        "还款未指向本审计中较早发生的消费责任", key)
+                check_event(ident in balances, "OBLIGATION_SETTLEMENT_UNKNOWN",
+                        "还款未指向本审计中较早发生的消费责任", location)
                 obligation = balances[ident]
-                require(obligation["account"] == coord and
+                check_event(obligation["account"] == coord and
                         amount <= obligation["remaining"],
                         "OBLIGATION_SETTLEMENT_EXCESS",
-                        "还款币种／账户不符或超过所指责任未偿额", key)
+                        "还款币种／账户不符或超过所指责任未偿额", location)
                 obligation["remaining"] -= amount
             elif kind == "advance_outflow":
-                require(ident not in advances, "CLEARING_DOUBLE_CLAIM",
-                        "代垫清算 ID 重复", key)
+                check_event(ident not in advances, "CLEARING_DOUBLE_CLAIM",
+                        "代垫清算 ID 重复", location)
                 advances[ident] = {"account": coord, "remaining": amount,
                                    "outflow_ref": candidate["liability_ref"]}
             else:
-                require(ident in advances, "CLEARING_SOURCE_UNKNOWN",
-                        "报销未指向较早发生的代垫", key)
+                check_event(ident in advances, "CLEARING_SOURCE_UNKNOWN",
+                        "报销未指向较早发生的代垫", location)
                 advance = advances[ident]
-                require(advance["account"] == coord and
+                check_event(advance["account"] == coord and
                         -amount <= advance["remaining"],
                         "CLEARING_REIMBURSEMENT_EXCESS",
-                        "报销币种／账户不符或超过代垫未结额", key)
+                        "报销币种／账户不符或超过代垫未结额", location)
                 advance["remaining"] += amount
             state, codes = "CERTIFIED", []
         events.append({**candidate, "status": state, "reason_codes": codes,

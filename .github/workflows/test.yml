@@ -24,6 +24,7 @@ jobs:
       - name: Check command entry points
         run: |
           beancount-budget-tool --help
+          beancount-budget-report --help
           beancount-budget-review-month --help
           beancount-budget-audit --help
           beancount-budget-review-refs --help

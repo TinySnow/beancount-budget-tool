@@ -26,6 +26,14 @@ beancount-budget-tool --config demo-result/initial/compiled/month.yaml --format 
 
 `[`／`]` 切月份，`r` 重算，`/` 筛选，`Enter` 看待审详情。
 
+比较三个月并导出 CSV：
+
+```sh
+beancount-budget-report --config demo-result/initial/compiled/month.yaml --config demo-result/2026-11/compiled/month.yaml --config demo-result/2026-12/compiled/month.yaml --format csv --output demo-result/quarter.csv
+```
+
+区间原支出 2101、退款 760、净消费 1341 CNY；期末最多能花仍是 1160 CNY。月末可花及余额不相加，消费目标与 Q−G 逐月比较。
+
 ## 与 REQUIREMENTS 九个例子的对应
 
 | 例子 | 虚拟账本中的处理 |
