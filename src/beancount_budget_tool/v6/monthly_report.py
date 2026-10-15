@@ -539,24 +539,28 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="从已审侧文件生成 v6 月报")
     parser.add_argument("--config", required=True, type=Path, help="schema 6 月报配置 YAML")
     parser.add_argument("--format", choices=("text", "json", "tui"), default="text")
+    parser.add_argument("--tui-config", type=Path, action="append", default=[],
+                        help="TUI 中可切换的其他已准备月报配置，可重复指定；按所给顺序浏览")
     args = parser.parse_args(argv)
+    if args.tui_config and args.format != "tui":
+        parser.error("--tui-config 仅用于 --format tui")
+    if args.format == "tui":
+        from .tui import run_report_tui
+        try:
+            run_report_tui([args.config, *args.tui_config], audit_month_workflow, render_workflow_text)
+        except BudgetError as exc:
+            print(json.dumps({"error": {"code": exc.code, "message": exc.message,
+                                        "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
+            return 2
+        return 0
     try:
         outcome = audit_month_workflow(args.config.resolve())
     except BudgetError as exc:
         print(json.dumps({"error": {"code": exc.code, "message": exc.message,
                                     "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
         return 2
-    if args.format == "tui":
-        from .tui import run_tui
-        try:
-            run_tui(render_workflow_text(outcome))
-        except BudgetError as exc:
-            print(json.dumps({"error": {"code": exc.code, "message": exc.message,
-                                        "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
-            return 2
-    else:
-        print(render_workflow_text(outcome) if args.format == "text" else
-              json.dumps(outcome, ensure_ascii=False, indent=2, sort_keys=True))
+    print(render_workflow_text(outcome) if args.format == "text" else
+          json.dumps(outcome, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
 
