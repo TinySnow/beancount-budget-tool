@@ -1,12 +1,14 @@
-"""Read-only terminal browsing and refresh over audited v6 monthly workflows."""
+"""Terminal monthly browsing, refresh and explicitly approved source decisions."""
 
 from __future__ import annotations
 
 import curses
+from datetime import datetime
 import json
 from pathlib import Path
 import sys
 import unicodedata
+from uuid import uuid4
 from collections.abc import Callable
 
 from ..errors import BudgetError
@@ -123,13 +125,20 @@ def _wrap(lines: list[str], columns: int) -> list[str]:
 
 
 class ReportBrowser:
-    """Display-only state over fresh complete workflow results, with no number cache."""
+    """Fresh workflow results and the current configuration for each supplied month."""
 
     def __init__(self, configs: list[Path], loader: Callable, renderer: Callable):
         self.configs = list(dict.fromkeys(path.resolve() for path in configs))
         if not self.configs:
             raise BudgetError("TUI_CONFIG_REQUIRED", "至少提供一份月报配置")
         self.loader, self.renderer = loader, renderer
+        # Reopening a saved configuration continues in the same record root;
+        # repeated sessions must not grow paths indefinitely on Windows.
+        self.review_roots = [path.parent.parent.parent if
+                             path.name == "month.yaml" and path.parent.name == "reviewed" and
+                             path.parent.parent.parent.name == "tui-reviews" else
+                             path.parent / "tui-reviews" for path in self.configs]
+        self.saved = set()
         self.index = 0
         self.query = ""
         self.view = "report"
@@ -246,8 +255,10 @@ HELP = [
     "a：已签发后切换交易来源列表；可按类别、资金用途、责任 ID、摘要或账户筛选。",
     "↑↓ 或 j/k：滚动文本；在待审列表选择项目。PgUp/PgDn 或空格翻页，g/G 到首尾。",
     "Enter：打开所选待审／交易详情；交易显示逐腿原币、分类、用途、责任及原始账本内容。",
+    "e：填写选中的分类／H 资产用途，写理由、核对预览，明确输入 y 并回车才保存。",
+    "保存生成新的 tui-reviews/本次记录/reviewed/month.yaml，当前月份自动使用新配置并重审。",
+    "重启或准备下一月时使用新配置；原配置不改写。取消填写不保存。其他待审按对应配置处理。",
     "Esc：关闭详情／帮助，或清除筛选；无这些状态时退出。q 退出。? 打开帮助。",
-    "此界面只读；类别／用途决定用 beancount-budget-review 保存后，按 r 重算。",
     "筛选只改变显示，不改变计算、认证状态或待审总数。警告不会随报告筛选隐藏。",
 ]
 
@@ -274,20 +285,22 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     items = browser.items()
     title = {"reviews": "待审列表", "transactions": "已签发月报的交易来源", "report": "报告文本"}[browser.view]
     subtitle = f"{title}；待审总数 {total_reviews}"
+    if browser.index in browser.saved:
+        subtitle = "已保存，正使用新配置（? 看完整路径）；" + subtitle
     if browser.query:
         subtitle += f"；筛选：{browser.query}"
     listing = browser.outcome is not None and browser.view in {"reviews", "transactions"} and not (
         browser.error or browser.detail or browser.help)
-    if browser.error:
+    if browser.help:
+        lines = [*HELP, f"当前配置完整路径：{browser.config}"]
+        subtitle = "帮助；Esc 返回"
+    elif browser.error:
         lines = ["本次计算失败；旧月报已清除。修正文件后按 r 重算。",
                  f"{browser.error.code}：{browser.error.message}", f"来源：{browser.error.source or '未提供'}"]
         subtitle = "计算失败；不显示旧数字或局部月报"
     elif browser.outcome is None:
         lines = ["正在读取当前账本与配置并运行审计。旧结果已清除，请等待。"]
         subtitle = "审计进行中；尚不提供待审总数或预算数字"
-    elif browser.help:
-        lines = [*HELP, f"当前配置完整路径：{browser.config}"]
-        subtitle = "帮助；Esc 返回"
     elif browser.detail:
         item = browser.detail
         if browser.view == "transactions":
@@ -295,7 +308,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
             lines = ["交易来源详情（当前月报快照；只读）", *render_transaction(item, browser.outcome["report"]["owner_names"])]
             subtitle = "交易来源详情；Esc 返回列表"
         else:
-            lines = ["待审详情（当前审计快照；只读）",
+            lines = ["待审详情（当前审计快照；分类／H 用途可按 e 填写）",
                  f"原因：{item.get('reason_code', '')} {item.get('detail', '')}",
                  f"位置：{item.get('source') or '未提供'}", "",
                  *json.dumps(item, ensure_ascii=False, indent=2, sort_keys=True).splitlines()]
@@ -339,7 +352,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
-    footer = "r 重算  / 筛选  a 交易  t 报告/待审  Enter 详情  [ ] 切配置  ? 帮助  q 退出"
+    footer = "r 重算  / 筛选  e 填写  a 交易  t 报告/待审  Enter 详情  [ ] 切配置  ? 帮助  q 退出"
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -377,6 +390,127 @@ def _read_filter(stdscr, original: str) -> str:
             curses.curs_set(0)
         except curses.error:
             pass
+
+
+def _read_field(stdscr, title: str, context: list[str], prompt: str,
+                original: str = "") -> str | None:
+    """A cancellable Unicode field with scrollable full context and visible input tail."""
+    value, offset = original, 0
+    try:
+        curses.curs_set(1)
+    except curses.error:
+        pass
+    try:
+        while True:
+            height, width = stdscr.getmaxyx()
+            stdscr.erase()
+            _put(stdscr, 0, title, curses.A_REVERSE | curses.A_BOLD)
+            page = max(1, height - 4)
+            lines = _wrap(context, width - 1)
+            offset = max(0, min(offset, max(0, len(lines) - page)))
+            if height >= 5 and width >= 8:
+                for row, line in enumerate(lines[offset:offset + page], 1):
+                    _put(stdscr, row, line)
+                _put(stdscr, height - 3, prompt)
+                _put(stdscr, height - 2, "PgUp/PgDn 查看全文；Enter 继续，Esc 取消；Ctrl+U 清空")
+                tail = value
+                while tail and sum(_width(c) for c in tail) > max(1, width - 3):
+                    tail = tail[1:]
+                _put(stdscr, height - 1, "> " + tail, curses.A_REVERSE)
+            elif height > 1:
+                _put(stdscr, 1, "窗口过小；放大终端或 Esc 取消")
+            stdscr.refresh()
+            key = _read_key(stdscr)
+            if key == "\x1b":
+                return None
+            if height < 5 or width < 8:
+                continue
+            if key in ("\n", "\r", curses.KEY_ENTER):
+                return value
+            if key in (curses.KEY_PPAGE, curses.KEY_UP):
+                offset -= page if key == curses.KEY_PPAGE else 1
+            elif key in (curses.KEY_NPAGE, curses.KEY_DOWN):
+                offset += page if key == curses.KEY_NPAGE else 1
+            elif key in ("\b", "\x7f", curses.KEY_BACKSPACE):
+                value = value[:-1]
+            elif key == "\x15":
+                value = ""
+            elif isinstance(key, str) and key.isprintable() and len(value) < 4096:
+                value += key
+    finally:
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+
+def _message(stdscr, title: str, lines: list[str]):
+    _read_field(stdscr, title, lines, "Enter 或 Esc 返回")
+
+
+def _edit_review(stdscr, browser: ReportBrowser):
+    from .tui_review import prepare_review, save_review, validate_decision
+    from ..exact import amount_text
+
+    if browser.view != "reviews" or browser.error or browser.help or not browser.reviews():
+        return
+    items = browser.reviews()
+    item = browser.detail or items[max(0, min(browser.selected, len(items) - 1))]
+    output = browser.review_roots[browser.index] / (datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:12])
+    try:
+        _put(stdscr, max(0, stdscr.getmaxyx()[0] - 1), "正在核对所选来源及可选名称……")
+        stdscr.refresh()
+        prepared = prepare_review(browser.config, item)
+        row = prepared.row
+        label = "预算类别（budget）" if row["kind"] == "classification" else "资产资金用途（fund）"
+        context = [f"日期：{row['date']}  {row['payee'] or ''}  {row['narration']}",
+                   f"账户：{row['account']}", f"原币分录：{row['signed_units']} {row['commodity']}",
+                   f"来源：{row['source']}", f"填写：{label}",
+                   "可选名称／别名（- 表示预算外）：", *prepared.names,
+                   "单一名称覆盖整笔；多项如：保险200，旅游900。合计须等于分录绝对金额，不填负金额。"]
+        decision, reason = "", ""
+        while True:
+            decision = _read_field(stdscr, "填写一项审阅决定", context, f"{label}：", decision)
+            if decision is None:
+                return
+            reason = _read_field(stdscr, "填写审阅理由", [*context[:5], f"决定：{decision}"], "判断依据：", reason)
+            if reason is None:
+                return
+            try:
+                parts = validate_decision(prepared, decision, reason)
+                break
+            except BudgetError as exc:
+                _message(stdscr, "填写有误；尚未保存", [str(exc)])
+        preview = [*context[:5], "本次只批准这一项：",
+                   *[f"{name}：{amount_text(amount)} {row['commodity']}" for name, amount in parts],
+                   f"理由：{reason}", "保存后自动复审；其他待审不会被批准。",
+                   f"新配置：{output / 'reviewed' / 'month.yaml'}",
+                   "重启工具、导出报表或准备下一月时，使用上面的新配置。"]
+        approved = _read_field(stdscr, "核对后明确批准", preview, "输入 y 并回车保存；其他输入或 Esc 取消：")
+        if approved != "y":
+            return
+        browser.clear()
+        _draw_browser(stdscr, browser)
+        result = save_review(prepared, decision, reason, output, approved=True)
+        browser.configs[browser.index] = Path(result["config"]).resolve()
+        browser.saved.add(browser.index)
+        browser.filter("")
+        browser.refresh()
+        lines = ["本项决定已保存；当前月份已切换到新配置并重新审计。",
+                 f"以后请使用：{browser.config}", f"审阅记录：{output}"]
+        if browser.error:
+            lines += ["决定已保存，但月报计算仍有错误：", str(browser.error)]
+        else:
+            lines += [f"本月状态：{browser.outcome['status']}；待审 {len(browser.outcome.get('review_items', []))} 项。"]
+        _message(stdscr, "已保存审阅决定", lines)
+    except (BudgetError, OSError, UnicodeError) as exc:
+        # Refresh after a stale source or rejected ownership decision. No old
+        # report/detail should survive while the user repairs the input.
+        browser.refresh()
+        lines = [str(exc), "本次未发布新配置；请核对原因后重新选择。"]
+        if output.exists():
+            lines += [f"填写记录保留在：{output}", "原账本与原配置没有改写。"]
+        _message(stdscr, "未保存审阅决定", lines)
 
 
 def _report_browser(stdscr, browser: ReportBrowser):
@@ -417,6 +551,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             browser.help, browser.offset = not browser.help, 0
         elif key == "a":
             browser.toggle_transactions()
+        elif key == "e":
+            _edit_review(stdscr, browser)
         elif key == "t":
             browser.view = "reviews" if browser.view == "report" else "report"
             browser.detail, browser.help, browser.offset, browser.selected = None, False, 0, 0
