@@ -107,6 +107,44 @@ beancount-budget-tool --config demo-budget/month.yaml
 
 ## 3. 导入新月后复核
 
+### 待审的类别／用途：只填决定，不复制来源引用
+
+已有月报配置后，可以把当前待审导出成填写表：
+
+```bash
+beancount-budget-review --config path/to/month.yaml --output review-month
+```
+
+打开 `review-month/decisions.yaml`，按日期、摘要、金额和账本行号核对。**每项只改三处：**
+
+```yaml
+decision: 生活开销.餐饮
+reason: 核过原流水，是本人餐饮消费
+approved: true
+```
+
+`kind: classification` 填收入／费用类别（相当于 `budget`）；`kind: asset_ownership` 填资产资金用途（相当于 `fund`）。可选名称在同目录的 `choices.yaml`。用途拆分可填 `decision: "保险200，电子产品900，旅游900"`，合计必须等于这条分录的绝对金额；正负号由原分录决定。明确预算外时填 `decision: "-"`。不确定的项目保持 `approved: false`，可以分批处理。
+
+保存填写表，然后运行：
+
+```bash
+beancount-budget-review --apply review-month/decisions.yaml
+```
+
+程序保存已批准的决定到 `review-month/reviewed`，自动补来源引用并重跑月报。**此后用新配置继续：**
+
+```bash
+beancount-budget-tool --config review-month/reviewed/month.yaml
+```
+
+还没审完时，用这个新配置再次导出到另一个目录，只处理剩余项目。已有输出目录不会覆盖，需要另选目录时在 `--apply` 后加 `--output 新目录`。如果保存后发现下一层计划配置错误，终端仍会显示已保存的配置路径和错误位置；修正该配置后重跑月报即可。
+
+账本和原审阅文件保持只读。已通过侧文件批准的分录，再补行内 `budget`／`fund` 会构成重复认领，需先撤掉对应外部认领再重审；不要同时使用两份决定。改动原交易后，旧填写表会拒绝使用已失效的引用，须重新导出。
+
+这张表目前处理**已发现的分类与 H 资产用途**。`other-items.yaml` 保留账户、期初、负债、转账协议和计价等其他待审，它们仍需各自审核；保存后也可能出现下一层问题。全部月报检查通过才算签发。Windows 未激活环境时将命令名换成 `.\.venv\Scripts\beancount-budget-review.exe`；安装更新后可用。
+
+### 已有私人批量分类规则
+
 有已审 v6 配置和私人规则的账本，可用一条命令续用旧分类、生成新分类文件，并列出当前日期区间的待审来源：
 
 ```bash
