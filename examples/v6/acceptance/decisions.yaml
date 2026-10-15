@@ -1,0 +1,24 @@
+# 仅批准本目录虚构账本的事实，不是私人账本默认规则。
+opening:
+  Assets:Mixed:A: {自由资金: '700', 电子产品: '100', 储蓄: '200', 旅游: '300'}
+  Assets:Trip:Bank: {旅游: '600'}
+  Assets:Appliance: {家电: '800'}
+  Assets:Outside:Bank: {储蓄: '760'}
+expense_targets:
+  生活开销: '2000'
+  交通费用: '1000'
+  酒店: '1000'
+  家电: '1000'
+allocation_targets:
+  自由资金: not_assessed
+  生活费: '2000'
+  储蓄: '700'
+  电子产品: not_assessed
+  旅游: not_assessed
+  家电: not_assessed
+# 明确列出的责任事件，不能从所有负债分录自动认定为本人消费。
+obligations:
+  跨月：单位代垫: {kind: advance_outflow, clearing_id: employer}
+  跨月：信用卡消费: {kind: consumer_purchase, obligation_id: card, owner: 生活费}
+  跨月：信用卡还款: {kind: payment, obligation_id: card}
+  跨月：单位报销: {kind: advance_reimbursement, clearing_id: employer}
