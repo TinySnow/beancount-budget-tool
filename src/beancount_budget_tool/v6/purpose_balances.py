@@ -25,7 +25,7 @@ def summarize_purpose_balances(account_purposes: dict, pools: dict, k_book: dict
         reasons.append("H_HOLDINGS_PENDING")
     if k_book["status"] != "CERTIFIED":
         reasons.append("K_BOOK_PURPOSE_PENDING")
-    if any(pool["status"] != "CERTIFIED_NOMINAL_BOOK_COVERAGE"
+    if any(pool["status"] not in {"CERTIFIED_NOMINAL_BOOK_COVERAGE", "CERTIFIED_NOMINAL_PURPOSE_BALANCES"}
            for pool in pools["pools"]):
         reasons.append("PURPOSE_POOL_PENDING")
     if reasons:
@@ -82,13 +82,17 @@ def summarize_purpose_balances(account_purposes: dict, pools: dict, k_book: dict
                                          ("expense_owner_id", "expense_default"))
                  if defaults.get(field) == owner]
         native = group(owner, h, "units")
+        nominal = group(owner, pool_cost, "units", True)
         return {"owner_id": owner, "name": name, "default_roles": roles,
                 "h_native_balances": native,
-                "pool_book_cost_balances": group(owner, pool_cost, "units", True),
+                "pool_book_cost_balances": nominal,
                 "k_book_purpose_changes": group(owner, k, "signed_change"),
                 "has_negative_h_position": any(
                     Fraction(account["units"]) < 0
-                    for currency in native for account in currency["accounts"])}
+                    for currency in native for account in currency["accounts"]),
+                "has_negative_pool_position": any(
+                    Fraction(account["units"]) < 0
+                    for currency in nominal for account in currency["accounts"])}
 
     return {"status": "CERTIFIED", "reason_codes": [],
             "purposes": [purpose(owner, name) for owner, name in owners.items()],

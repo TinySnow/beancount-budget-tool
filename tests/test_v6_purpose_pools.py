@@ -70,6 +70,11 @@ class PurposePoolTests(unittest.TestCase):
     def audit(self):
         return audit_purpose_pools(self.ledger, date(2026, 9, 1), date(2026, 9, 30), self.pools)
 
+    def allow_negative(self):
+        document = yaml.safe_load(self.pools.read_text(encoding="utf-8"))
+        document["pools"][0]["remainder_policy"] = "allow_negative"
+        self.pools.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
+
     def test_month_without_a_security_pool_uses_empty_declaration(self):
         self.pools.write_text(yaml.safe_dump({
             "schema": 6, "cutover": "2026-09-01", "report_currency": "CNY",
@@ -146,6 +151,75 @@ class PurposePoolTests(unittest.TestCase):
                                '  Expenses:Fee 1 CNY\n', encoding="utf-8")
         report = self.audit()
         self.assertEqual(report["pools"][0]["remainder_book_cost"], "998")
+
+    def test_loss_keeps_nominal_savings_and_shows_negative_investment(self):
+        self.allow_negative()
+        self.ledger.write_text(LEDGER + '2026-09-05 * "realised loss"\n'
+                               '  Assets:Broker:Cash -1500 CNY\n'
+                               '  Income:Interest 1500 CNY\n', encoding="utf-8")
+        pool = self.audit()["pools"][0]
+        self.assertEqual(pool["status"], "CERTIFIED_NOMINAL_PURPOSE_BALANCES")
+        self.assertEqual(pool["closing_book_cost"], "2499")
+        self.assertEqual(pool["protected_nominal_principal"], "3000")
+        self.assertEqual(pool["remainder_book_cost"], "-501")
+        self.assertEqual(pool["principal_book_shortfall"], "501")
+        self.assertEqual(pool["maximum_principal_book_shortfall"], "501")
+        cash, security = pool["account_purposes"]
+        self.assertEqual((cash["protected_nominal"], cash["remainder_book_cost"]), ("3000", "-501"))
+        self.assertEqual(security["remainder_book_cost"], "0")
+
+    def test_loss_recovery_does_not_hide_the_period_shortfall(self):
+        self.write_pool("4000")
+        self.allow_negative()
+        self.ledger.write_text(LEDGER + '2026-09-05 * "recovery"\n'
+                               '  Assets:Broker:Cash 2 CNY\n'
+                               '  Income:Interest -2 CNY\n', encoding="utf-8")
+        pool = self.audit()["pools"][0]
+        self.assertEqual(pool["remainder_book_cost"], "1")
+        self.assertEqual(pool["principal_book_shortfall"], "0")
+        self.assertEqual(pool["maximum_principal_book_shortfall"], "1")
+
+    def test_optional_loss_policy_does_not_allow_voluntary_outbound_overdraft(self):
+        self.allow_negative()
+        self.ledger.write_text(LEDGER + '2026-09-05 * "voluntary withdrawal"\n'
+                               '  Assets:Broker:Cash -1500 CNY\n'
+                               '  Equity:Opening-Balances 1500 CNY\n', encoding="utf-8")
+        with self.assertRaises(BudgetError) as caught:
+            self.audit()
+        self.assertEqual(caught.exception.code, "POOL_VOLUNTARY_OVERDRAFT")
+        self.assertTrue(caught.exception.source.startswith(str(self.ledger.resolve()) + ":"))
+
+    def test_optional_loss_policy_never_allows_negative_physical_inventory(self):
+        self.allow_negative()
+        self.ledger.write_text(LEDGER + '2026-09-05 * "impossible cash loss"\n'
+                               '  Assets:Broker:Cash -4500 CNY\n'
+                               '  Expenses:Fee 4500 CNY\n', encoding="utf-8")
+        with self.assertRaises(BudgetError) as caught:
+            self.audit()
+        self.assertEqual(caught.exception.code, "POOL_NEGATIVE_LOT")
+
+    def test_strict_coverage_checks_opening_even_when_first_receipt_repairs_it(self):
+        self.write_pool("4001")
+        # First in-month event is an income which repairs the opening deficit.
+        self.ledger.write_text(LEDGER.replace('2026-09-02 * "repo buy"',
+            '2026-09-01 * "opening repair"\n'
+            '  Assets:Broker:Cash 2 CNY\n'
+            '  Income:Interest -2 CNY\n'
+            '2026-09-02 * "repo buy"'), encoding="utf-8")
+        with self.assertRaises(BudgetError) as caught:
+            self.audit()
+        self.assertEqual(caught.exception.code, "POOL_PRINCIPAL_UNCOVERED")
+        self.allow_negative()
+        self.assertEqual(self.audit()["pools"][0]["maximum_principal_book_shortfall"], "1")
+
+    def test_loss_policy_rejects_unknown_values_with_yaml_location(self):
+        document = yaml.safe_load(self.pools.read_text(encoding="utf-8"))
+        document["pools"][0]["remainder_policy"] = "guess"
+        self.pools.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
+        with self.assertRaises(BudgetError) as caught:
+            self.audit()
+        self.assertEqual(caught.exception.code, "POOL_REMAINDER_POLICY_INVALID")
+        self.assertTrue(caught.exception.source.startswith(str(self.pools.resolve()) + ":"))
 
 
 if __name__ == "__main__":

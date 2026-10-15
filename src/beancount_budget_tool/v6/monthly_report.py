@@ -466,6 +466,12 @@ def render_text(report: dict) -> str:
     for pool in report["purpose_pools"]["pools"]:
         lines.append(f"  {pool['id']}：{pool['protected_label']} {amount(pool['protected_nominal_principal'])}，"
                      f"{pool['remainder_label']} {amount(pool['remainder_book_cost'])} {currency}；市值未知")
+        if Fraction(pool.get("principal_book_shortfall", "0")) > 0:
+            lines.append(f"    警告：{pool['remainder_label']} 为负，名义本金账面缺口 "
+                         f"{amount(pool['principal_book_shortfall'])} {currency}；不代表本金已保全")
+        elif Fraction(pool.get("maximum_principal_book_shortfall", "0")) > 0:
+            lines.append(f"    警告：期间曾有名义本金账面缺口 "
+                         f"{amount(pool['maximum_principal_book_shortfall'])} {currency}，日末已补足")
         for account in pool["account_purposes"]:
             lines.append(f"    {account['account']}：{pool['protected_label']} {amount(account['protected_nominal'])}，"
                          f"{pool['remainder_label']} {amount(account['remainder_book_cost'])} {currency}")
@@ -502,6 +508,8 @@ def render_text(report: dict) -> str:
             lines.append(f"  {row['name']}{suffix}：")
             if row["has_negative_h_position"]:
                 lines.append("    警告：部分账户的该用途余额为负，请核对账户分布")
+            if row.get("has_negative_pool_position"):
+                lines.append("    警告：部分证券池账户的该用途账面余额为负，名义本金不代表已保全")
             if not row["h_native_balances"]:
                 lines.append("    H 用途余额：0（无余额）")
             for key, label, value_key in (

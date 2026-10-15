@@ -19,7 +19,7 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import FinancialInput, load_financial
-from ..yamlstrict import load_yaml
+from ..yamlstrict import load_yaml, yaml_path_location
 from .accounts import _lot
 from .facts import FactIndex
 from .ownership import ID
@@ -60,7 +60,7 @@ def _book_weight(posting: data.Posting, currency: str) -> Fraction:
 
 def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                         declarations: Path) -> dict:
-    """Check fixed principal coverage at every booked transaction boundary.
+    """Audit nominal purpose accounting at every booked transaction boundary.
 
     An overlay covers *all* direct postings in its declared accounts; no
     source leg is inferred to be a particular owner's lot. A declared account
@@ -85,13 +85,19 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
     used_accounts: set[str] = set()
     used_ids: set[str] = set()
     reports = []
-    for row in document["pools"]:
+    for row_index, row in enumerate(document["pools"]):
+        source = yaml_path_location(declarations, ("pools", row_index))
         required = {
             "id", "accounts", "reserve_order", "payment_scope",
             "protected_owner_id", "protected_label", "protected_principal",
             "remainder_owner_id", "remainder_label", "reason"}
-        require(type(row) is dict and required <= set(row) <= required | {"opening_fingerprint"},
-            "POOL_DECLARATION_INVALID", "每个资金池须明确账户、本金、用途和理由")
+        require(type(row) is dict and required <= set(row) <= required | {
+            "opening_fingerprint", "remainder_policy"},
+            "POOL_DECLARATION_INVALID", "每个资金池须明确账户、本金、用途和理由", source)
+        policy = row.get("remainder_policy", "require_coverage")
+        require(type(policy) is str and policy in {"require_coverage", "allow_negative"},
+                "POOL_REMAINDER_POLICY_INVALID", "资金池余款规则须为 require_coverage 或 allow_negative",
+                yaml_path_location(declarations, ("pools", row_index, "remainder_policy")))
         ident = row["id"]
         names = row["accounts"]
         require(type(ident) is str and bool(ident) and ident not in used_ids and
@@ -138,6 +144,7 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                 continue
             if opening is None and entry.date >= cutover:
                 opening = balance
+                minimum = opening
                 require(all(units >= 0 for units in lots.values()),
                         "POOL_NEGATIVE_OPENING", "资金池期初 booked lot 为负", ident)
             if entry.date > as_of:
@@ -145,6 +152,7 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
             relevant = [posting for posting in entry.postings if posting.account in names]
             if not relevant:
                 continue
+            before_balance = balance
             changes: dict[tuple[str, str], Fraction] = {}
             for posting in relevant:
                 delta = _book_weight(posting, currency)
@@ -158,6 +166,14 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                     require(lots[key] >= 0, "POOL_NEGATIVE_LOT",
                             "资金池证券或现金 booked 库存为负", str(key))
             if entry.date >= cutover:
+                if policy == "allow_negative" and balance < min(principal, before_balance):
+                    # A realised loss can overdraw a purpose, but moving money
+                    # out voluntarily cannot borrow from the fixed principal.
+                    outside = [p for p in entry.postings if p.account not in names]
+                    require(bool(outside) and all(p.account.split(":", 1)[0] in {
+                        fin.options["name_income"], fin.options["name_expenses"]} for p in outside),
+                        "POOL_VOLUNTARY_OVERDRAFT", "池外主动划拨不能产生或扩大名义用途缺口",
+                        f"{entry.meta.get('filename')}:{entry.meta.get('lineno')}")
                 tx_count += 1
                 posting_count += len(relevant)
                 if minimum is None or balance < minimum:
@@ -168,16 +184,26 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                     "POOL_NEGATIVE_OPENING", "资金池期初 booked lot 为负", ident)
         if minimum is None:
             minimum = opening
-        require(opening >= principal and minimum >= principal,
+        require(policy == "allow_negative" or opening >= principal and minimum >= principal,
                 "POOL_PRINCIPAL_UNCOVERED",
-                "资金池 booked 成本曾不足覆盖受保护本金", ident)
+                "资金池 booked 成本曾不足覆盖受保护本金", source)
         require(all(value >= 0 for value in per_account.values()),
                 "POOL_NEGATIVE_ACCOUNT_BOOK", "资金池账户日末 booked 成本为负", ident)
         remaining = principal
-        by_account = []
+        assignments = {}
         for name in order:
             assigned = min(remaining, per_account[name])
+            assignments[name] = assigned
             remaining -= assigned
+        # When losses have exhausted the remainder, retain the full nominal
+        # principal and show its uncovered part on the first reserve account.
+        # This signed display is neither a physical lot claim nor a guarantee.
+        if remaining and policy == "allow_negative":
+            assignments[order[0]] += remaining
+            remaining = Fraction(0)
+        by_account = []
+        for name in order:
+            assigned = assignments[name]
             by_account.append({"account": name,
                                "book_cost": exact_text(per_account[name]),
                                "protected_owner_id": protected,
@@ -190,6 +216,7 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                 "资金池账户分配后没有足额保护本金", ident)
         reports.append({"id": ident, "accounts": names,
                         "reserve_order": order,
+                        "remainder_policy": policy,
                         "protected_owner_id": protected,
                         "protected_label": row["protected_label"],
                         "protected_nominal_principal": exact_text(principal),
@@ -199,13 +226,16 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                         "minimum_book_cost_since_cutover": exact_text(minimum),
                         "closing_book_cost": exact_text(balance),
                         "remainder_book_cost": exact_text(balance - principal),
+                        "principal_book_shortfall": exact_text(max(Fraction(0), principal - balance)),
+                        "maximum_principal_book_shortfall": exact_text(max(Fraction(0), principal - minimum)),
                         "account_purposes": by_account,
                         "post_cutover_transactions": tx_count,
                         "post_cutover_postings": posting_count,
                         "market_value": None,
                         "market_value_status": "UNKNOWN_REQUIRES_AS_OF_PRICES",
-                        "status": "CERTIFIED_NOMINAL_BOOK_COVERAGE"})
+                        "status": ("CERTIFIED_NOMINAL_PURPOSE_BALANCES" if policy == "allow_negative"
+                                   else "CERTIFIED_NOMINAL_BOOK_COVERAGE")})
     return {"mode": "v6_purpose_pool_audit_only", "ledger_snapshot": fin.digest,
             "cutover": cutover.isoformat(), "as_of": as_of.isoformat(),
             "report_currency": currency, "pools": reports,
-            "note": "账面成本保护不证明证券市值、可变现额、逐 lot 归属或完整月度 G"}
+            "note": "名义本金与余款合计等于账面成本；余款为负表示本金存在账面缺口，不证明本金保全、证券市值、可变现额、逐 lot 归属或完整月度 G"}

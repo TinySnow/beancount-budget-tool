@@ -105,6 +105,17 @@ class PurposeBalancesTests(unittest.TestCase):
         self.assertEqual(report["reason_codes"], ["PURPOSE_POOL_PENDING"])
         self.assertIsNone(report["purposes"])
 
+    def test_signed_nominal_pool_balance_is_certified_with_a_deficit_flag(self):
+        pool = self.pools["pools"][0]
+        pool["status"] = "CERTIFIED_NOMINAL_PURPOSE_BALANCES"
+        pool["account_purposes"][0]["remainder_book_cost"] = "-500"
+        report = self.audit()
+        self.assertEqual(report["status"], "CERTIFIED")
+        investment = next(row for row in report["purposes"] if row["owner_id"] == "investment")
+        self.assertTrue(investment["has_negative_pool_position"])
+        self.assertFalse(investment["has_negative_h_position"])
+        self.assertEqual(investment["pool_book_cost_balances"][0]["units"], "-500")
+
 
 if __name__ == "__main__":
     unittest.main()
