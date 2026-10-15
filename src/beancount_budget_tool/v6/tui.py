@@ -151,6 +151,7 @@ class ReportBrowser:
         self.help = False
 
     def refresh(self):
+        previous_view = self.view
         self.clear()
         try:
             outcome = self.loader(self.config)
@@ -160,6 +161,8 @@ class ReportBrowser:
             rendered = self.renderer(outcome)
             self.outcome, self.lines = outcome, rendered.splitlines()
             self.view = "reviews" if outcome.get("review_items") else "report"
+            if previous_view == "transactions" and self.has_transactions():
+                self.view = "transactions"
         except BudgetError as exc:
             self.error = exc
         except (OSError, UnicodeError) as exc:
@@ -185,6 +188,31 @@ class ReportBrowser:
         return [item for item in items if not query or query in json.dumps(
             item, ensure_ascii=False, sort_keys=True).casefold()]
 
+    def has_transactions(self) -> bool:
+        return bool(self.outcome and self.outcome["status"] == "CERTIFIED_SCOPED" and
+                    self.outcome.get("report") and self.outcome["report"].get("transactions") is not None)
+
+    def transactions(self) -> list[dict]:
+        items = self.outcome["report"]["transactions"]["rows"] if self.has_transactions() else []
+        query = self.query.casefold()
+        if not query:
+            return items
+        from .transaction_details import render_transaction
+        names = self.outcome["report"]["owner_names"] if self.has_transactions() else {}
+        # Search what the user can read, including decimal display amounts.
+        # Short queries must not accidentally match opaque source hashes.
+        return [item for item in items if query in "\n".join(render_transaction(item, names)).casefold()]
+
+    def items(self) -> list[dict]:
+        return self.transactions() if self.view == "transactions" else self.reviews()
+
+    def toggle_transactions(self):
+        if not self.has_transactions():
+            return
+        self.view = "report" if self.view == "transactions" else "transactions"
+        self.selected = self.offset = 0
+        self.detail, self.help = None, False
+
     def report_lines(self) -> list[str]:
         if not self.query:
             return self.lines
@@ -194,8 +222,8 @@ class ReportBrowser:
                 if index < 2 or "警告" in line or query in line.casefold()] or ["没有匹配行"]
 
     def open_detail(self):
-        items = self.reviews()
-        if self.view == "reviews" and items:
+        items = self.items()
+        if self.view in {"reviews", "transactions"} and items:
             self.selected = max(0, min(self.selected, len(items) - 1))
             self.detail = items[self.selected]
             self.offset = 0
@@ -215,8 +243,9 @@ HELP = [
     "[ / ]：按命令提供的顺序切换配置，每次重新审计，不复用其他月份的声明或数字。",
     "/：输入关键词筛选；支持中文、账户、用途、原因码和来源路径。空查询清除筛选。",
     "t：切换完整报告文本和待审列表。待审状态只显示未通过项目，不显示局部正式数字。",
+    "a：已签发后切换交易来源列表；可按类别、资金用途、责任 ID、摘要或账户筛选。",
     "↑↓ 或 j/k：滚动文本；在待审列表选择项目。PgUp/PgDn 或空格翻页，g/G 到首尾。",
-    "Enter：打开选中待审的完整详情，包含原因、文件行号和全部来源引用。",
+    "Enter：打开所选待审／交易详情；交易显示逐腿原币、分类、用途、责任及原始账本内容。",
     "Esc：关闭详情／帮助，或清除筛选；无这些状态时退出。q 退出。? 打开帮助。",
     "此界面只读；类别／用途决定用 beancount-budget-review 保存后，按 r 重算。",
     "筛选只改变显示，不改变计算、认证状态或待审总数。警告不会随报告筛选隐藏。",
@@ -242,11 +271,12 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     _put(stdscr, 1, f"配置：{browser.config}")
     page = height - 4
     total_reviews = len(browser.outcome.get("review_items", [])) if browser.outcome else 0
-    items = browser.reviews()
-    subtitle = f"{'待审列表' if browser.view == 'reviews' else '报告文本'}；待审总数 {total_reviews}"
+    items = browser.items()
+    title = {"reviews": "待审列表", "transactions": "已签发月报的交易来源", "report": "报告文本"}[browser.view]
+    subtitle = f"{title}；待审总数 {total_reviews}"
     if browser.query:
         subtitle += f"；筛选：{browser.query}"
-    listing = browser.outcome is not None and browser.view == "reviews" and not (
+    listing = browser.outcome is not None and browser.view in {"reviews", "transactions"} and not (
         browser.error or browser.detail or browser.help)
     if browser.error:
         lines = ["本次计算失败；旧月报已清除。修正文件后按 r 重算。",
@@ -260,13 +290,21 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         subtitle = "帮助；Esc 返回"
     elif browser.detail:
         item = browser.detail
-        lines = ["待审详情（当前审计快照；只读）",
+        if browser.view == "transactions":
+            from .transaction_details import render_transaction
+            lines = ["交易来源详情（当前月报快照；只读）", *render_transaction(item, browser.outcome["report"]["owner_names"])]
+            subtitle = "交易来源详情；Esc 返回列表"
+        else:
+            lines = ["待审详情（当前审计快照；只读）",
                  f"原因：{item.get('reason_code', '')} {item.get('detail', '')}",
                  f"位置：{item.get('source') or '未提供'}", "",
                  *json.dumps(item, ensure_ascii=False, indent=2, sort_keys=True).splitlines()]
-        subtitle = "待审详情；Esc 返回列表"
+            subtitle = "待审详情；Esc 返回列表"
     elif listing:
         subtitle += f"；匹配 {len(items)} 项"
+        if browser.view == "transactions":
+            count = browser.outcome["report"]["transactions"]["count"] if browser.has_transactions() else 0
+            subtitle += f"；交易总数 {count}"
         if (browser.outcome or {}).get("review_queue", {}).get("preflight_only"):
             subtitle += "；仅当前预检阻断层，其余尚未检查"
         browser.selected = max(0, min(browser.selected, max(0, len(items) - 1)))
@@ -275,15 +313,25 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         browser.offset = max(0, min(browser.offset, max(0, len(items) - page)))
         lines = []
         for index, item in enumerate(items):
+            if browser.view == "transactions":
+                amounts = " / ".join(f"{part['signed_units']} {part['commodity']}" for part in item["postings"][:2])
+                lines.append(f"{'>' if index == browser.selected else ' '} {index + 1}. {item['date']} "
+                             f"{item.get('payee') or ''} {item['narration']} | {amounts} [{item['source']}]")
+                continue
             label = "程序实现缺口" if item.get("reason_kind") == "implementation_limit" else "待审"
             lines.append(f"{'>' if index == browser.selected else ' '} {index + 1}. {label} "
                          f"{item.get('date', '')} {item.get('account', '')} "
                          f"{item.get('signed_units', '')} {item.get('commodity', '')} "
                          f"{item.get('reason_code', '')}：{item.get('detail', '')} [{item.get('source', '')}]")
         if not lines:
-            lines = ["没有匹配待审项；筛选不改变上方待审总数与认证状态。"]
+            lines = (["没有匹配交易；筛选不改变上方交易总数和预算数字。"] if browser.view == "transactions" else
+                     ["没有匹配待审项；筛选不改变上方待审总数与认证状态。"])
     else:
         lines = browser.report_lines()
+    if browser.has_transactions() and browser.view == "transactions" and not browser.help:
+        warning_count = sum(line.lstrip().startswith("警告：") for line in browser.lines)
+        if warning_count:
+            subtitle = f"月报警告 {warning_count} 条（t 查看）；" + subtitle
     _put(stdscr, 2, subtitle, curses.A_BOLD)
     if not listing:
         lines = _wrap(lines, width - 1)
@@ -291,7 +339,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
-    footer = "r 重算  / 筛选  t 视图  Enter 详情  [ ] 切配置  ? 帮助  q 退出"
+    footer = "r 重算  / 筛选  a 交易  t 报告/待审  Enter 详情  [ ] 切配置  ? 帮助  q 退出"
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -348,7 +396,7 @@ def _report_browser(stdscr, browser: ReportBrowser):
         _draw_browser(stdscr, browser)
         key = _read_key(stdscr)
         page = max(1, stdscr.getmaxyx()[0] - 4)
-        listing = browser.view == "reviews" and not (browser.detail or browser.help or browser.error)
+        listing = browser.view in {"reviews", "transactions"} and not (browser.detail or browser.help or browser.error)
         if key == "q":
             return
         if key == "\x1b":
@@ -367,9 +415,11 @@ def _report_browser(stdscr, browser: ReportBrowser):
             browser.filter(_read_filter(stdscr, browser.query))
         elif key == "?":
             browser.help, browser.offset = not browser.help, 0
+        elif key == "a":
+            browser.toggle_transactions()
         elif key == "t":
             browser.view = "reviews" if browser.view == "report" else "report"
-            browser.detail, browser.help, browser.offset = None, False, 0
+            browser.detail, browser.help, browser.offset, browser.selected = None, False, 0, 0
         elif key in ("\n", "\r", curses.KEY_ENTER):
             if browser.help:
                 browser.help, browser.offset = False, 0
@@ -387,7 +437,7 @@ def _report_browser(stdscr, browser: ReportBrowser):
             if key in (curses.KEY_HOME, "g"):
                 value = 0
             elif key in (curses.KEY_END, "G"):
-                value = len(browser.reviews()) - 1 if listing else sys.maxsize
+                value = len(browser.items()) - 1 if listing else sys.maxsize
             setattr(browser, attribute, max(0, value))
 
 

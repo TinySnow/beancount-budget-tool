@@ -32,7 +32,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                                 k_events: Path | None = None,
                                 h_fx: Path | None = None,
                                 purpose_pools: Path | None = None,
-                                obligations: Path | None = None) -> dict:
+                                obligations: Path | None = None, *, include_evidence: bool = False) -> dict:
     """Sign G only when every named H change has a certified event protocol.
 
     Free H claims alone do not create G. Unknown H claims can conceal a named
@@ -76,7 +76,8 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                     "事件净划拨引用未登记用途", owner)
             totals[owner] += Fraction(amount)
         known.append({"kind": kind, "date": event["date"],
-                      "h_refs": refs, "net_allocations": allocations})
+                      "h_refs": refs, "net_allocations": allocations,
+                      **({"protocol": event} if include_evidence else {})})
 
     for event in transfers["events"]:
         if event["date"][:7] != month or event["status"] != "CERTIFIED":
@@ -250,7 +251,14 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     for row in pending:
         if row.get("ref") is not None:
             row["source"] = ref_sources.get(_key(row["ref"]))
-    return {"mode": "v6_monthly_purpose_flow_audit", "cutover": cutover.isoformat(),
+    evidence = ({"_transaction_evidence": {
+        "ownership": [row for row in owner_audit["ownership"] if ref_months[_key(row["ref"])] == month],
+        "events": known, "pool_internal_keys": sorted(pool_internal_keys),
+        "liabilities": [row for row in debt["events"] if row["date"][:7] == month] if debt else [],
+        "responsibility_owners": {row["obligation_id"]: row["owner_id"] for row in debt["obligations"]} if debt else {},
+        "responsibility_names": {row["id"]: row["name"] for row in load_yaml(obligations)["owners"]} if debt else {},
+    }} if include_evidence else {})
+    return {**evidence, "mode": "v6_monthly_purpose_flow_audit", "cutover": cutover.isoformat(),
             "month": month, "report_currency": load_yaml(accounts)["report_currency"],
             "ledger_snapshot": owner_audit["ledger_snapshot"],
             "status": "CERTIFIED" if complete else "NEEDS_REVIEW",

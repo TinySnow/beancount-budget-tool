@@ -22,7 +22,7 @@ from .review_diagnostics import posting_sources, review_item
 def _audit_monthly_spending(root: Path, cutover: date, month: str,
                             classifications: Path, report_currency: str,
                             benefit_groups: Path | None = None,
-                            budget_values: list[dict] | None = None) -> dict:
+                            budget_values: list[dict] | None = None, *, include_evidence: bool = False) -> dict:
     """Certify each monthly booked budget projection only when its inputs close.
 
     This is not a cash or plan report. Income-supplement classification does
@@ -186,7 +186,12 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
         if not reasons:
             result["report_total"] = exact_text(sum(direct.values(), Fraction(0)))
         metrics[role] = result
-    return {"mode": "v6_monthly_budget_comparison_spending" if budget_values is not None
+    evidence = ({"_transaction_evidence": {
+        "classifications": [row for row in classification["classifications"] if ref_dates[_key(row["ref"])] == month],
+        "valuations": [row for row in valuation["valued"] if ref_dates[_key(row["ref"])] == month],
+        "benefits": [row for row in benefits["proved"] if ref_dates[_key(row["ref"])] == month],
+    }} if include_evidence else {})
+    return {**evidence, "mode": "v6_monthly_budget_comparison_spending" if budget_values is not None
                     else "v6_monthly_spending_report", "month": month,
             "cutover": cutover.isoformat(), "ledger_snapshot": fin.digest,
             "metrics": metrics,

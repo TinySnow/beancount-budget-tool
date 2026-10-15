@@ -120,7 +120,7 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
                                   accounts: Path | None = None,
                                   ownership: Path | None = None,
                                   obligations: Path | None = None,
-                                  h_fx: Path | None = None) -> dict:
+                                  h_fx: Path | None = None, *, include_evidence: bool = False) -> dict:
     """Compare certified direct/subtree expense with targets, per category.
 
     A category with a booked expense slice is active even if refunds make its
@@ -136,7 +136,7 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
                   if all(settlement_paths) else None)
     spending = _audit_monthly_spending(root, cutover, month, classifications,
                                        report_currency, benefit_groups,
-                                       settlement["values"] if settlement else None)
+                                       settlement["values"] if settlement else None, include_evidence=include_evidence)
     category_doc = load_yaml(classifications)
     expanded = load_expense_targets(plans, month, report_currency,
                                     category_doc["categories"])
@@ -224,7 +224,8 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
         "PLAN_MISSING", yaml_path_location(plans, ("months", month)), target_id=ident,
         detail=f"本月消费类别「{names[ident]}」缺少目标；填写该类别目标或覆盖它的父类别子树目标。")
         for ident in sorted(missing))
-    return {"mode": "v6_monthly_expense_target_report", "month": month,
+    evidence = ({"_transaction_evidence": spending["_transaction_evidence"]} if include_evidence else {})
+    return {**evidence, "mode": "v6_monthly_expense_target_report", "month": month,
             "cutover": cutover.isoformat(), "ledger_snapshot": spending["ledger_snapshot"],
             "plan_sha256": expanded["plan_sha256"], "report_currency": report_currency,
             "spendable_cap_category_id": expanded["spendable_cap_category_id"],
