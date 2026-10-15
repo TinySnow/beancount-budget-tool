@@ -12,6 +12,7 @@ SOURCES = {"实际可花": ("completeness", "as_of"),
            "最多能花": ("expense_plans", "spendable_cap_category_id"),
            "资产账户用途": ("ownership", "claims"),
            "K 账面申赎用途": ("k_events", "events"),
+           "默认支出资金收付": ("ownership", "claims"),
            "预算用途余额": ("purpose_pools", "pools")}
 
 

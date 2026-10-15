@@ -16,6 +16,7 @@ from ..exact import exact_text
 from ..financial import booked_through, frozen_financial, load_financial
 from ..yamlstrict import load_yaml, yaml_key_location
 from .actual_snapshot import audit_actual_snapshot
+from .default_outflows import audit_default_outflows
 from .classification import _key
 from .facts import frozen_fact_indices
 from .holdings import audit_h_holdings
@@ -171,6 +172,8 @@ def audit_reviewed_month(config: Path) -> dict:
                  [yaml_key_location(opening, "h_holdings")]}
                 for reason in position["reasons"]]
         tracking = audit_monthly_tracking(root, cutover, month)
+        outflows = audit_default_outflows(root, cutover, month, accounts, ownership, opening,
+                                         obligations, path("purpose_pools"))
         owner_document = load_yaml(ownership)
         owner_names = {row["id"]: row["name"] for row in owner_document["owners"]}
         purpose_balances = summarize_purpose_balances(account_purposes, pool, k_book,
@@ -182,7 +185,7 @@ def audit_reviewed_month(config: Path) -> dict:
     require(len({actual["ledger_snapshot"], expense["ledger_snapshot"],
                  purpose["ledger_snapshot"], pool["ledger_snapshot"],
                  holdings["ledger_snapshot"], k_book["ledger_snapshot"],
-                 tracking["ledger_snapshot"]}) == 1 and
+                 tracking["ledger_snapshot"], outflows["ledger_snapshot"]}) == 1 and
             all(row["report_currency"] == currency for row in (actual, expense, purpose, pool)),
             "MONTH_REPORT_MISMATCH", "月报各项审计的来源快照或报告货币不一致")
     max_spendable = summarize_max_spendable(actual, expense)
@@ -193,6 +196,7 @@ def audit_reviewed_month(config: Path) -> dict:
             "max_spendable": max_spendable,
             "expense_targets": expense,
             "purpose_progress": purpose,
+            "default_outflows": outflows,
             "purpose_pools": pool,
             "k_book_purposes": k_book,
             "account_purposes": account_purposes,
@@ -261,6 +265,12 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
                         "pending_accounts": report["k_book_purposes"]["pending_accounts"],
                         "source": str((config.parent / document["k_events"]).resolve())})
     balance_view = report.get("purpose_balances", {"status": "CERTIFIED"})
+    outflows = report.get("default_outflows", {"status": "NOT_CONFIGURED"})
+    if outflows["status"] == "NEEDS_REVIEW":
+        pending.append({"metric": "默认支出资金收付", "status": "NEEDS_REVIEW",
+                        "reason_codes": outflows["reason_codes"],
+                        "review_items": outflows["review_items"],
+                        "source": str((config.parent / document["ownership"]).resolve())})
     if balance_view["status"] != "CERTIFIED":
         covered = {code for item in pending for code in item["reason_codes"]}
         uncovered = [code for code in balance_view["reason_codes"] if code not in covered]
@@ -427,6 +437,19 @@ def render_text(report: dict) -> str:
         shown += 1
     if not shown:
         lines.append("  无已声明的消费目标")
+    outflows = report.get("default_outflows", {})
+    if outflows.get("status") == "CERTIFIED":
+        name = owner_names.get(outflows["owner_id"], outflows["owner_id"])
+        lines += ["", f"默认支出资金收付：{name}（实记原币）"]
+        for row in outflows["totals"]:
+            lines.append(f"  {row['commodity']}：净流出 {amount(row['net_outflow'])}"
+                         f"（流出 {amount(row['gross_outflow'])}，流入 {amount(row['gross_inflow'])}）")
+            lines.append(f"    消费实付 {amount(row['expenses_paid'])}，"
+                         f"消费退款 {amount(row['expense_refunds'])}，还债 {amount(row['debt_payments'])}")
+            lines.append(f"    代垫 {amount(row['advances_paid'])}，报销收回 {amount(row['advance_reimbursements'])}")
+            for position in row["accounts"]:
+                lines.append(f"    {position['account']}：净流出 {amount(position['net_outflow'])} {row['commodity']}")
+        lines.append("  刷卡在实际还款时计入；资产搬移、购汇和申赎不计入。此处汇总资金流向，余额和预算差额各按原口径计算。")
     lines += ["", "用途划拨（目标 Q − 实际 G；负数为超额划拨）"]
     for row in purpose["owners"]:
         name = owner_names.get(row["owner_id"], row["owner_id"])
