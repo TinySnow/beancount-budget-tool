@@ -9,6 +9,7 @@ from .facts import FactIndex
 
 
 MESSAGES = {
+    "DEFAULT_OUTFLOW_EVENT_UNSUPPORTED": "默认支出用途参与了复合收付，当前协议不能唯一分开消费、还债和资产搬移；需要补充流向编译协议。",
     "ACCOUNT_UNREVIEWED": "该资产账户尚未声明为 H 真实库存或 K 申赎累计账户。",
     "PAYMENT_SCOPE_PENDING": "该账户的此币种能否直接支付尚未确定；审定 payable 或 excluded。",
     "CLASSIFICATION_UNREVIEWED": "这条收入或费用缺少行内 budget、侧文件认领或已审默认分类。",
@@ -53,6 +54,7 @@ MESSAGES = {
     "NAMED_H_EVENT_UNSUPPORTED": "该资金事件尚未匹配已审用途协议；核对责任、转账、申赎或购汇审阅。",
 }
 IMPLEMENTATION_LIMITS = frozenset((
+    "DEFAULT_OUTFLOW_EVENT_UNSUPPORTED",
     "SETTLEMENT_PATH_UNSUPPORTED",
     "OBLIGATION_EVENT_UNSUPPORTED", "OBLIGATION_OPENING_SOURCE_UNSUPPORTED",
     "K_EVENT_SHAPE_UNSUPPORTED",
