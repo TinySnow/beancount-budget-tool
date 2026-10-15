@@ -71,9 +71,13 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     fin = load_financial(root)
     facts = FactIndex(fin)
     assets = fin.options["name_assets"]
-    future_keys = {_key(ref) for posting, ref in future_posting_refs(fin, cutover)
+    future_postings = list(future_posting_refs(fin, cutover))
+    future_keys = {_key(ref) for posting, ref in future_postings
                    if posting.account.split(":", 1)[0] == assets
                    and account_audit["declared_semantics"].get(posting.account) == "H"}
+    known_coordinates = {(row["account"], commodity) for row in account_audit["accounts"]
+                         for commodity in row["commodities"]}
+    known_coordinates.update((posting.account, posting.units.currency) for posting, _ in future_postings)
     h_candidates = {}
     unknown = []
     k_postings = []
@@ -106,10 +110,12 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     names = {}
     claims = {}
     defaults = None
+    transfer_orders = {}
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
-        require(type(document) is dict and required <= set(document) <= required | {"defaults"},
+        require(type(document) is dict and required <= set(document) <= required | {
+            "defaults", "transfer_orders"},
             "OWNERSHIP_DECLARATION_INVALID", "归属声明字段不完整或含未知字段")
         require(type(document["schema"]) is int and document["schema"] == 6 and
                 document["cutover"] == cutover.isoformat() and
@@ -127,6 +133,29 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     for owner in defaults.values()),
                 "OWNERSHIP_DEFAULT_INVALID", "默认收入／支出用途须引用已登记的命名用途",
                 yaml_path_location(declarations, ("defaults",)))
+        rules = document.get("transfer_orders", [])
+        require(type(rules) is list and (not rules or defaults is not None),
+                "FUND_TRANSFER_ORDER_INVALID", "转出顺序须为列表，并同时配置默认用途以启用库存重放",
+                yaml_path_location(declarations, ("transfer_orders",)))
+        for index, rule in enumerate(rules):
+            source = yaml_path_location(declarations, ("transfer_orders", index))
+            require(type(rule) is dict and set(rule) == {
+                "account", "commodity", "owner_ids", "reason"},
+                "FUND_TRANSFER_ORDER_INVALID", "转出顺序须明确账户、币种、用途顺序和审阅理由", source)
+            account, commodity, owners = rule["account"], rule["commodity"], rule["owner_ids"]
+            require(type(account) is str and
+                    account_audit["declared_semantics"].get(account) == "H" and
+                    type(commodity) is str and bool(commodity) and commodity == commodity.strip() and
+                    (account, commodity) in known_coordinates and
+                    type(owners) is list and bool(owners) and
+                    all(type(owner) is str and (owner in ids or owner == "-") for owner in owners) and
+                    len(owners) == len(set(owners)) and
+                    type(rule["reason"]) is str and bool(rule["reason"].strip()),
+                    "FUND_TRANSFER_ORDER_INVALID", "转出顺序须引用已审 H 账户及不同的已登记用途", source)
+            coordinate = (account, commodity)
+            require(coordinate not in transfer_orders, "FUND_TRANSFER_ORDER_INVALID",
+                    "同一账户和币种不能重复声明转出顺序", source)
+            transfer_orders[coordinate] = rule
         seen_slices = set()
         for row_index, row in enumerate(document["claims"]):
             require(type(row) is dict and set(row) == {"claim", "reason", "slices"} and
@@ -265,8 +294,21 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                         available = [(owner, amount) for owner, amount in before.items() if amount > 0]
                         nonzero_owners = [owner for owner, amount in before.items() if amount]
                         required = -exact(negative[0].units.number)
+                        rule = transfer_orders.get(coordinate[:2])
                         if coordinate in unknown_coordinates:
                             pending_reasons[source_key] = "FUND_SOURCE_OPENING_PENDING"
+                        elif rule is not None:
+                            remaining = required
+                            parts = []
+                            for owner in rule["owner_ids"]:
+                                amount = min(remaining, max(Fraction(0), before.get(owner, Fraction(0))))
+                                if amount:
+                                    parts.append((owner, -amount))
+                                    remaining -= amount
+                            if remaining:
+                                pending_reasons[source_key] = "FUND_SOURCE_INSUFFICIENT"
+                            else:
+                                inferred(source_key, parts, "已审转出顺序：" + rule["reason"])
                         elif len(nonzero_owners) == 1 and len(available) == 1 and available[0][1] >= required:
                             inferred(source_key, [(available[0][0], -required)],
                                      "交易前单一用途余额继承")

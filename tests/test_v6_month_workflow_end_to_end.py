@@ -190,6 +190,31 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("最多能花：-10 CNY", output.getvalue())
 
+            # A privately enabled loss policy certifies signed nominal balances;
+            # it must not turn a deficit into payable cash or a purpose allocation.
+            original_ledger = ledger.read_text(encoding="utf-8")
+            original_pool = yaml.safe_load((base / "purpose-pools.yaml").read_text(encoding="utf-8"))
+            loss_pool = yaml.safe_load(yaml.safe_dump(original_pool))
+            loss_pool["pools"][0].update(protected_principal="9", remainder_policy="allow_negative")
+            save("purpose-pools.yaml", loss_pool)
+            ledger.write_text(original_ledger + '2026-10-03 * "broker fee"\n'
+                              '  Assets:Broker -3 CNY\n'
+                              '  Expenses:Food 3 CNY\n'
+                              '    budget: "餐饮"\n', encoding="utf-8")
+            loss = audit_month_workflow(base / "month.yaml")
+            self.assertEqual(loss["status"], "CERTIFIED_SCOPED", loss["review_items"])
+            self.assertEqual(loss["review_items"], [])
+            nominal = {row["owner_id"]: row for row in loss["report"]["purpose_balances"]["purposes"]}
+            self.assertEqual(nominal["investment"]["pool_book_cost_balances"][0]["units"], "-2")
+            self.assertTrue(nominal["investment"]["has_negative_pool_position"])
+            self.assertIn("名义本金账面缺口 2 CNY", render_workflow_text(loss))
+            self.assertIn("部分证券池账户的该用途账面余额为负", render_workflow_text(loss))
+            self.assertEqual(loss["report"]["actual_spendable"]["actual_spendable"], "-10")
+            self.assertEqual(loss["report"]["purpose_progress"]["owners"],
+                             outcome["report"]["purpose_progress"]["owners"])
+            save("purpose-pools.yaml", original_pool)
+            ledger.write_text(original_ledger, encoding="utf-8")
+
             checkpoint = base / "checkpoint" / "main.bean"
             checkpoint.parent.mkdir()
             checkpoint.write_bytes(ledger.read_bytes())

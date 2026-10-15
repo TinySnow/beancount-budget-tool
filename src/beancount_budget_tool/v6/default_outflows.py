@@ -117,8 +117,9 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
             ref = facts.for_posting(posting).as_dict()
             claim = claims.get(_key(ref))
             if posting.account in nondefault_pool_accounts:
-                if claim is not None and any(part["owner_id"] == owner and Fraction(part["signed_units"]) != 0
-                                             for part in claim["slices"]):
+                if claim is not None and claim["origin"] in {"inline", "external"} and any(
+                        part["owner_id"] == owner and Fraction(part["signed_units"]) != 0
+                        for part in claim["slices"]):
                     pending("PURPOSE_POOL_PENDING", ref, posting.account,
                             "该分录显式使用默认支出用途，但资金池用途集合未包含它；先审定冲突。")
                 continue  # Approved pool owners exclude this default; no per-lot guesses.
