@@ -262,6 +262,30 @@ python -m beancount_budget_tool.tools.v6_classification_proposals \
 
 JSON 按账本科目列出逐笔日期、金额、摘要、来源引用和旧标签提示，供人工审阅；它不会自行决定类别。已写行内 `budget` 的分录不列入，尚未考虑分类侧文件中的已审认领。这一步只处理**预算类别**，不认证资产用途、目标兑现或月报。cutover 前的月份不必为了当前 v6 月报而补这些标签。
 
+## 5. 比较月份和导出 CSV
+
+若已安装旧版，更新代码后先重新运行 `python -m pip install -e .`，注册新增命令。
+
+每个月审核完后，把**各月最新配置**交给区间报表。例如比较 2023 年 7、8 月，Windows PowerShell 和 macOS 都可以用一行命令：
+
+```sh
+beancount-budget-report --config reviews/2023-07/month.yaml --config reviews/2023-08/month.yaml
+```
+
+它会重新审核每个月，显示逐月消费、退款、月底可花及目标差，再列区间累计和期末资金用途分布。输入顺序不限，但不能漏掉中间月份。同一年 1～12 月都提供就是全年报表；可同时加 `--from 2023-07 --through 2023-08` 明确校验范围。只有一份配置也能导出该月。
+
+保存为 CSV，供表格软件筛选／汇总：
+
+```sh
+beancount-budget-report --config reviews/2023-07/month.yaml --config reviews/2023-08/month.yaml --format csv --output budget-2023-07-08.csv
+```
+
+CSV 每行是一项指标，用 `scope` 区分逐月（`month`）、月底（`month_end`）、区间累计（`period`）和期末（`closing`）；`section` 区分类别、划拨、收付、专题、各类余额和警告。`name` 是类别／用途名称，`metric` 是指标名，`value` 是金额，`commodity` 是币种。完整字段说明见[月报说明](docs/v6-monthly-report.md#区间报表与-csv)。中文文件使用 UTF-8 BOM；输出文件已存在时拒绝覆盖。也可以用 `--format json --output budget.json` 保存完整结构和逐月原报告。
+
+**消费、退款和净划拨可累计；余额、卡债和“最多能花”不能累计，只看各月月底或最后一个月。** 消费目标和 Q−G 逐月比较，不把“不考核”算作零目标。专题可能重叠，不把所有专题加成总消费；不同币种以及 H、证券池、K 口径各自显示。
+
+任何一个月待审或存在实现缺口时，只输出逐月状态和带位置的待办，不生成区间数字。缺月、账本／cutover／报告货币不同、名册 ID 的含义不一致会拒绝汇总；此入口不替你创建或批准漏掉的月份。TUI 仍按上一节逐月查看，区间比较目前使用命令行。
+
 ## 常见错误
 
 - **交易级 `budget`**：v6 会拒绝。旧标签可先保留为 `legacy_budget`，再按分录审阅。

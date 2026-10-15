@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 
 from ..errors import BudgetError, require
-from ..exact import exact_text
+from ..exact import exact_text, amount_text
 from ..financial import booked_through, frozen_financial, load_financial
 from ..yamlstrict import load_yaml, yaml_key_location
 from .actual_snapshot import audit_actual_snapshot
@@ -351,23 +351,7 @@ def render_workflow_text(outcome: dict) -> str:
 
 def render_text(report: dict) -> str:
     """Show only rows carrying an independently certified value."""
-    def amount(raw: str) -> str:
-        value = Fraction(raw)
-        denominator = value.denominator
-        twos = fives = 0
-        while denominator % 2 == 0:
-            denominator //= 2
-            twos += 1
-        while denominator % 5 == 0:
-            denominator //= 5
-            fives += 1
-        if denominator != 1:
-            return str(value)
-        places = max(twos, fives)
-        scaled = abs(value.numerator) * (10 ** places) // value.denominator
-        whole, fractional = divmod(scaled, 10 ** places)
-        tail = (f"{fractional:0{places}d}".rstrip("0") if places else "")
-        return ("-" if value < 0 else "") + str(whole) + ("." + tail if tail else "")
+    amount = amount_text
 
     currency = report["report_currency"]
     actual = report["actual_spendable"]

@@ -70,6 +70,29 @@ remainder_policy: allow_negative
 
 按账户展示仍先依 `reserve_order` 分布本金；当整个池的账面成本已不足，未覆盖的名义本金放在顺序中的第一户，该户余款为负。每户两项之和仍精确等于其账面成本，整个池两项合计也守恒。JSON 状态为 `CERTIFIED_NOMINAL_PURPOSE_BALANCES`，当前缺口为 `principal_book_shortfall`，cutover 以来最大缺口为 `maximum_principal_book_shortfall`；按用途视图提供 `has_negative_pool_position`，文本与 TUI 显示警告。亏损不会变成现金或新划拨 G；真实库存仍不得为负，向池外主动转出不得制造或扩大缺口。该配置不代替本金正式调出时的边界审阅，也不自动改变固定本金数额。
 
+## 区间报表与 CSV
+
+`beancount-budget-report` 接受重复的 `--config`，每份是相应月份最新的月报配置。按月份排序后要求连续、不重复；可同时提供 `--from YYYY-MM --through YYYY-MM` 校验首尾。全年比较须提供当年全部 12 份配置，不能把缺月视为零交易。各月须使用同一根账本、cutover、报告货币及含义稳定的类别／用途 ID；允许增加新类别／用途，不允许同一 ID 换名或换父类别后悄悄相加。默认收支用途也须一致。
+
+入口重新调用每月正式审计，核对来源快照和运行期间输入未变。某月待审或有实现缺口时，全区间 `report: null`；来源认领等输入错误标为 `INPUT_ERROR`，保留月、原因及位置，也不提供其他月份的局部数字。配置结构或区间范围错误直接报错。正式月报中的负数警告在区间文本、JSON 和 CSV 中保留。
+
+区间累计费用原支出、退款、净消费、实际净划拨 G、默认支出用途的原币资金收付及专题。消费总计只加类别直接发生额；各类别子树另列，不能再与父类别相加。专题可能重叠，不计算跨专题总额。消费目标、Q、Q−G 保留逐月值；未声明或不考核不补零。默认用途资金收付未配置时，区间该指标也不当零累计。
+
+期末仅取最后一月的实际可花、最多能花、未还责任、待收代垫和用途余额。H 原币数量、证券池账面成本、K 自原 cutover 的用途申赎净变动各列不同口径；K 的这个累计值不按区间月份重复相加，也不表示市值。原逐月完整报告在 JSON 的 `report.monthly_reports` 中，包含责任、外币与来源证据。
+
+支持 `--format text`（默认）、`json`、`csv`。`--output 新文件` 保存结果且不覆盖已有文件；不提供时写到终端。保存 CSV 时采用 UTF-8 BOM，不依赖 shell 重定向的编码。CSV 是一张可筛选的指标长表：
+
+| 字段 | 含义 |
+|---|---|
+| `scope` / `month` | `month` 逐月流量或目标、`month_end` 月底可花、`period` 区间流量、`closing` 最后一个月末、`review` 待审；月份或截止日另列。 |
+| `section` | `expense_total` 总消费、`expenses` 类别、`allocations` 划拨、`default_outflows` 资金收付、`tracking` 专题、`capacity` 可花，以及各类期末余额、责任与警告。 |
+| `id` / `name` / `account` / `commodity` | 稳定 ID、显示名、账户和币种；不适用时留空。 |
+| `metric` | 如 `direct_gross_spent` 原支出、`direct_refunded` 退款、`direct_spent` 净消费、`subtree_spent` 子树净消费、`target_q` 目标、`actual_g` 净划拨、`remaining_q_minus_g` 目标差。 |
+| `value` / `numerator` / `denominator` | 有限小数精确写入 `value`；不能有限表示时留空，用分子／分母保留精确值，不舍入。缺值／不考核时三列都空，实际零写 `0`。 |
+| `status` / `source` / `detail` | 该行状态、配置或待审文件位置、补充说明／原警告。自由文本作文本写出，不执行电子表格公式。 |
+
+逐月消费目标和差额也有直接／子树两种字段；`NOT_DECLARED`、`NOT_ASSESSED` 不表示零。CSV 不把区间实际可花或最多能花相加；每个月底及最后期末分别标记。实际命令见 [QUICKSTART](../QUICKSTART.md#5-比较月份和导出-csv)。
+
 ## 2026 年 9 月隔离副本配置示例
 
 此私人配置的旧审阅文件绑定 Beancount 2.3.6；项目当前依赖 3.2.3。配置指向的隔离副本也比部分审阅文件所用的副本更新。直接运行会先因版本不一致停在分类校验；仅改版本号仍会遇到过期引用。下面的命令展示入口用法，须逐份复核审阅来源后才能用于这份账本。

@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 beancount-budget-tool = "beancount_budget_tool.v6.monthly_report:main"
+beancount-budget-report = "beancount_budget_tool.v6.period_report:main"
 beancount-budget-audit = "beancount_budget_tool.v6.cli:main"
 beancount-budget-review-month = "beancount_budget_tool.tools.v6_review_migration_month:main"
 beancount-budget-review-refs = "beancount_budget_tool.tools.v6_review_source_refs:main"
