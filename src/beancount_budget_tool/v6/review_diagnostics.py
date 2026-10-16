@@ -56,7 +56,7 @@ MESSAGES = {
     "LIABILITY_OPENING_PENDING": "cutover 前账面余额尚未分配到期初未结债务或代垫 ID；在 obligations 的 opening 中审定来源、剩余金额及债务用途。",
     "OBLIGATION_OPENING_REQUIRED": "这笔还款或报销指向切换前责任，先补 obligations.opening 的对应未结 ID，再重跑。",
     "OBLIGATION_OPENING_SOURCE_UNSUPPORTED": "这份期初往来缺少当前协议可绑定的简单消费、代垫或 Equity 结转来源；借款、复合及跨币期初责任需要继续实现，不应改账伪造来源。",
-    "NAMED_H_EVENT_UNSUPPORTED": "该资金事件尚未匹配已审用途协议；核对责任、转账、申赎或购汇审阅。",
+    "NAMED_H_EVENT_UNSUPPORTED": "用途已声明，但当前资金事件没有可编译的用途协议；需要补程序支持，不能靠重复填写 fund 消除。",
 }
 IMPLEMENTATION_LIMITS = frozenset((
     "DEFAULT_OUTFLOW_EVENT_UNSUPPORTED",
@@ -64,6 +64,7 @@ IMPLEMENTATION_LIMITS = frozenset((
     "OBLIGATION_EVENT_UNSUPPORTED", "OBLIGATION_OPENING_SOURCE_UNSUPPORTED",
     "K_EVENT_SHAPE_UNSUPPORTED",
     "H_TRANSFER_SHAPE_UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED",
+    "NAMED_H_EVENT_UNSUPPORTED",
 ))
 
 

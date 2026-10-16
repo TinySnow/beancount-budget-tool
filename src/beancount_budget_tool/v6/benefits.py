@@ -1,10 +1,10 @@
 """Conservative source audit for refunds and supplemental income.
 
-Only a two-posting booked transaction with a same-commodity, exactly
-opposite asset or liability leg proves a unique bookkeeping counterpart
-automatically.  Actual asset semantics and personal liability remain separate
-reviews.  Complex transactions need a separate evidence allocation; their
-amounts are never inferred from a matching date or total.
+Two-posting transactions can prove a unique bookkeeping counterpart. Native
+one-direction asset flows with only expenses or only incomes can instead
+prove a joint source group, without inventing pairwise evidence allocations.
+Asset semantics and personal liability remain separate reviews. Other
+complex events require explicit evidence, never matching dates or totals.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from ..yamlstrict import load_yaml, yaml_path_location
 from .classification import _key, audit_classification
 from .provenance import valid_digest
 from .facts import FactIndex, future_transaction_refs, reference_fact_index
+from .native_flows import native_asset_flow
 
 
 def costed_sale_candidate(entry: data.Transaction, income: data.Posting,
@@ -84,6 +85,7 @@ def audit_economic_benefits(root: Path, cutover: date,
     for entry in fin.entries:
         if not isinstance(entry, data.Transaction) or entry.date < cutover:
             continue
+        native, native_checked, native_proof = None, False, None
         for posting in entry.postings:
             kind = posting.account.split(":", 1)[0]
             if kind not in (expense_root, income_root) or exact(posting.units.number) >= 0:
@@ -98,6 +100,25 @@ def audit_economic_benefits(root: Path, cutover: date,
                 pending.append({**record, "reason_code": "BENEFIT_CLASSIFICATION_PENDING"})
                 continue
             if len(entry.postings) != 2:
+                if not native_checked:
+                    native = native_asset_flow(fin, entry)
+                    native_checked = True
+                if native is not None and native.asset_total > 0:
+                    # Every beneficiary belongs to one projection domain and
+                    # the entire joint evidence equals their joint amount.
+                    # Do not reuse a full receipt as a per-posting allocation.
+                    if native_proof is None:
+                        native_proof = {
+                            "transaction_ref": facts.for_transaction(entry).as_dict(),
+                            "asset_refs": [facts.for_posting(p).as_dict() for p in native.assets],
+                            "benefit_refs": [facts.for_posting(p).as_dict() for p in native.counterparts],
+                            "asset_total": exact_text(native.asset_total),
+                            "benefit_total": exact_text(-native.asset_total),
+                            "commodity": posting.units.currency,
+                            "basis": "joint_native_totals_no_pairwise_allocation"}
+                    proved.append({**record, "proof": "same_transaction_native_asset_group",
+                                   "evidence_group": native_proof})
+                    continue
                 pending.append({**record, "reason_code": "BENEFIT_GROUP_REQUIRED"})
                 complex_context[_key(ref)] = (entry, posting)
                 continue

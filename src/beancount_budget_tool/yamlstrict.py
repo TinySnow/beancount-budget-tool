@@ -52,6 +52,13 @@ def yaml_key_location(path: Path, key: str) -> str:
     return yaml_path_location(path, (key,))
 
 
+def require_yaml(condition: bool, code: str, message: str, path: Path | None,
+                 keys: tuple[str | int, ...] = (), fallback: str | None = None) -> None:
+    """Resolve a diagnostic location only when validation actually fails."""
+    if not condition:
+        raise BudgetError(code, message, yaml_path_location(path, keys) if path is not None else fallback)
+
+
 def yaml_path_location(path: Path, keys: tuple[str | int, ...]) -> str:
     """Locate a nested field; an absent field points at its closest ancestor."""
     try:

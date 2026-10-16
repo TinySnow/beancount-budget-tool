@@ -16,10 +16,10 @@ import unicodedata
 
 from beancount.core import data
 
-from ..errors import require
+from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .facts import FactIndex, future_posting_refs
 from .inline_amounts import parse_inline_amounts
 from .source import scan_v6_source
@@ -43,35 +43,47 @@ def _name(value: object) -> str:
     return name
 
 
-def _registry(records: object) -> dict[str, str]:
-    require(type(records) is list, "CATEGORY_REGISTRY_INVALID", "categories 必须是列表")
+def _registry(records: object, source: Path | None = None) -> dict[str, str]:
+    def check(condition, code, message, keys=(), fallback=None):
+        require_yaml(condition, code, message, source, ("categories", *keys), fallback)
+
+    check(type(records) is list, "CATEGORY_REGISTRY_INVALID", "categories 必须是列表")
     names: dict[str, str] = {}
     ids: set[str] = set()
     parents: dict[str, str | None] = {}
-    for row in records:
-        require(type(row) is dict and set(row) == {"id", "name", "parent", "aliases"},
-                "CATEGORY_REGISTRY_INVALID", "类别需包含 id/name/parent/aliases")
+    locations = {}
+    for index, row in enumerate(records):
+        check(type(row) is dict and set(row) == {"id", "name", "parent", "aliases"},
+                "CATEGORY_REGISTRY_INVALID", "类别需包含 id/name/parent/aliases", (index,))
         ident, parent = row["id"], row["parent"]
-        require(type(ident) is str and bool(ID.fullmatch(ident)) and ident not in ids,
-                "CATEGORY_ID_INVALID", "类别 ID 无效或重复", str(ident))
-        require(parent is None or type(parent) is str, "CATEGORY_REGISTRY_INVALID",
-                "类别 parent 须为空或稳定 ID", ident)
-        require(type(row["aliases"]) is list, "CATEGORY_REGISTRY_INVALID",
-                "aliases 必须是列表", ident)
+        check(type(ident) is str and bool(ID.fullmatch(ident)) and ident not in ids,
+                "CATEGORY_ID_INVALID", "类别 ID 无效或重复", (index, "id"), str(ident))
+        check(parent is None or type(parent) is str, "CATEGORY_REGISTRY_INVALID",
+                "类别 parent 须为空或稳定 ID", (index, "parent"), ident)
+        check(type(row["aliases"]) is list, "CATEGORY_REGISTRY_INVALID",
+                "aliases 必须是列表", (index, "aliases"), ident)
         ids.add(ident)
         parents[ident] = parent
-        for raw in [row["name"], *row["aliases"]]:
-            name = _name(raw)
-            require(name not in names, "CATEGORY_NAME_DUPLICATE",
-                    "类别名称或别名重复", name)
+        locations[ident] = index
+        for alias_index, raw in enumerate([row["name"], *row["aliases"]]):
+            keys = (index, "name") if alias_index == 0 else (index, "aliases", alias_index - 1)
+            try:
+                name = _name(raw)
+            except BudgetError as exc:
+                check(False, exc.code, exc.message, keys, exc.source)
+            check(name not in names, "CATEGORY_NAME_DUPLICATE", "类别名称或别名重复", keys, name)
             names[name] = ident
     for ident in ids:
         seen = {ident}
+        child = ident
         parent = parents[ident]
         while parent is not None:
-            require(parent in ids, "CATEGORY_PARENT_INVALID", "类别父节点不存在", ident)
-            require(parent not in seen, "CATEGORY_PARENT_INVALID", "类别层级成环", ident)
+            check(parent in ids, "CATEGORY_PARENT_INVALID", "类别父节点不存在",
+                  (locations[child], "parent"), child)
+            check(parent not in seen, "CATEGORY_PARENT_INVALID", "类别层级成环",
+                  (locations[child], "parent"), child)
             seen.add(parent)
+            child = parent
             parent = parents[parent]
     return names
 
@@ -119,13 +131,18 @@ def audit_classification(root: Path, cutover: date, declarations: Path | None = 
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "loader_version", "categories", "classifications"}
-        require(type(document) is dict and required <= set(document) <= required | {"defaults"},
-            "CLASSIFICATION_DECLARATION_INVALID", "分类声明字段不完整或含未知字段", str(declarations))
-        require(type(document["schema"]) is int and document["schema"] == 6 and
-                type(document["cutover"]) is str and document["cutover"] == cutover.isoformat() and
-                document["loader_version"] == fin.loader_version,
-                "CLASSIFICATION_DECLARATION_INVALID", "分类声明版本、cutover 或 loader 版本不匹配", str(declarations))
-        registry = _registry(document["categories"])
+        unknown = set(document) - required - {"defaults"} if type(document) is dict else set()
+        require_yaml(type(document) is dict and required <= set(document) and not unknown,
+            "CLASSIFICATION_DECLARATION_INVALID", "分类声明字段不完整或含未知字段", declarations,
+            (sorted(unknown, key=str)[0],) if unknown else ())
+        for field, valid in (
+            ("schema", type(document["schema"]) is int and document["schema"] == 6),
+            ("cutover", type(document["cutover"]) is str and document["cutover"] == cutover.isoformat()),
+            ("loader_version", document["loader_version"] == fin.loader_version),
+        ):
+            require_yaml(valid, "CLASSIFICATION_DECLARATION_INVALID", "分类声明版本、cutover 或 loader 版本不匹配",
+                         declarations, (field,))
+        registry = _registry(document["categories"], source=declarations)
         if "defaults" in document:
             defaults = document["defaults"]
             require(type(defaults) is dict and set(defaults) == {
@@ -135,13 +152,15 @@ def audit_classification(root: Path, cutover: date, declarations: Path | None = 
                 "CLASSIFICATION_DEFAULT_INVALID", "默认收入／支出类别须引用已登记类别",
                 yaml_path_location(declarations, ("defaults",)))
         rows = document["classifications"]
-        require(type(rows) is list, "CLASSIFICATION_DECLARATION_INVALID",
-                "classifications 必须是列表", str(declarations))
+        require_yaml(type(rows) is list, "CLASSIFICATION_DECLARATION_INVALID",
+                     "classifications 必须是列表", declarations, ("classifications",))
         seen_ids: set[str] = set()
         for row_index, row in enumerate(rows):
-            require(type(row) is dict and set(row) == {"claim", "slices", "reason"},
-                    "CLASSIFICATION_CLAIM_INVALID", "分类认领须包含 claim/slices/reason", str(declarations))
-            require(type(row["claim"]) is dict, "CLAIM_REF_INVALID", "claim 必须是完整 booked 引用")
+            require_yaml(type(row) is dict and set(row) == {"claim", "slices", "reason"},
+                    "CLASSIFICATION_CLAIM_INVALID", "分类认领须包含 claim/slices/reason", declarations,
+                    ("classifications", row_index))
+            require_yaml(type(row["claim"]) is dict, "CLAIM_REF_INVALID", "claim 必须是完整 booked 引用",
+                         declarations, ("classifications", row_index, "claim"))
             key = _key(row["claim"])
             if key in future_keys:
                 continue  # Retain the decision for its month, not this report.

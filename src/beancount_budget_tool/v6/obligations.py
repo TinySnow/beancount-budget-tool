@@ -21,7 +21,7 @@ from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial, reference_financial
 from ..refs import _lot
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .classification import _key
 from .facts import FactIndex, reference_fact_index
 from .obligation_opening import compile_obligation_opening, opening_source, paired_price_value
@@ -122,15 +122,20 @@ def audit_simple_obligations(root: Path, cutover: date,
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "events"}
-        require(type(document) is dict and required <= set(document) <= required | {"opening"},
-            "OBLIGATION_DECLARATION_INVALID", "责任侧文件字段不完整或含未知字段")
-        require(type(document["schema"]) is int and document["schema"] == 6 and
-                type(document["cutover"]) is str and document["cutover"] == cutover.isoformat() and
-                valid_digest(document["ledger_snapshot"]) and
-                document["loader_version"] == fin.loader_version and
-                type(document["events"]) is list,
-                "OBLIGATION_DECLARATION_INVALID", "责任侧文件版本或原审快照格式不匹配")
-        owners = set(_owners(document["owners"]).values())
+        unknown = set(document) - required - {"opening"} if type(document) is dict else set()
+        require_yaml(type(document) is dict and required <= set(document) and not unknown,
+            "OBLIGATION_DECLARATION_INVALID", "责任侧文件字段不完整或含未知字段", declarations,
+            (sorted(unknown, key=str)[0],) if unknown else ())
+        for field, valid in (
+            ("schema", type(document["schema"]) is int and document["schema"] == 6),
+            ("cutover", type(document["cutover"]) is str and document["cutover"] == cutover.isoformat()),
+            ("ledger_snapshot", valid_digest(document["ledger_snapshot"])),
+            ("loader_version", document["loader_version"] == fin.loader_version),
+            ("events", type(document["events"]) is list),
+        ):
+            require_yaml(valid, "OBLIGATION_DECLARATION_INVALID", "责任侧文件版本或原审快照格式不匹配",
+                         declarations, (field,))
+        owners = set(_owners(document["owners"], source=declarations).values())
         opening_rows = document.get("opening", [])
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         for row_index, row in enumerate(document["events"]):
