@@ -151,6 +151,30 @@ def audit_period(configs: list[Path], since: str | None = None, through: str | N
     require(len(snapshots) <= 1 and all(path.is_file() and sha256(path.read_bytes()).hexdigest() == digest
                                       for path, digest in watched.items()),
             "INPUT_CHANGED", "区间运行期间账本、配置或审阅资料发生变化；请重新运行")
+    return _combine_months(ordered, months, reports, reviews, snapshots, warnings)
+
+
+def _single_month_period(outcome: dict, config: Path) -> dict:
+    """Format an already audited month with the existing one-month CSV layout.
+
+    Only the caller's fresh, complete workflow is used. No second ledger audit
+    or calculation from filtered display text is needed for a monthly export.
+    """
+    month = outcome["month"]
+    months = [{"month": month, "config": str(config.resolve()), "status": outcome["status"]}]
+    reviews = [{**item, "month": month, "config": str(config.resolve())}
+               for item in outcome["review_items"]]
+    reports, snapshots, warnings = [], set(), []
+    if outcome["status"] == "CERTIFIED_SCOPED":
+        reports = [outcome["report"]]
+        snapshots.add(outcome["report"]["ledger_snapshot"])
+        warnings = [{"month": month, "detail": line} for line in render_workflow_text(outcome).splitlines()
+                    if "警告" in line]
+    return _combine_months([month], months, reports, reviews, snapshots, warnings)
+
+
+def _combine_months(ordered, months, reports, reviews, snapshots, warnings) -> dict:
+    """Combine audited results; source and cross-month validation stays upstream."""
     states = {row["status"] for row in months}
     status = ("INPUT_ERROR" if "INPUT_ERROR" in states else
               "IMPLEMENTATION_BLOCKED" if "IMPLEMENTATION_BLOCKED" in states else

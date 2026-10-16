@@ -211,6 +211,10 @@ class InteractiveReviewTests(unittest.TestCase):
         self.assertFalse(browser.period)
         self.assertEqual(browser.view, "transactions")
         self.assertEqual(browser.outcome["report"]["transactions"]["count"], 3)
+        output = self.base / "reviewed-month.csv"
+        self.run_keys(browser, ["x", "\x15", *"csv", "\n", "\x15", *str(output), "\n", "\n", "q"])
+        self.assertIn(str(browser.config), output.read_text(encoding="utf-8-sig"))
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "40")
         self.assert_originals()
 
     def test_keyboard_invalid_amount_can_be_corrected_before_approval(self):
