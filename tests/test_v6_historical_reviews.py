@@ -150,8 +150,9 @@ class HistoricalReviewTests(unittest.TestCase):
                         with self.assertRaises(BudgetError) as caught:
                             operation()
                         self.assertEqual(caught.exception.code, code)
-                        self.assertRegex(caught.exception.source,
-                                         rf"^{path.resolve()}:\d+$")
+                        filename, lineno = caught.exception.source.rsplit(":", 1)
+                        self.assertEqual(filename, str(path.resolve()))
+                        self.assertTrue(lineno.isdecimal(), caught.exception.source)
 
     def test_invalid_defaults_have_config_file_and_line(self):
         for path, field, operation, code in (
