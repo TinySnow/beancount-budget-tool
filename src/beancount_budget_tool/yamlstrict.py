@@ -1,6 +1,7 @@
 """Read reviewable YAML without silently accepting duplicate or implicit dates."""
 
 from pathlib import Path
+from functools import lru_cache
 from typing import Any
 
 import yaml
@@ -59,10 +60,21 @@ def require_yaml(condition: bool, code: str, message: str, path: Path | None,
         raise BudgetError(code, message, yaml_path_location(path, keys) if path is not None else fallback)
 
 
+@lru_cache(maxsize=32)
+def _location_tree(text: str):
+    """Read-only syntax for positions/styles, keyed by the complete current text.
+
+    Callers still read the file on every use. Constructed configuration values,
+    approvals, source validation and budget results are deliberately not cached.
+    The private tree is never mutated or returned to a configuration consumer.
+    """
+    return yaml.compose(text, Loader=StrictLoader)
+
+
 def yaml_path_location(path: Path, keys: tuple[str | int, ...]) -> str:
     """Locate a nested field; an absent field points at its closest ancestor."""
     try:
-        node = yaml.compose(path.read_text(encoding="utf-8-sig"), Loader=StrictLoader)
+        node = _location_tree(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
         source = f"{path.resolve()}:{mark.line + 1}" if mark else str(path.resolve())
@@ -92,7 +104,7 @@ def require_quoted_month_keys(path: Path) -> None:
     自行决定某个键是日期对象还是普通字符串。
     """
     try:
-        document = yaml.compose(path.read_text(encoding="utf-8-sig"), Loader=StrictLoader)
+        document = _location_tree(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise BudgetError("YAML_INVALID", str(exc), str(path)) from exc
     if not isinstance(document, yaml.MappingNode):
