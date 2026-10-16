@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date
+from functools import cached_property
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -29,7 +30,7 @@ class SourceFile:
     text: str
     sha256: str
 
-    @property
+    @cached_property
     def lines(self) -> Tuple[str, ...]:
         return tuple(self.text.splitlines())
 
@@ -44,11 +45,30 @@ class FinancialInput:
     loader_version: str
     reference_entries: Optional[Tuple[Any, ...]] = None
 
-    def line(self, filename: str, lineno: int) -> str:
+    @cached_property
+    def _sources_by_filename(self) -> Mapping[str, SourceFile]:
+        return {str(path): source for path, source in self.sources.items()}
+
+    @cached_property
+    def _raw_prices(self) -> Dict[Tuple[str, int], Tuple[str, Fraction, str]]:
+        # Lexical evidence belongs to this frozen source, never to a filename
+        # across reloads. A fresh load/replace starts with an empty price cache.
+        return {}
+
+    def _source(self, filename: str) -> SourceFile:
+        # Booked metadata normally already has the canonical absolute name.
+        # Match that frozen name without consulting the live filesystem again.
+        source = self._sources_by_filename.get(filename)
+        if source is not None:
+            return source
         path = Path(filename).resolve()
         require(path in self.sources, "SOURCE_MISSING", "booked 事实引用了未冻结的来源", str(path))
-        lines = self.sources[path].lines
-        require(1 <= lineno <= len(lines), "SOURCE_MISSING", "来源行超出范围", f"{path}:{lineno}")
+        return self.sources[path]
+
+    def line(self, filename: str, lineno: int) -> str:
+        source = self._source(filename)
+        lines = source.lines
+        require(1 <= lineno <= len(lines), "SOURCE_MISSING", "来源行超出范围", f"{source.path}:{lineno}")
         return lines[lineno - 1]
 
     def raw_price(self, posting: Any) -> Tuple[str, Fraction, str]:
@@ -56,17 +76,23 @@ class FinancialInput:
         meta = posting.meta or {}
         source = f"{meta.get('filename')}:{meta.get('lineno')}"
         require(isinstance(meta.get("filename"), str) and isinstance(meta.get("lineno"), int), "SOURCE_MISSING", "posting 缺少原文位置", source)
+        key = (meta["filename"], meta["lineno"])
+        if key in self._raw_prices:
+            return self._raw_prices[key]
         line = self.line(meta["filename"], meta["lineno"]).split(";", 1)[0]
         matches = list(PRICE.finditer(line))
         require(len(matches) <= 1, "PRICE_SOURCE_CONFLICT", "一条 posting 有多个原文价格", source)
         if not matches:
-            return ("none", Fraction(0), "")
-        match = matches[0]
-        notation = "@@" if line[match.start():match.start() + 2] == "@@" else "@"
-        return (notation, abs(exact(match.group(1))), match.group(2))
+            result = ("none", Fraction(0), "")
+        else:
+            match = matches[0]
+            notation = "@@" if line[match.start():match.start() + 2] == "@@" else "@"
+            result = (notation, abs(exact(match.group(1))), match.group(2))
+        self._raw_prices[key] = result
+        return result
 
     def transaction_text(self, filename: str, lineno: int) -> str:
-        lines = self.sources[Path(filename).resolve()].lines
+        lines = self._source(filename).lines
         require(1 <= lineno <= len(lines), "SOURCE_MISSING", "交易来源行无效")
         selected = [lines[lineno - 1]]
         for line in lines[lineno:]:
