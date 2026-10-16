@@ -11,7 +11,7 @@ import unicodedata
 from uuid import uuid4
 from collections.abc import Callable
 
-from ..errors import BudgetError
+from ..errors import BudgetError, require
 
 
 def _width(character: str) -> int:
@@ -287,6 +287,8 @@ HELP = [
     "c：切换当前月报与连续月份比较；使用命令提供的全部最新配置，区间内不能缺月。",
     "区间重新审计每个月：只累计流量，目标差逐月比较，余额与可花取期末，任何月待审均不显示区间数字。",
     "m：在区间待审列表／详情中转到所选月份，重新审计后可按 e 填写；保存的新配置会用于下次区间比较。",
+    "x：导出当前月份／区间的完整 text、json 或 csv；填写格式与新文件路径，Esc 取消。",
+    "导出前重新审计，使用最新已保存配置，忽略显示筛选；待审时只导出待审清单。CSV 使用 UTF-8 BOM。",
     "/：输入关键词筛选；支持中文、账户、用途、原因码和来源路径。空查询清除筛选。",
     "t：切换完整报告文本和待审列表。待审状态只显示未通过项目，不显示局部正式数字。",
     "a：已签发后切换交易来源列表；可按类别、资金用途、责任 ID、摘要或账户筛选。",
@@ -397,8 +399,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
-    footer = ("c 月报  m 转到该月  r 重算区间  / 筛选  Enter 详情  t 报告/待审  ? 帮助  q 退出" if browser.period else
-              "c 区间比较  r 重算  / 筛选  e 填写  a 交易  t 报告/待审  [ ] 切配置  ? 帮助  q 退出")
+    footer = ("x 导出  c 月报  m 转到该月  r 重算区间  / 筛选  Enter 详情  ? 帮助  q 退出" if browser.period else
+              "x 导出  c 区间比较  r 重算  / 筛选  e 填写  a 交易  [ ] 切配置  ? 帮助  q 退出")
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -559,6 +561,46 @@ def _edit_review(stdscr, browser: ReportBrowser):
         _message(stdscr, "未保存审阅决定", lines)
 
 
+def _export_report(stdscr, browser: ReportBrowser):
+    from .tui_export import FORMATS, write_export
+
+    scope = "区间报表" if browser.period else "月报"
+    context = [f"导出：{scope}（完整结果，忽略显示筛选）",
+               "重新读取账本与最新配置后导出；待审时只保存待审清单。",
+               "格式：text 文本、json 完整结构、csv 表格。已有文件不会覆盖。",
+               *[str(path) for path in (browser.configs if browser.period else [browser.config])]]
+    try:
+        format = _read_field(stdscr, "导出报表", context, "格式（text / json / csv）：", "text")
+        if format is None:
+            return
+        format = format.strip().casefold()
+        require(format in FORMATS, "TUI_EXPORT_FORMAT_INVALID", "导出格式须为 text、json 或 csv")
+        label = ("period" if browser.period else (browser.outcome or {}).get("month", "month"))
+        suggested = Path.cwd() / f"budget-{label}-{datetime.now():%Y%m%d-%H%M%S}{FORMATS[format]}"
+        destination = _read_field(stdscr, "保存到新文件", context,
+                                  "输出文件完整路径：", str(suggested))
+        if destination is None:
+            return
+        require(bool(destination.strip()), "TUI_EXPORT_PATH_INVALID", "请填写输出文件路径")
+        path = Path(destination.strip()).expanduser().absolute()
+        require(not path.exists() and not path.is_symlink(), "TUI_EXPORT_EXISTS",
+                "输出文件已存在，请选择新文件", str(path))
+        browser.clear()
+        _draw_browser(stdscr, browser)
+        browser.refresh()
+        if browser.error:
+            raise browser.error
+        write_export(browser.outcome, browser.config, path, format, period=browser.period)
+        state = browser.outcome["status"]
+        exported_scope = (f"{browser.outcome['from']} 至 {browser.outcome['through']}" if browser.period else
+                          browser.outcome["month"])
+        _message(stdscr, "已导出", [f"文件：{path}", f"范围：{exported_scope}", f"状态：{state}",
+                                    "完整报表已保存。" if state == "CERTIFIED_SCOPED" else
+                                    "当前未通过审计，已保存完整待审清单；文件不含局部预算数字。"])
+    except (BudgetError, OSError, UnicodeError, ValueError) as exc:
+        _message(stdscr, "导出失败", [str(exc), "本次导出未完成。可核对路径或输入文件后重新按 x 导出。"])
+
+
 def _report_browser(stdscr, browser: ReportBrowser):
     try:
         curses.curs_set(0)
@@ -605,6 +647,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             browser.toggle_transactions()
         elif key == "e":
             _edit_review(stdscr, browser)
+        elif key == "x":
+            _export_report(stdscr, browser)
         elif key == "t":
             browser.view = "reviews" if browser.view == "report" else "report"
             browser.detail, browser.help, browser.offset, browser.selected = None, False, 0, 0
