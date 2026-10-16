@@ -18,13 +18,13 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import load_yaml, require_yaml
 from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_transaction_refs
 from .inline_amounts import parse_inline_amounts
 from .ownership import _owners, audit_ownership
-from .provenance import valid_digest
+from .event_declarations import validate_event_declaration
 from .source import scan_v6_source
 
 
@@ -32,9 +32,10 @@ ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
 
 
-def _number(value: object, source: str) -> Fraction:
-    require(type(value) is str and bool(NUMBER.fullmatch(value)),
-            "K_EVENT_UNITS_INVALID", "K 事件切片须使用精确数字字符串", source)
+def _number(value: object, path: Path, keys: tuple) -> Fraction:
+    require_yaml(type(value) is str and bool(NUMBER.fullmatch(value)),
+        "K_EVENT_UNITS_INVALID", "K 事件切片须使用精确数字字符串",
+        path, keys)
     return Fraction(value)
 
 
@@ -66,6 +67,7 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
             index = modes_future.index("K")
             future_pairs[_key(refs[index])] = refs[1 - index]
     candidates = {}
+    source_locations = {}
     inline_funds = {}
     order = []
     asset_root = fin.options["name_assets"]
@@ -76,6 +78,8 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
         for posting in k_postings:
             k_ref = facts.for_posting(posting).as_dict()
             key = _key(k_ref)
+            meta = posting.meta or entry.meta
+            source_locations[key] = f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
             require(key not in candidates, "SOURCE_REF_AMBIGUOUS",
                     "K booked 来源重复", key)
             amount = exact(posting.units.number)
@@ -115,75 +119,88 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
             order.append(key)
 
     claims = {}
+    claim_locations = {}
     review_sha = None
     if declarations is not None:
         document = load_yaml(declarations)
-        require(type(document) is dict and set(document) == {
-            "schema", "cutover", "ledger_snapshot", "loader_version", "events"},
-            "K_EVENT_DECLARATION_INVALID", "K 事件侧文件字段不完整或含未知字段", str(declarations))
-        require(type(document["schema"]) is int and document["schema"] == 6 and
-                type(document["cutover"]) is str and document["cutover"] == cutover.isoformat() and
-                valid_digest(document["ledger_snapshot"]) and
-                document["loader_version"] == fin.loader_version and
-                type(document["events"]) is list,
-                "K_EVENT_DECLARATION_INVALID", "K 事件版本或原审快照格式不匹配", str(declarations))
+        validate_event_declaration(document, declarations, cutover, fin.loader_version,
+                                   "K_EVENT_DECLARATION_INVALID")
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         used_cash = set()
         used_slices = set()
         for row_index, row in enumerate(document["events"]):
-            require(type(row) is dict and set(row) == {
+            location = ("events", row_index)
+            require_yaml(type(row) is dict and set(row) == {
                 "k_ref", "cash_ref", "kind", "reason", "slices"},
-                "K_EVENT_CLAIM_INVALID", "K 事件须声明两侧来源、类型、理由及切片")
-            require(type(row["k_ref"]) is dict and type(row["cash_ref"]) is dict,
-                    "K_EVENT_CLAIM_INVALID", "K 事件必须绑定完整 booked 引用")
+                "K_EVENT_CLAIM_INVALID", "K 事件须声明两侧来源、类型、理由及切片",
+                declarations, location)
+            require_yaml(type(row["k_ref"]) is dict and type(row["cash_ref"]) is dict,
+                "K_EVENT_CLAIM_INVALID", "K 事件必须绑定完整 booked 引用",
+                declarations, location)
             key = _key(row["k_ref"])
-            location = yaml_path_location(declarations, ("events", row_index))
             if key in future_pairs:
-                require(row["cash_ref"] == future_pairs[key], "K_EVENT_CASH_REF_INVALID",
-                        "未来 K 现金来源须为同一交易的完整 H 对手", location)
+                require_yaml(row["cash_ref"] == future_pairs[key],
+                    "K_EVENT_CASH_REF_INVALID", "未来 K 现金来源须为同一交易的完整 H 对手",
+                    declarations, (*location, "cash_ref"))
                 continue
-            require(key in candidates, "K_EVENT_REF_INVALID", "K 来源不存在或过期", location)
-            require(key not in claims, "K_EVENT_DOUBLE_CLAIM", "K 事件重复认领", key)
-            require(key not in inline_funds, "K_EVENT_DOUBLE_CLAIM",
-                    "K 行内 fund 与外部申赎事件不能同时认领", key)
+            require_yaml(key in candidates,
+                "K_EVENT_REF_INVALID", "K 来源不存在或过期",
+                declarations, (*location, "k_ref"))
+            require_yaml(key not in claims,
+                "K_EVENT_DOUBLE_CLAIM", "K 事件重复认领",
+                declarations, (*location, "k_ref"))
+            require_yaml(key not in inline_funds,
+                "K_EVENT_DOUBLE_CLAIM", "K 行内 fund 与外部申赎事件不能同时认领",
+                declarations, (*location, "k_ref"))
             candidate = candidates[key]
-            require(candidate["shape"] == "simple_cash", "K_EVENT_UNSUPPORTED",
-                    "本 K 事件不符合简单现金申赎协议", key)
+            amount = Fraction(candidate["signed_k_units"])
+            require_yaml(candidate["shape"] == "simple_cash",
+                "K_EVENT_UNSUPPORTED", "本 K 事件不符合简单现金申赎协议",
+                declarations, location)
             cash_key = _key(row["cash_ref"])
-            require(cash_key == _key(candidate["cash_ref"]) and cash_key not in used_cash,
-                    "K_EVENT_CASH_REF_INVALID", "K 现金对手不存在、过期或被重复使用", cash_key)
+            require_yaml(cash_key == _key(candidate["cash_ref"]) and cash_key not in used_cash,
+                "K_EVENT_CASH_REF_INVALID", "K 现金对手不存在、过期或被重复使用",
+                declarations, (*location, "cash_ref"))
             used_cash.add(cash_key)
-            require(row["kind"] == candidate["kind"] and
+            require_yaml(row["kind"] == candidate["kind"] and
                     type(row["reason"]) is str and bool(row["reason"].strip()) and
                     type(row["slices"]) is list and bool(row["slices"]),
-                    "K_EVENT_CLAIM_INVALID", "K 事件类型、理由或切片无效", key)
+                "K_EVENT_CLAIM_INVALID", "K 事件类型、理由或切片无效",
+                declarations, location)
             k_total = Fraction(0)
             cash_total = Fraction(0)
             parsed = []
             allocations = {}
-            for part in row["slices"]:
-                require(type(part) is dict and set(part) == {
+            for part_index, part in enumerate(row["slices"]):
+                part_location = (*location, "slices", part_index)
+                require_yaml(type(part) is dict and set(part) == {
                     "id", "k_owner_id", "cash_owner_id", "signed_k_units",
                     "signed_cash_units", "boundary_role"},
-                    "K_EVENT_SLICE_INVALID", "K 切片须逐份声明双方用途、数量和边界角色", key)
+                    "K_EVENT_SLICE_INVALID", "K 切片须逐份声明双方用途、数量和边界角色",
+                    declarations, part_location)
                 ident, k_owner, cash_owner = (part[field] for field in
                                               ("id", "k_owner_id", "cash_owner_id"))
-                require(type(ident) is str and bool(ID.fullmatch(ident)) and
+                require_yaml(type(ident) is str and bool(ID.fullmatch(ident)) and
                         ident not in used_slices,
-                        "K_EVENT_SLICE_INVALID", "K 切片 ID 非法或重复", key)
+                    "K_EVENT_SLICE_INVALID", "K 切片 ID 非法或重复",
+                    declarations, (*part_location, "id"))
                 used_slices.add(ident)
-                require(type(k_owner) is str and (k_owner == "-" or k_owner in owner_ids) and
+                require_yaml(type(k_owner) is str and (k_owner == "-" or k_owner in owner_ids) and
                         type(cash_owner) is str and (cash_owner == "-" or cash_owner in owner_ids),
-                        "K_EVENT_OWNER_INVALID", "K 切片引用未登记用途", key)
-                k_units = _number(part["signed_k_units"], key)
-                cash_units = _number(part["signed_cash_units"], key)
-                require(k_units != 0 and k_units * amount > 0 and cash_units == -k_units,
-                        "K_EVENT_UNITS_MISMATCH", "K 与现金切片须同币种精确反向", key)
+                    "K_EVENT_OWNER_INVALID", "K 切片引用未登记用途",
+                    declarations, part_location)
+                k_units = _number(part["signed_k_units"], declarations, (*part_location, "signed_k_units"))
+                cash_units = _number(part["signed_cash_units"], declarations, (*part_location, "signed_cash_units"))
+                require_yaml(k_units != 0 and k_units * amount > 0 and cash_units == -k_units,
+                    "K_EVENT_UNITS_MISMATCH", "K 与现金切片须同币种精确反向",
+                    declarations, part_location)
                 role = part["boundary_role"]
                 valid = ((role == "preserve" and k_owner == cash_owner) or
                          (role == "allocate" and amount > 0 and k_owner != cash_owner) or
                          (role == "release" and amount < 0 and k_owner != cash_owner))
-                require(valid, "K_EVENT_ROLE_INVALID", "K 用途边界与申赎方向不一致", key)
+                require_yaml(valid,
+                    "K_EVENT_ROLE_INVALID", "K 用途边界与申赎方向不一致",
+                    declarations, (*part_location, "boundary_role"))
                 k_total += k_units
                 cash_total += cash_units
                 if k_owner != "-":
@@ -195,15 +212,17 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
                                "signed_k_units": exact_text(k_units),
                                "signed_cash_units": exact_text(cash_units),
                                "boundary_role": role})
-            require(k_total == Fraction(candidate["signed_k_units"]) and cash_total == -k_total,
-                    "K_EVENT_UNITS_MISMATCH", "K 与现金切片未精确加回 booked 分录", key)
+            require_yaml(k_total == Fraction(candidate["signed_k_units"]) and cash_total == -k_total,
+                "K_EVENT_UNITS_MISMATCH", "K 与现金切片未精确加回 booked 分录",
+                declarations, location)
+            claim_locations[key] = location
             claims[key] = {"reason": row["reason"], "slices": parsed,
                            "net_allocations": {owner: exact_text(value) for owner, value in sorted(allocations.items()) if value}}
 
     def inline_claim(key: str, cash_claim: dict) -> dict:
         candidate = candidates[key]
         amount = Fraction(candidate["signed_k_units"])
-        parsed = parse_inline_amounts(inline_funds[key], amount, str(candidate["k_ref"]),
+        parsed = parse_inline_amounts(inline_funds[key], amount, source_locations[key],
                                       known_names=set(names), code="K_EVENT_UNITS_MISMATCH")
         k_remaining: dict[str, Fraction] = {}
         for name, units in parsed:
@@ -212,14 +231,14 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
         cash_remaining: dict[str, Fraction] = {}
         for part in cash_claim["slices"]:
             require(part["role"] == "hold", "K_EVENT_CASH_ROLE_INVALID",
-                    "K 申赎现金腿的用途边界由 K 事件独占，H 腿须为 hold", key)
+                    "K 申赎现金腿的用途边界由 K 事件独占，H 腿须为 hold", source_locations[key])
             units = Fraction(part["signed_units"])
             require(units * amount < 0, "K_EVENT_CASH_OWNER_MISMATCH",
-                    "K 现金用途切片须与 K 申赎方向相反", key)
+                    "K 现金用途切片须与 K 申赎方向相反", source_locations[key])
             owner = part["owner_id"]
             cash_remaining[owner] = cash_remaining.get(owner, Fraction(0)) + abs(units)
         require(sum(cash_remaining.values(), Fraction(0)) == abs(amount),
-                "K_EVENT_CASH_OWNER_MISMATCH", "K 现金用途未精确加回申赎金额", key)
+                "K_EVENT_CASH_OWNER_MISMATCH", "K 现金用途未精确加回申赎金额", source_locations[key])
         slices = []
         allocations: dict[str, Fraction] = {}
 
@@ -253,7 +272,7 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
                 if units:
                     pair(k_owner, cash_owner, units)
         require(not any(k_remaining.values()) and not any(cash_remaining.values()),
-                "K_EVENT_UNITS_MISMATCH", "K 行内 fund 与现金用途金额不匹配", key)
+                "K_EVENT_UNITS_MISMATCH", "K 行内 fund 与现金用途金额不匹配", source_locations[key])
         return {"reason": "K 分录行内 fund 与 H 现金用途逐笔匹配",
                 "slices": slices,
                 "net_allocations": {owner: exact_text(value)
@@ -283,12 +302,16 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
                     expected_cash[owner] = expected_cash.get(owner, Fraction(0)) + Fraction(part["signed_cash_units"])
                 actual_cash = {}
                 for part in cash_claim["slices"]:
-                    require(part["role"] == "hold", "K_EVENT_CASH_ROLE_INVALID",
-                            "K 申赎现金腿的用途边界由 K 事件独占，H 腿须为 hold", key)
+                    require_yaml(part["role"] == "hold", "K_EVENT_CASH_ROLE_INVALID",
+                                 "K 申赎现金腿的用途边界由 K 事件独占，H 腿须为 hold",
+                                 declarations if key in claim_locations else None,
+                                 claim_locations.get(key, ()), fallback=source_locations[key])
                     owner = part["owner_id"]
                     actual_cash[owner] = actual_cash.get(owner, Fraction(0)) + Fraction(part["signed_units"])
-                require(actual_cash == expected_cash, "K_EVENT_CASH_OWNER_MISMATCH",
-                        "K 用途切片与真实现金 H 归属不一致", key)
+                require_yaml(actual_cash == expected_cash, "K_EVENT_CASH_OWNER_MISMATCH",
+                             "K 用途切片与真实现金 H 归属不一致",
+                             declarations if key in claim_locations else None,
+                             claim_locations.get(key, ()), fallback=source_locations[key])
                 state, codes = "CERTIFIED", []
         events.append({**candidate, "status": state, "reason_codes": codes,
                        "review_reason": claim["reason"] if claim else None,

@@ -13,21 +13,22 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import load_yaml, require_yaml
 from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_transaction_refs
 from .ownership import _owners, audit_ownership
-from .provenance import valid_digest
+from .event_declarations import validate_event_declaration
 from .source import scan_v6_source
 
 
 NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
 
 
-def _number(value: object, source: str) -> Fraction:
-    require(type(value) is str and bool(NUMBER.fullmatch(value)),
-            "H_FX_UNITS_INVALID", "H 外汇原生数量须为精确数字字符串", source)
+def _number(value: object, path: Path, keys: tuple) -> Fraction:
+    require_yaml(type(value) is str and bool(NUMBER.fullmatch(value)),
+        "H_FX_UNITS_INVALID", "H 外汇原生数量须为精确数字字符串",
+        path, keys)
     return Fraction(value)
 
 
@@ -99,49 +100,54 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
         order.append(key)
 
     claims = {}
+    claim_locations = {}
     review_sha = None
     if declarations is not None:
         document = load_yaml(declarations)
-        require(type(document) is dict and set(document) == {
-            "schema", "cutover", "ledger_snapshot", "loader_version", "events"},
-            "H_FX_DECLARATION_INVALID", "H 外汇侧文件字段无效")
-        require(type(document["schema"]) is int and document["schema"] == 6 and
-                type(document["cutover"]) is str and document["cutover"] == cutover.isoformat() and
-                valid_digest(document["ledger_snapshot"]) and
-                document["loader_version"] == fin.loader_version and
-                type(document["events"]) is list,
-                "H_FX_DECLARATION_INVALID", "H 外汇版本或原审快照格式不匹配")
+        validate_event_declaration(document, declarations, cutover, fin.loader_version,
+                                   "H_FX_DECLARATION_INVALID")
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         used_to = set()
         for row_index, row in enumerate(document["events"]):
-            require(type(row) is dict and set(row) == {
+            location = ("events", row_index)
+            require_yaml(type(row) is dict and set(row) == {
                 "from_ref", "to_ref", "owner_id", "signed_from_units",
                 "signed_to_units", "boundary_role", "reason"} and
                 type(row["from_ref"]) is dict and type(row["to_ref"]) is dict,
-                "H_FX_CLAIM_INVALID", "H 外汇须有两侧完整 booked 引用、单一用途及人工理由")
+                "H_FX_CLAIM_INVALID", "H 外汇须有两侧完整 booked 引用、单一用途及人工理由",
+                declarations, location)
             key = _key(row["from_ref"])
-            location = yaml_path_location(declarations, ("events", row_index))
             if key in future_pairs:
-                require(row["to_ref"] == future_pairs[key], "H_FX_TO_REF_INVALID",
-                        "未来 H 外汇转入来源须为同一交易的完整对手", location)
+                require_yaml(row["to_ref"] == future_pairs[key],
+                    "H_FX_TO_REF_INVALID", "未来 H 外汇转入来源须为同一交易的完整对手",
+                    declarations, (*location, "to_ref"))
                 continue
-            require(key in candidates, "H_FX_REF_INVALID", "H 外汇转出来源不存在或过期", location)
-            require(key not in claims, "H_FX_DOUBLE_CLAIM", "H 外汇来源重复认领", key)
+            require_yaml(key in candidates,
+                "H_FX_REF_INVALID", "H 外汇转出来源不存在或过期",
+                declarations, (*location, "from_ref"))
+            require_yaml(key not in claims,
+                "H_FX_DOUBLE_CLAIM", "H 外汇来源重复认领",
+                declarations, (*location, "from_ref"))
             candidate = candidates[key]
-            require(candidate["shape"] == "simple_buy", "H_FX_UNSUPPORTED",
-                    "交易不符合单用途报告币种购汇协议", key)
+            require_yaml(candidate["shape"] == "simple_buy",
+                "H_FX_UNSUPPORTED", "交易不符合单用途报告币种购汇协议",
+                declarations, location)
             to_key = _key(row["to_ref"])
-            require(to_key == _key(candidate["to_ref"]) and to_key not in used_to,
-                    "H_FX_TO_REF_INVALID", "H 外汇转入来源不存在、过期或重复", to_key)
+            require_yaml(to_key == _key(candidate["to_ref"]) and to_key not in used_to,
+                "H_FX_TO_REF_INVALID", "H 外汇转入来源不存在、过期或重复",
+                declarations, (*location, "to_ref"))
             used_to.add(to_key)
             owner = row["owner_id"]
-            require(type(owner) is str and (owner == "-" or owner in owner_ids) and
+            require_yaml(type(owner) is str and (owner == "-" or owner in owner_ids) and
                     row["boundary_role"] == "preserve" and
                     type(row["reason"]) is str and bool(row["reason"].strip()),
-                    "H_FX_PURPOSE_INVALID", "简单购汇只能保留已审的同一用途", key)
-            require(_number(row["signed_from_units"], key) == Fraction(candidate["signed_from_units"]) and
-                    _number(row["signed_to_units"], key) == Fraction(candidate["signed_to_units"]),
-                    "H_FX_UNITS_MISMATCH", "H 外汇两侧原生数量不等于 booked 数量", key)
+                "H_FX_PURPOSE_INVALID", "简单购汇只能保留已审的同一用途",
+                declarations, location)
+            require_yaml(_number(row["signed_from_units"], declarations, (*location, "signed_from_units")) == Fraction(candidate["signed_from_units"]) and
+                    _number(row["signed_to_units"], declarations, (*location, "signed_to_units")) == Fraction(candidate["signed_to_units"]),
+                "H_FX_UNITS_MISMATCH", "H 外汇两侧原生数量不等于 booked 数量",
+                declarations, location)
+            claim_locations[key] = location
             claims[key] = {"owner_id": owner, "reason": row["reason"]}
 
     events = []
@@ -160,11 +166,12 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
             else:
                 for h_claim, units in ((from_h, candidate["signed_from_units"]),
                                        (to_h, candidate["signed_to_units"])):
-                    require(len(h_claim["slices"]) == 1 and
+                    require_yaml(len(h_claim["slices"]) == 1 and
                             h_claim["slices"][0]["owner_id"] == claim["owner_id"] and
                             h_claim["slices"][0]["role"] == "hold" and
                             Fraction(h_claim["slices"][0]["signed_units"]) == Fraction(units),
-                            "H_FX_OWNER_MISMATCH", "购汇两侧 H 份额须精确保留同一用途", key)
+                        "H_FX_OWNER_MISMATCH", "购汇两侧 H 份额须精确保留同一用途",
+                        declarations, claim_locations[key])
                 status, code = "CERTIFIED", None
         events.append({**candidate, "status": status, "reason_code": code,
                        "owner_id": claim["owner_id"] if status == "CERTIFIED" else None,

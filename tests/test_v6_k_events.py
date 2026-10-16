@@ -93,6 +93,31 @@ class KEventTests(unittest.TestCase):
         self.assertEqual(report["events"][0]["net_allocations"], {})
         self.assertEqual(report["events"][0]["shape"], "simple_cash")
 
+    def test_subscription_then_redemption_validate_each_events_own_direction(self):
+        self.root.write_text(self.root.read_text(encoding="utf-8") +
+                             '2026-09-03 * "partial fund redemption"\n'
+                             '  Assets:FundBook -100 CNY\n  Assets:Cash 100 CNY\n', encoding="utf-8")
+        ownership = yaml.safe_load(self.ownership.read_text(encoding="utf-8"))
+        candidate = audit_k_events(self.root, CUTOVER, self.accounts, self.ownership)["events"][1]
+        ownership["claims"].append({"claim": candidate["cash_ref"], "reason": "returned travel cash",
+                                    "slices": [{"id": "returned_cash", "owner_id": "travel",
+                                                "role": "hold", "signed_units": "100"}]})
+        self.write_ownership(ownership["claims"])
+        document = self.declaration()
+        document["events"].append({"k_ref": candidate["k_ref"], "cash_ref": candidate["cash_ref"],
+                                    "kind": "redemption", "reason": "partial return of travel book flow",
+                                    "slices": [{"id": "redeemed_travel", "k_owner_id": "travel",
+                                                "cash_owner_id": "travel", "signed_k_units": "-100",
+                                                "signed_cash_units": "100", "boundary_role": "preserve"}]})
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse):
+                if reverse:
+                    document["events"].reverse()
+                report = self.audit(document)
+                self.assertEqual((report["review_state"], report["certified_events"]), ("complete", 2))
+                self.assertEqual([row["kind"] for row in report["events"]], ["subscription", "redemption"])
+                self.assertTrue(all(row["net_allocations"] == {} for row in report["events"]))
+
     def test_k_book_projection_reconciles_without_claiming_real_holdings(self):
         self.audit(self.declaration())
         opening = Path(self.temp.name) / "opening.yml"
