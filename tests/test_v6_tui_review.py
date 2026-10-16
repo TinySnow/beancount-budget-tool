@@ -202,6 +202,15 @@ class InteractiveReviewTests(unittest.TestCase):
         self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "40")
         self.assertTrue(browser.has_transactions())
         self.assertEqual(browser.outcome["report"]["transactions"]["count"], 3)
+        self.run_keys(browser, ["c", "q"])
+        self.assertTrue(browser.period)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(browser.outcome["months"][0]["config"], str(browser.config))
+        self.assertEqual(browser.outcome["report"]["closing"]["max_spendable"]["max_spendable"], "40")
+        self.run_keys(browser, ["c", "a", "q"])
+        self.assertFalse(browser.period)
+        self.assertEqual(browser.view, "transactions")
+        self.assertEqual(browser.outcome["report"]["transactions"]["count"], 3)
         self.assert_originals()
 
     def test_keyboard_invalid_amount_can_be_corrected_before_approval(self):

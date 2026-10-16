@@ -140,6 +140,7 @@ class ReportBrowser:
                              path.parent / "tui-reviews" for path in self.configs]
         self.saved = set()
         self.index = 0
+        self.period = False
         self.query = ""
         self.view = "report"
         self.help = False
@@ -163,11 +164,17 @@ class ReportBrowser:
         previous_view = self.view
         self.clear()
         try:
-            outcome = self.loader(self.config)
+            if self.period:
+                from .period_report import audit_period, render_text
+                outcome = audit_period(list(self.configs))
+                renderer = render_text
+            else:
+                outcome = self.loader(self.config)
+                renderer = self.renderer
             # Blocked workflows may never expose an earlier or partial report.
             if outcome["status"] != "CERTIFIED_SCOPED":
                 outcome = {**outcome, "report": None}
-            rendered = self.renderer(outcome)
+            rendered = renderer(outcome)
             self.outcome, self.lines = outcome, rendered.splitlines()
             self.view = "reviews" if outcome.get("review_items") else "report"
             if previous_view == "transactions" and self.has_transactions():
@@ -182,6 +189,30 @@ class ReportBrowser:
         if target == self.index:
             return False
         self.index = target
+        self.period = False
+        self.clear()
+        return True
+
+    def toggle_period(self):
+        self.period = not self.period
+        self.view = "report"
+        self.filter("")
+        self.clear()
+
+    def open_review_month(self) -> bool:
+        """Leave the interval for the latest supplied config of a pending month."""
+        if not self.period or self.view != "reviews" or self.error or self.help:
+            return False
+        items = self.reviews()
+        if not items:
+            return False
+        item = self.detail or items[max(0, min(self.selected, len(items) - 1))]
+        target = Path(item["config"]).resolve()
+        if target not in self.configs:
+            return False
+        self.index = self.configs.index(target)
+        self.period = False
+        self.filter("")
         self.clear()
         return True
 
@@ -198,7 +229,7 @@ class ReportBrowser:
             item, ensure_ascii=False, sort_keys=True).casefold()]
 
     def has_transactions(self) -> bool:
-        return bool(self.outcome and self.outcome["status"] == "CERTIFIED_SCOPED" and
+        return bool(not self.period and self.outcome and self.outcome["status"] == "CERTIFIED_SCOPED" and
                     self.outcome.get("report") and self.outcome["report"].get("transactions") is not None)
 
     def transactions(self) -> list[dict]:
@@ -238,18 +269,24 @@ class ReportBrowser:
             self.offset = 0
 
     def title(self) -> str:
+        scope = "区间 " if self.period else ""
         if self.error:
             state = "计算失败（无可用月报）"
         elif self.outcome:
-            state = f"{self.outcome['month']} {self.outcome['status']}"
+            label = (f"{self.outcome['from']} 至 {self.outcome['through']}" if self.period else
+                     self.outcome["month"])
+            state = f"{label} {self.outcome['status']}"
         else:
             state = "正在重算（旧结果已清除）"
-        return f"v6 {state} [{self.index + 1}/{len(self.configs)}]"
+        return f"v6 {scope}{state} [{self.index + 1}/{len(self.configs)}]"
 
 
 HELP = [
     "按键帮助", "r：读取当前账本与配置，重新运行全部月报审计；计算期间旧结果清除。",
     "[ / ]：按命令提供的顺序切换配置，每次重新审计，不复用其他月份的声明或数字。",
+    "c：切换当前月报与连续月份比较；使用命令提供的全部最新配置，区间内不能缺月。",
+    "区间重新审计每个月：只累计流量，目标差逐月比较，余额与可花取期末，任何月待审均不显示区间数字。",
+    "m：在区间待审列表／详情中转到所选月份，重新审计后可按 e 填写；保存的新配置会用于下次区间比较。",
     "/：输入关键词筛选；支持中文、账户、用途、原因码和来源路径。空查询清除筛选。",
     "t：切换完整报告文本和待审列表。待审状态只显示未通过项目，不显示局部正式数字。",
     "a：已签发后切换交易来源列表；可按类别、资金用途、责任 ID、摘要或账户筛选。",
@@ -279,13 +316,16 @@ def _draw_browser(stdscr, browser: ReportBrowser):
             _put(stdscr, 1, "窗口过小；放大终端，q 退出")
         stdscr.refresh()
         return
-    _put(stdscr, 1, f"配置：{browser.config}")
+    _put(stdscr, 1, f"区间使用全部 {len(browser.configs)} 份配置；? 查看清单，c 返回月报" if browser.period else
+         f"配置：{browser.config}")
     page = height - 4
     total_reviews = len(browser.outcome.get("review_items", [])) if browser.outcome else 0
     items = browser.items()
     title = {"reviews": "待审列表", "transactions": "已签发月报的交易来源", "report": "报告文本"}[browser.view]
     subtitle = f"{title}；待审总数 {total_reviews}"
-    if browser.index in browser.saved:
+    if browser.saved and browser.period:
+        subtitle = "包含 TUI 已保存的新配置；" + subtitle
+    elif browser.index in browser.saved:
         subtitle = "已保存，正使用新配置（? 看完整路径）；" + subtitle
     if browser.query:
         subtitle += f"；筛选：{browser.query}"
@@ -293,6 +333,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         browser.error or browser.detail or browser.help)
     if browser.help:
         lines = [*HELP, f"当前配置完整路径：{browser.config}"]
+        if browser.period:
+            lines += ["区间使用的最新配置：", *map(str, browser.configs)]
         subtitle = "帮助；Esc 返回"
     elif browser.error:
         lines = ["本次计算失败；旧月报已清除。修正文件后按 r 重算。",
@@ -308,11 +350,12 @@ def _draw_browser(stdscr, browser: ReportBrowser):
             lines = ["交易来源详情（当前月报快照；只读）", *render_transaction(item, browser.outcome["report"]["owner_names"])]
             subtitle = "交易来源详情；Esc 返回列表"
         else:
-            lines = ["待审详情（当前审计快照；分类／H 用途可按 e 填写）",
+            lines = [("区间待审详情；按 m 转到该月审阅" if browser.period else
+                      "待审详情（当前审计快照；分类／H 用途可按 e 填写）"),
                  f"原因：{item.get('reason_code', '')} {item.get('detail', '')}",
                  f"位置：{item.get('source') or '未提供'}", "",
                  *json.dumps(item, ensure_ascii=False, indent=2, sort_keys=True).splitlines()]
-            subtitle = "待审详情；Esc 返回列表"
+            subtitle = "待审详情；Esc 返回列表" + ("，m 转到该月" if browser.period else "")
     elif listing:
         subtitle += f"；匹配 {len(items)} 项"
         if browser.view == "transactions":
@@ -332,7 +375,9 @@ def _draw_browser(stdscr, browser: ReportBrowser):
                              f"{item.get('payee') or ''} {item['narration']} | {amounts} [{item['source']}]")
                 continue
             label = "程序实现缺口" if item.get("reason_kind") == "implementation_limit" else "待审"
+            month = f"{item['month']} " if browser.period else ""
             lines.append(f"{'>' if index == browser.selected else ' '} {index + 1}. {label} "
+                         f"{month}"
                          f"{item.get('date', '')} {item.get('account', '')} "
                          f"{item.get('signed_units', '')} {item.get('commodity', '')} "
                          f"{item.get('reason_code', '')}：{item.get('detail', '')} [{item.get('source', '')}]")
@@ -352,7 +397,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
-    footer = "r 重算  / 筛选  e 填写  a 交易  t 报告/待审  Enter 详情  [ ] 切配置  ? 帮助  q 退出"
+    footer = ("c 月报  m 转到该月  r 重算区间  / 筛选  Enter 详情  t 报告/待审  ? 帮助  q 退出" if browser.period else
+              "c 区间比较  r 重算  / 筛选  e 填写  a 交易  t 报告/待审  [ ] 切配置  ? 帮助  q 退出")
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -452,7 +498,7 @@ def _edit_review(stdscr, browser: ReportBrowser):
     from .tui_review import prepare_review, save_review, validate_decision
     from ..exact import amount_text
 
-    if browser.view != "reviews" or browser.error or browser.help or not browser.reviews():
+    if browser.period or browser.view != "reviews" or browser.error or browser.help or not browser.reviews():
         return
     items = browser.reviews()
     item = browser.detail or items[max(0, min(browser.selected, len(items) - 1))]
@@ -542,6 +588,12 @@ def _report_browser(stdscr, browser: ReportBrowser):
                 return
         elif key == "r":
             reload()
+        elif key == "c":
+            browser.toggle_period()
+            reload()
+        elif key == "m":
+            if browser.open_review_month():
+                reload()
         elif key in ("[", "]"):
             if browser.switch(-1 if key == "[" else 1):
                 reload()
