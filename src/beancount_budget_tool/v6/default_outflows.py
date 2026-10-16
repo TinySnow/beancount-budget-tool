@@ -16,6 +16,7 @@ from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, frozen_fact_indices
 from .obligations import audit_simple_obligations
+from .native_flows import native_asset_flow
 from .ownership import audit_ownership
 from .purpose_pools import audit_purpose_pools
 from .review_diagnostics import posting_sources, review_item
@@ -108,6 +109,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
         liability_legs = [p for p in entry.postings if p.account.split(":", 1)[0] == liability_root]
         if not expense_legs and not liability_legs:
             continue  # Includes all virtual allocations, transfers, K and FX.
+        native = native_asset_flow(fin, entry, modes)
         for posting in entry.postings:
             if posting.account.split(":", 1)[0] == fin.options["name_assets"] and modes.get(posting.account) is None:
                 pending("ACCOUNT_UNREVIEWED", facts.for_posting(posting).as_dict(),
@@ -132,11 +134,15 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                 continue
             # A net income receipt with fees has no observed asset payment.
             # Its fee classification does not manufacture a cash debit.
-            if exact(posting.units.number) > 0 and expense_legs and not liability_legs and all(
-                    exact(p.units.number) >= 0 for p in expense_legs):
+            if (len(assets) == 1 and exact(posting.units.number) > 0 and expense_legs and not liability_legs and
+                    any(p.account.split(":", 1)[0] == fin.options["name_income"] for p in entry.postings) and all(
+                    exact(p.units.number) >= 0 for p in expense_legs)):
                 continue
             kind, event = None, None
-            if (len(assets) == 1 and len(entry.postings) == 1 + len(expense_legs) and expense_legs
+            if native is not None and native.kind == "expense":
+                kind = "expenses_paid" if units < 0 else "expense_refunds"
+                counterparts = [facts.for_posting(p).as_dict() for p in native.counterparts]
+            elif (len(assets) == 1 and len(entry.postings) == 1 + len(expense_legs) and expense_legs
                     and all(p.cost is None and p.units.currency == posting.units.currency
                             for p in entry.postings)
                     and sum((exact(p.units.number) for p in entry.postings), Fraction(0)) == 0):

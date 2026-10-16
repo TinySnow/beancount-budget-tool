@@ -21,6 +21,7 @@ from .h_transfers import audit_h_transfers
 from .holdings import audit_h_holdings
 from .k_events import audit_k_events
 from .obligations import audit_simple_obligations
+from .native_flows import native_asset_flow
 from .ownership import _owners, audit_ownership
 from .purpose_targets import _month
 from .purpose_pools import audit_purpose_pools
@@ -134,31 +135,21 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     if "defaults" in owner_document:
         h_accounts = {row["account"] for row in load_yaml(accounts)["accounts"]
                       if row["semantics"] == "H"}
+        modes = {name: "H" for name in h_accounts}
         by_ref = {_key(row["ref"]): row for row in owner_audit["ownership"]}
         for entry in fin.entries:
-            if not isinstance(entry, data.Transaction) or not first <= entry.date <= last or len(entry.postings) != 2:
+            if not isinstance(entry, data.Transaction) or not first <= entry.date <= last:
                 continue
-            asset = [p for p in entry.postings if p.account in h_accounts]
-            if len(asset) != 1:
+            native = native_asset_flow(fin, entry, modes)
+            if native is None:
                 continue
-            other = next(p for p in entry.postings if p is not asset[0])
-            other_root = other.account.split(":", 1)[0]
-            if (other_root not in (fin.options["name_income"], fin.options["name_expenses"]) or
-                    asset[0].units.currency != other.units.currency or
-                    exact(asset[0].units.number) != -exact(other.units.number) or
-                    asset[0].cost is not None or asset[0].price is not None or
-                    other.cost is not None or other.price is not None or
-                    fin.raw_price(asset[0])[0] != "none" or
-                    fin.raw_price(other)[0] != "none"):
+            refs = [facts.for_posting(p).as_dict() for p in native.assets]
+            keys = [_key(ref) for ref in refs]
+            if any(key in used_h or key not in by_ref or any(
+                    part["role"] != "hold" for part in by_ref[key]["slices"]) for key in keys):
                 continue
-            ref = facts.for_posting(asset[0]).as_dict()
-            key = _key(ref)
-            claim = by_ref.get(key)
-            if key in used_h or claim is None or any(
-                    part["role"] != "hold" for part in claim["slices"]):
-                continue
-            add("income_asset" if other_root == fin.options["name_income"]
-                else "expense_asset", {"date": entry.date.isoformat()}, [ref], {})
+            add("income_asset" if native.kind == "income" else "expense_asset",
+                {"date": entry.date.isoformat()}, refs, {})
     pool_accounts: set[str] = set()
     pool_internal_events = 0
     pool_internal_keys: set[str] = set()

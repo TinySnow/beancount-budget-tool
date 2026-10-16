@@ -19,11 +19,12 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .accounts import _lot, audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_posting_refs
 from .inline_amounts import parse_inline_amounts
+from .native_flows import native_asset_flow
 from .opening import audit_opening
 from .provenance import valid_digest
 from .source import scan_v6_source
@@ -34,23 +35,27 @@ NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
 ROLES = {"hold", "allocation", "gain"}
 
 
-def _owners(rows: object) -> dict[str, str]:
-    require(type(rows) is list, "OWNER_REGISTRY_INVALID", "owners 必须是列表")
+def _owners(rows: object, source: Path | None = None) -> dict[str, str]:
+    def check(condition, code, message, keys=(), fallback=None):
+        require_yaml(condition, code, message, source, ("owners", *keys), fallback)
+
+    check(type(rows) is list, "OWNER_REGISTRY_INVALID", "owners 必须是列表")
     names = {}
     identifiers = set()
-    for row in rows:
-        require(type(row) is dict and set(row) == {"id", "name", "aliases"},
-                "OWNER_REGISTRY_INVALID", "用途须有稳定 id/name/aliases")
+    for index, row in enumerate(rows):
+        check(type(row) is dict and set(row) == {"id", "name", "aliases"},
+                "OWNER_REGISTRY_INVALID", "用途须有稳定 id/name/aliases", (index,))
         ident = row["id"]
-        require(type(ident) is str and bool(ID.fullmatch(ident)) and ident not in identifiers,
-                "OWNER_ID_INVALID", "用途 ID 无效或重复", str(ident))
+        check(type(ident) is str and bool(ID.fullmatch(ident)) and ident not in identifiers,
+                "OWNER_ID_INVALID", "用途 ID 无效或重复", (index, "id"), str(ident))
         identifiers.add(ident)
-        require(type(row["aliases"]) is list, "OWNER_REGISTRY_INVALID", "aliases 必须是列表")
-        for name in [row["name"], *row["aliases"]]:
-            require(type(name) is str and bool(name) and name == name.strip() and
+        check(type(row["aliases"]) is list, "OWNER_REGISTRY_INVALID", "aliases 必须是列表", (index, "aliases"))
+        for alias_index, name in enumerate([row["name"], *row["aliases"]]):
+            keys = (index, "name") if alias_index == 0 else (index, "aliases", alias_index - 1)
+            check(type(name) is str and bool(name) and name == name.strip() and
                     name != "-" and not any(char in name for char in "|｜,，;；") and
                     name not in names,
-                    "OWNER_NAME_INVALID", "用途名／别名非法或重复", str(name))
+                    "OWNER_NAME_INVALID", "用途名／别名非法或重复", keys, str(name))
             names[name] = ident
     return names
 
@@ -114,16 +119,20 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
-        require(type(document) is dict and required <= set(document) <= required | {
-            "defaults", "transfer_orders"},
-            "OWNERSHIP_DECLARATION_INVALID", "归属声明字段不完整或含未知字段")
-        require(type(document["schema"]) is int and document["schema"] == 6 and
-                document["cutover"] == cutover.isoformat() and
-                valid_digest(document["ledger_snapshot"]) and
-                document["loader_version"] == fin.loader_version and
-                type(document["claims"]) is list,
-                "OWNERSHIP_DECLARATION_INVALID", "归属声明的版本或原审快照格式不匹配")
-        names = _owners(document["owners"])
+        unknown_fields = set(document) - required - {"defaults", "transfer_orders"} if type(document) is dict else set()
+        require_yaml(type(document) is dict and required <= set(document) and not unknown_fields,
+            "OWNERSHIP_DECLARATION_INVALID", "归属声明字段不完整或含未知字段", declarations,
+            (sorted(unknown_fields, key=str)[0],) if unknown_fields else ())
+        for field, valid in (
+            ("schema", type(document["schema"]) is int and document["schema"] == 6),
+            ("cutover", document["cutover"] == cutover.isoformat()),
+            ("ledger_snapshot", valid_digest(document["ledger_snapshot"])),
+            ("loader_version", document["loader_version"] == fin.loader_version),
+            ("claims", type(document["claims"]) is list),
+        ):
+            require_yaml(valid, "OWNERSHIP_DECLARATION_INVALID", "归属声明的版本或原审快照格式不匹配",
+                         declarations, (field,))
+        names = _owners(document["owners"], source=declarations)
         ids = set(names.values())
         if "defaults" in document:
             defaults = document["defaults"]
@@ -272,13 +281,16 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                                             for index, (owner, amount) in enumerate(owner_parts)]}
 
             roots = [p.account.split(":", 1)[0] for p in entry.postings]
-            if len(h_legs) == 1 and len(entry.postings) == 2 and len(missing_keys) == 1:
-                key = missing_keys[0]
-                signed = exact(leg_keys[key].units.number)
-                if fin.options["name_income"] in roots:
-                    inferred(key, [(defaults["income_owner_id"], signed)], "默认收入用途")
-                elif fin.options["name_expenses"] in roots:
-                    inferred(key, [(defaults["expense_owner_id"], signed)], "默认支出用途")
+            native = native_asset_flow(fin, entry, semantics) if len(entry.postings) > 2 else None
+            if native is not None or len(h_legs) == 1 and len(entry.postings) == 2:
+                # Defaults select each asset's owner, not an allocation of
+                # payments to individual expense/income counterparts.
+                for key in missing_keys:
+                    signed = exact(leg_keys[key].units.number)
+                    if fin.options["name_income"] in roots:
+                        inferred(key, [(defaults["income_owner_id"], signed)], "默认收入用途")
+                    elif fin.options["name_expenses"] in roots:
+                        inferred(key, [(defaults["expense_owner_id"], signed)], "默认支出用途")
             elif (len(entry.postings) == len(h_legs) == 2 and
                   all(p.account.split(":", 1)[0] == assets for p in h_legs)):
                 positive = [p for p in h_legs if exact(p.units.number) > 0]
