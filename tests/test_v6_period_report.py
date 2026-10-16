@@ -101,7 +101,7 @@ class PeriodReportTests(unittest.TestCase):
 
     def test_unsorted_configs_are_ordered_and_explicit_range_is_checked(self):
         with patch("beancount_budget_tool.v6.period_report.audit_month_workflow",
-                   side_effect=lambda path: self.demo["outcomes"][yaml.safe_load(path.read_text())["month"]]):
+                   side_effect=lambda path: self.demo["outcomes"][yaml.safe_load(path.read_text(encoding="utf-8"))["month"]]):
             result = audit_period(list(reversed(self.configs)), "2026-10", "2026-12")
         self.assertEqual([row["month"] for row in result["months"]], ["2026-10", "2026-11", "2026-12"])
         self.assertEqual(result["report"]["closing"]["actual_spendable"]["actual_spendable"], "1160")
@@ -212,7 +212,7 @@ class PeriodReportTests(unittest.TestCase):
             for field in ("direct_gross_spent", "direct_refunded", "direct_spent"):
                 living[field] = "0"
         with patch("beancount_budget_tool.v6.period_report.audit_month_workflow",
-                   side_effect=lambda config: outcomes[yaml.safe_load(config.read_text())["month"]]):
+                   side_effect=lambda config: outcomes[yaml.safe_load(config.read_text(encoding="utf-8"))["month"]]):
             result = audit_period(self.configs)
         self.assertEqual(result["report"]["expense_totals"]["direct_spent"], "1341")
 
@@ -224,7 +224,7 @@ class PeriodReportTests(unittest.TestCase):
             report["tracking"]["topics"].append({"topic": "同名专题", "commodity": "CNY", "spent": "7", "returned": "0", "net": "7"})
             report["default_outflows"] = {"status": "NOT_CONFIGURED", "totals": None}
         with patch("beancount_budget_tool.v6.period_report.audit_month_workflow",
-                   side_effect=lambda config: outcomes[yaml.safe_load(config.read_text())["month"]]):
+                   side_effect=lambda config: outcomes[yaml.safe_load(config.read_text(encoding="utf-8"))["month"]]):
             result = audit_period(self.configs)
         self.assertEqual(result["report"]["default_outflows_status"], "NOT_CONFIGURED")
         self.assertIsNone(result["report"]["default_outflows"])

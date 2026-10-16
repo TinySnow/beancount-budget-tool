@@ -227,7 +227,7 @@ class ObligationOpeningTests(unittest.TestCase):
 
     def test_multiple_opening_ids_on_one_account_reconcile_jointly(self):
         self.fixture(payments=False)
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
                                '2026-08-29 * "second old purchase"\n'
                                '  Expenses:Food 100 CNY\n  Liabilities:Card -100 CNY\n', encoding="utf-8")
         self.document["opening"].append({"liability_ref": self.ref("second old purchase", "Liabilities:Card"),
@@ -240,7 +240,7 @@ class ObligationOpeningTests(unittest.TestCase):
 
     def test_full_settlement_and_later_reimbursement_preserve_identity(self):
         self.fixture()
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
                                '2026-09-25 * "last card payment"\n'
                                '  Liabilities:Card 200 CNY\n  Assets:Bank -200 CNY\n    fund: "生活费"\n'
                                '2026-10-05 * "last employer reimbursement"\n'
@@ -265,7 +265,7 @@ class ObligationOpeningTests(unittest.TestCase):
 
     def test_borrowing_origin_requires_a_separate_nonconsumer_protocol(self):
         self.fixture(payments=False)
-        self.ledger.write_text(self.ledger.read_text().replace('Expenses:Food 500 CNY', 'Assets:Bank 500 CNY'),
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace('Expenses:Food 500 CNY', 'Assets:Bank 500 CNY'),
                                encoding="utf-8")
         self.document["opening"][0]["liability_ref"] = self.ref("old card origin", "Liabilities:Card")
         with self.assertRaises(BudgetError) as caught:
@@ -274,7 +274,7 @@ class ObligationOpeningTests(unittest.TestCase):
 
     def test_new_purchase_cannot_reuse_an_opening_obligation_id(self):
         self.fixture()
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
                                '2026-09-22 * "new purchase"\n'
                                '  Expenses:Food 10 CNY\n  Liabilities:Card -10 CNY\n', encoding="utf-8")
         row = audit_simple_obligations(self.ledger, CUTOVER)["events"][-1]

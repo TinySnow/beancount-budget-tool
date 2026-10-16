@@ -44,7 +44,7 @@ class ReviewDecisionsTests(unittest.TestCase):
         setup = Path(create_setup(self.ledger, "2026-09", self.base / "setup",
                                   income_purpose="自由资金", expense_purpose="生活费",
                                   expense_category="生活开销")["setup"])
-        document = yaml.safe_load(setup.read_text())
+        document = yaml.safe_load(setup.read_text(encoding="utf-8"))
         document["defaults"]["confirmed"] = True
         document["completeness_confirmed"] = True
         document["expense_targets"] = {"生活开销": "200"}
@@ -57,7 +57,7 @@ class ReviewDecisionsTests(unittest.TestCase):
         self.save(setup, document)
         self.config = Path(compile_setup(setup)["config"])
         categories = self.config.parent / "classifications.yaml"
-        document = yaml.safe_load(categories.read_text())
+        document = yaml.safe_load(categories.read_text(encoding="utf-8"))
         del document["defaults"]
         self.save(categories, document)
         self.originals = {path: path.read_bytes() for path in [self.ledger, *self.config.parent.glob("*.yaml")]}
@@ -71,7 +71,7 @@ class ReviewDecisionsTests(unittest.TestCase):
         return create_review(self.config, self.export)
 
     def approve(self, *, split=False):
-        document = yaml.safe_load(self.sheet.read_text())
+        document = yaml.safe_load(self.sheet.read_text(encoding="utf-8"))
         for row in document["rows"]:
             row["approved"] = True
             row["reason"] = "reviewed virtual transaction"
@@ -85,11 +85,11 @@ class ReviewDecisionsTests(unittest.TestCase):
         result = self.create()
         self.assertEqual(result["editable_items"], 4)
         self.assertEqual(result["other_items"], 1)  # Transfer protocol waits for both owners.
-        document = yaml.safe_load(self.sheet.read_text())
+        document = yaml.safe_load(self.sheet.read_text(encoding="utf-8"))
         self.assertTrue(all(row["approved"] is False and row["decision"] is None for row in document["rows"]))
         self.assertIn("mixed cash move", [row["narration"] for row in document["rows"]])
         self.assertTrue(all(row["source"].startswith(str(self.ledger) + ":") for row in document["rows"]))
-        self.assertEqual(yaml.safe_load((self.export / "other-items.yaml").read_text())["items"][0]["kind"], "h_transfer")
+        self.assertEqual(yaml.safe_load((self.export / "other-items.yaml").read_text(encoding="utf-8"))["items"][0]["kind"], "h_transfer")
         applied = apply_review(self.sheet)
         self.assertEqual(applied["status"], "NO_APPROVED_DECISIONS")
         self.assertIsNone(applied["config"])
@@ -107,21 +107,21 @@ class ReviewDecisionsTests(unittest.TestCase):
         output = Path(result["config"])
         self.assertEqual(audit_month_workflow(output)["status"], "CERTIFIED_SCOPED")
         self.assertTrue(all(path.read_bytes() == content for path, content in self.originals.items()))
-        self.assertFalse(Path(yaml.safe_load(output.read_text())["ledger"]).is_absolute())
+        self.assertFalse(Path(yaml.safe_load(output.read_text(encoding="utf-8"))["ledger"]).is_absolute())
 
     def test_multi_purpose_decisions_keep_native_signs_and_exact_amounts(self):
         self.create()
         self.approve(split=True)
         result = apply_review(self.sheet)
         self.assertEqual(result["workflow"]["status"], "CERTIFIED_SCOPED")
-        saved = yaml.safe_load((Path(result["config"]).parent / "ownership.yaml").read_text())
+        saved = yaml.safe_load((Path(result["config"]).parent / "ownership.yaml").read_text(encoding="utf-8"))
         amounts = [sum((Fraction(p["signed_units"]) for p in row["slices"]), Fraction(0)) for row in saved["claims"]]
         self.assertEqual(sorted(amounts), [-20, 20])
         self.assertTrue(all(p["role"] == "hold" for row in saved["claims"] for p in row["slices"]))
 
     def test_partial_review_saves_only_approved_decisions_and_preserves_pending(self):
         self.create()
-        document = yaml.safe_load(self.sheet.read_text())
+        document = yaml.safe_load(self.sheet.read_text(encoding="utf-8"))
         row = next(row for row in document["rows"] if row["kind"] == "classification")
         row.update(approved=True, decision="生活开销" if row["account"].startswith("Expenses:") else "自由资金",
                    reason="one decision at a time")
@@ -155,7 +155,7 @@ class ReviewDecisionsTests(unittest.TestCase):
     def test_changed_transaction_or_new_inline_claim_requires_fresh_review(self):
         self.create()
         self.approve()
-        original = self.ledger.read_text()
+        original = self.ledger.read_text(encoding="utf-8")
         for changed in (original.replace('"mixed cash move"', '"corrected transfer"'),
                         original.replace('  Assets:Cash -20 CNY\n',
                                          '  Assets:Cash -20 CNY\n    fund: "自由资金"\n')):
@@ -169,7 +169,7 @@ class ReviewDecisionsTests(unittest.TestCase):
     def test_unrelated_added_transaction_keeps_old_source_decisions_usable(self):
         self.create()
         self.approve()
-        self.ledger.write_text(self.ledger.read_text() + '2026-09-05 * "new food"\n'
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + '2026-09-05 * "new food"\n'
                               '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")
         result = apply_review(self.sheet)
         self.assertEqual(len(result["accepted"]), 4)
@@ -215,7 +215,7 @@ class ReviewDecisionsTests(unittest.TestCase):
         self.create()
         self.approve()
         plan = self.config.parent / "expense_plans.yaml"
-        document = yaml.safe_load(plan.read_text())
+        document = yaml.safe_load(plan.read_text(encoding="utf-8"))
         document["months"]["2026-09"]["expense_subtree_targets"]["category_2"] = "bad"
         self.save(plan, document)
         result = apply_review(self.sheet)
@@ -225,7 +225,7 @@ class ReviewDecisionsTests(unittest.TestCase):
         self.assertTrue(result["report_error"]["source"].startswith(str(plan)))
 
     def test_labelled_debt_is_still_pending_separate_obligation_review(self):
-        self.ledger.write_text(self.ledger.read_text() + '2026-09-05 * "card food"\n'
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + '2026-09-05 * "card food"\n'
                               '  Expenses:Food 2 CNY\n  Liabilities:Card -2 CNY\n', encoding="utf-8")
         self.create()
         self.approve()
@@ -236,8 +236,8 @@ class ReviewDecisionsTests(unittest.TestCase):
 
     def test_voluntary_purpose_overdraft_is_rejected_before_publishing(self):
         opening_path = self.config.parent / "opening.yaml"
-        opening = yaml.safe_load(opening_path.read_text())
-        owners = yaml.safe_load((self.config.parent / "ownership.yaml").read_text())
+        opening = yaml.safe_load(opening_path.read_text(encoding="utf-8"))
+        owners = yaml.safe_load((self.config.parent / "ownership.yaml").read_text(encoding="utf-8"))
         free = next(row["id"] for row in owners["owners"] if row["name"] == "自由资金")
         for row in opening["h_holdings"]:
             row["units"] = "10" if row["owner"] == free else "90"
@@ -253,17 +253,17 @@ class ReviewDecisionsTests(unittest.TestCase):
         self.create()
         self.approve()
         september = Path(apply_review(self.sheet)["config"])
-        self.ledger.write_text(self.ledger.read_text() + '2026-10-03 * "October food"\n'
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + '2026-10-03 * "October food"\n'
                               '  Assets:Cash -3 CNY\n  Expenses:Food 3 CNY\n', encoding="utf-8")
         october_folder = self.base / "october"
         october_folder.mkdir()
-        settings = yaml.safe_load(september.read_text())
+        settings = yaml.safe_load(september.read_text(encoding="utf-8"))
         for key, value in list(settings.items()):
             if key not in {"schema", "cutover", "month", "report_currency"}:
                 settings[key] = str((september.parent / value).resolve())
         settings["month"] = "2026-10"
         for key in ("expense_plans", "purpose_plans", "completeness"):
-            document = yaml.safe_load(Path(settings[key]).read_text())
+            document = yaml.safe_load(Path(settings[key]).read_text(encoding="utf-8"))
             if key == "completeness":
                 document["as_of"] = "2026-10-31"
             else:
@@ -277,7 +277,7 @@ class ReviewDecisionsTests(unittest.TestCase):
         self.assertEqual(draft["editable_items"], 1)
         self.assertEqual(draft["other_items"], 0)
         sheet = Path(draft["worksheet"])
-        document = yaml.safe_load(sheet.read_text())
+        document = yaml.safe_load(sheet.read_text(encoding="utf-8"))
         self.assertEqual(document["rows"][0]["narration"], "October food")
         document["rows"][0].update(approved=True, decision="生活开销", reason="October food reviewed")
         self.save(sheet, document)

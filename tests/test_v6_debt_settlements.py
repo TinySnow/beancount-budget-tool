@@ -134,7 +134,7 @@ class DebtSettlementTests(unittest.TestCase):
                                                     for row, amount in zip(debts, amounts)]})
 
     def pay(self, native, report):
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
                                f'2026-09-20 * "buy dollars"\n'
                                f'  Assets:USD {native} USD @@ {report} CNY\n    fund: "生活费"\n'
                                f'  Assets:Bank -{report} CNY\n    fund: "生活费"\n'
@@ -309,10 +309,10 @@ class DebtSettlementTests(unittest.TestCase):
 
     def test_priced_foreign_opening_uses_same_lock_without_current_expense(self):
         self.fixture()
-        self.ledger.write_text(self.ledger.read_text().replace('2026-09-02 *', '2026-08-25 *'), encoding="utf-8")
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace('2026-09-02 *', '2026-08-25 *'), encoding="utf-8")
         pending = audit_simple_obligations(self.ledger, CUTOVER)
         origin = pending["opening_pending"][0]["source_candidates"][0]
-        document = yaml.safe_load((self.base / "obligations.yaml").read_text())
+        document = yaml.safe_load((self.base / "obligations.yaml").read_text(encoding="utf-8"))
         document["events"] = []
         document["opening"] = [{"kind": "consumer_debt", "obligation_id": "purchase-0", "owner_id": "living",
                                 "liability_ref": origin["liability_ref"], "remaining_native": "100",
@@ -358,7 +358,7 @@ class DebtSettlementTests(unittest.TestCase):
     def test_loader_tolerance_does_not_hide_a_priced_debt_residual(self):
         self.fixture()
         self.ledger.write_text('option "inferred_tolerance_default" "CNY:1"\n' +
-                               self.ledger.read_text().replace('Liabilities:Card -100 USD @@ 700 CNY',
+                               self.ledger.read_text(encoding="utf-8").replace('Liabilities:Card -100 USD @@ 700 CNY',
                                                                'Liabilities:Card -100 USD @@ 700.01 CNY'), encoding="utf-8")
         load_financial(self.ledger)  # Loader tolerance accepts this source.
         with self.assertRaises(BudgetError) as caught:

@@ -251,7 +251,7 @@ class LiveReportBrowserTests(unittest.TestCase):
         examples = Path(__file__).resolve().parents[1] / "examples" / "v6"
         self.ledger = self.base / "main.bean"
         self.ledger.write_bytes((examples / "first-month.bean").read_bytes())
-        setup = yaml.safe_load((examples / "first-month-setup.yaml").read_text())
+        setup = yaml.safe_load((examples / "first-month-setup.yaml").read_text(encoding="utf-8"))
         setup["ledger"] = "main.bean"
         self.save(self.base / "setup.yaml", setup)
         self.config = Path(compile_setup(self.base / "setup.yaml")["config"])
@@ -263,12 +263,12 @@ class LiveReportBrowserTests(unittest.TestCase):
         browser = ReportBrowser([self.config], audit_month_workflow, render_workflow_text)
         browser.refresh()
         self.assertIn("最多能花：190 CNY", "\n".join(browser.lines))
-        self.ledger.write_text(self.ledger.read_text().replace("Expenses:Food 10 CNY", "Expenses:Food 15 CNY").replace(
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace("Expenses:Food 10 CNY", "Expenses:Food 15 CNY").replace(
             "Assets:Cash -10 CNY", "Assets:Cash -15 CNY"), encoding="utf-8")
         browser.refresh()
         self.assertIn("最多能花：185 CNY", "\n".join(browser.lines))
         self.assertNotIn("最多能花：190 CNY", "\n".join(browser.lines))
-        original = self.config.read_text()
+        original = self.config.read_text(encoding="utf-8")
         self.config.write_text(original + "schema: 6\n", encoding="utf-8")
         browser.refresh()
         self.assertEqual(browser.error.code, "YAML_DUPLICATE_KEY")
@@ -285,11 +285,11 @@ class LiveReportBrowserTests(unittest.TestCase):
         self.assertIn(str(self.config), browser.detail["source"])
 
     def test_switch_prepared_month_configs_uses_each_cutoff_and_evidence(self):
-        self.ledger.write_text(self.ledger.read_text() + '2026-10-03 * "October food"\n'
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + '2026-10-03 * "October food"\n'
                               '  Assets:Cash -20 CNY\n  Expenses:Food 20 CNY\n', encoding="utf-8")
         draft = create_next_month(self.config, self.base / "october")
         sheet = Path(draft["worksheet"])
-        document = yaml.safe_load(sheet.read_text())
+        document = yaml.safe_load(sheet.read_text(encoding="utf-8"))
         document.update(targets_confirmed=True, completeness_confirmed=True,
                         completeness_reason="virtual October import complete")
         self.save(sheet, document)

@@ -23,7 +23,7 @@ class NextMonthTests(unittest.TestCase):
         examples = Path(__file__).resolve().parents[1] / "examples" / "v6"
         self.ledger = self.base / "main.bean"
         self.ledger.write_bytes((examples / "first-month.bean").read_bytes())
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
             '2026-10-02 * "October salary"\n'
             '  Assets:Cash 500 CNY\n  Income:Salary -500 CNY\n'
             '2026-10-03 * "October living allocation"\n'
@@ -31,7 +31,7 @@ class NextMonthTests(unittest.TestCase):
             '  Assets:Cash -200 CNY\n    fund: "已收入资金"\n'
             '2026-10-04 * "October food"\n'
             '  Assets:Cash -20 CNY\n  Expenses:Food 20 CNY\n', encoding="utf-8")
-        setup = yaml.safe_load((examples / "first-month-setup.yaml").read_text())
+        setup = yaml.safe_load((examples / "first-month-setup.yaml").read_text(encoding="utf-8"))
         setup["ledger"] = "main.bean"
         self.save(self.base / "setup.yaml", setup)
         self.config = Path(compile_setup(self.base / "setup.yaml")["config"])
@@ -46,7 +46,7 @@ class NextMonthTests(unittest.TestCase):
         return create_next_month(self.config, self.output)
 
     def approve(self, complete=True):
-        document = yaml.safe_load(self.worksheet.read_text())
+        document = yaml.safe_load(self.worksheet.read_text(encoding="utf-8"))
         document["targets_confirmed"] = True
         document["completeness_confirmed"] = complete
         document["completeness_reason"] = "virtual October imports and responsibilities checked" if complete else None
@@ -63,7 +63,7 @@ class NextMonthTests(unittest.TestCase):
         self.assertEqual(result["month"], "2026-10")
         self.assertEqual(result["changed_accounts"], 0)
         self.assertEqual(result["booked_transactions_in_month"], 3)
-        document = yaml.safe_load(self.worksheet.read_text())
+        document = yaml.safe_load(self.worksheet.read_text(encoding="utf-8"))
         self.assertEqual(document["cutover"], "2026-09-01")
         self.assertEqual(document["expense_subtree_targets"], {"日常开销": "200"})
         self.assertFalse(document["targets_confirmed"])
@@ -81,7 +81,7 @@ class NextMonthTests(unittest.TestCase):
         report = result["workflow"]["report"]
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "370")
         self.assertEqual(report["max_spendable"]["max_spendable"], "180")
-        config = yaml.safe_load(Path(result["config"]).read_text())
+        config = yaml.safe_load(Path(result["config"]).read_text(encoding="utf-8"))
         self.assertEqual(config["cutover"], "2026-09-01")
         self.assertEqual((Path(result["config"]).parent / config["opening"]).resolve(), self.config.parent / "opening.yaml")
         self.assertEqual(audit_month_workflow(self.config)["report"]["max_spendable"]["max_spendable"], "190")
@@ -94,51 +94,51 @@ class NextMonthTests(unittest.TestCase):
         self.assertEqual(result["workflow"]["status"], "NEEDS_REVIEW")
         self.assertIsNone(result["workflow"]["report"])
         self.assertTrue(any(row["reason_code"] == "EXTERNAL_SCOPE_PENDING" for row in result["workflow"]["review_items"]))
-        config = yaml.safe_load(Path(result["config"]).read_text())
+        config = yaml.safe_load(Path(result["config"]).read_text(encoding="utf-8"))
         self.assertNotIn("completeness", config)
 
     def test_dated_debt_coverage_and_quotes_are_not_carried(self):
-        settings = yaml.safe_load(self.config.read_text())
+        settings = yaml.safe_load(self.config.read_text(encoding="utf-8"))
         for field in ("debt_coverage", "debt_settlements"):
             path = self.config.parent / (field + ".yaml")
             self.save(path, {"schema": 6, "as_of": "2026-09-30", "marker": "old date only"})
             settings[field] = path.name
         self.save(self.config, settings)
         self.create()
-        notes = yaml.safe_load((self.output / "preparation.yaml").read_text())
+        notes = yaml.safe_load((self.output / "preparation.yaml").read_text(encoding="utf-8"))
         self.assertEqual(set(notes["not_reused"]), {"completeness", "debt_coverage", "debt_settlements"})
         self.approve()
         result = compile_next_month(self.worksheet)
-        settings = yaml.safe_load(Path(result["config"]).read_text())
+        settings = yaml.safe_load(Path(result["config"]).read_text(encoding="utf-8"))
         self.assertNotIn("debt_coverage", settings)
         self.assertNotIn("debt_settlements", settings)
-        statement = yaml.safe_load((Path(result["config"]).parent / settings["completeness"]).read_text())
+        statement = yaml.safe_load((Path(result["config"]).parent / settings["completeness"]).read_text(encoding="utf-8"))
         self.assertEqual(statement["as_of"], "2026-10-31")
 
     def test_future_template_and_override_have_priority_over_previous_proposals(self):
         expense = self.config.parent / "expense_plans.yaml"
-        document = yaml.safe_load(expense.read_text())
+        document = yaml.safe_load(expense.read_text(encoding="utf-8"))
         ident = next(iter(document["months"]["2026-09"]["expense_subtree_targets"]))
         document["effective_templates"] = {"2026-10": {"expense_subtree_targets": {ident: "210.25"}}}
         document["months"]["2026-10"] = {"expense_subtree_targets": {ident: "220.125"}}
         self.save(expense, document)
         purpose = self.config.parent / "purpose_plans.yaml"
-        goals = yaml.safe_load(purpose.read_text())
+        goals = yaml.safe_load(purpose.read_text(encoding="utf-8"))
         ident = next(key for key, value in goals["months"]["2026-09"]["allocation_targets"].items() if value == "200")
         goals["effective_templates"] = {"2026-10": {"allocation_targets": {ident: "205.50"}}}
         self.save(purpose, goals)
         self.create()
-        document = yaml.safe_load(self.worksheet.read_text())
+        document = yaml.safe_load(self.worksheet.read_text(encoding="utf-8"))
         self.assertEqual(document["expense_subtree_targets"], {"日常开销": "220.125"})
         self.assertEqual(document["allocation_targets"]["待支出资金"], "205.5")
         self.approve()
         result = compile_next_month(self.worksheet)
         self.assertEqual(result["workflow"]["status"], "CERTIFIED_SCOPED")
-        saved = yaml.safe_load((Path(result["config"]).parent / "expense_plans.yaml").read_text())
+        saved = yaml.safe_load((Path(result["config"]).parent / "expense_plans.yaml").read_text(encoding="utf-8"))
         self.assertEqual(saved["months"]["2026-10"]["expense_subtree_targets"], {next(iter(saved["months"]["2026-09"]["expense_subtree_targets"])): "220.125"})
 
     def test_new_h_account_is_reviewed_once_then_used_without_new_opening_money(self):
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
             '2026-10-01 open Assets:NewBank\n'
             '2026-10-05 * "move free funds"\n'
             '  Assets:Cash -30 CNY\n    fund: "已收入资金"\n'
@@ -151,7 +151,7 @@ class NextMonthTests(unittest.TestCase):
         self.assertEqual(result["workflow"]["report"]["max_spendable"]["max_spendable"], "180")
 
     def test_new_currency_in_known_account_keeps_its_semantics(self):
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
             '2026-10-05 * "USD gift"\n'
             '  Assets:Cash 10 USD\n  Income:Salary -10 USD\n', encoding="utf-8")
         self.create()
@@ -159,11 +159,11 @@ class NextMonthTests(unittest.TestCase):
         self.assertEqual(document["account_changes"][0]["payment_scope"], {"USD": "excluded"})
         self.assertEqual(document["account_changes"][0]["semantics"], "H")
         result = compile_next_month(self.worksheet)
-        saved = yaml.safe_load((Path(result["config"]).parent / "accounts.yaml").read_text())
+        saved = yaml.safe_load((Path(result["config"]).parent / "accounts.yaml").read_text(encoding="utf-8"))
         self.assertEqual(saved["accounts"][0]["payment_scope"], {"CNY": "payable", "USD": "excluded"})
 
     def test_new_zero_opening_k_is_acknowledged_as_book_flow_not_h_money(self):
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
             '2026-10-01 open Assets:FundBook\n'
             '2026-10-05 * "subscription"\n'
             '  Assets:Cash -30 CNY\n    fund: "已收入资金"\n'
@@ -174,7 +174,7 @@ class NextMonthTests(unittest.TestCase):
         self.save(self.worksheet, document)
         result = compile_next_month(self.worksheet)
         self.assertEqual(result["workflow"]["status"], "CERTIFIED_SCOPED", result.get("report_error"))
-        opening = yaml.safe_load((Path(result["config"]).parent / "opening.yaml").read_text())
+        opening = yaml.safe_load((Path(result["config"]).parent / "opening.yaml").read_text(encoding="utf-8"))
         self.assertEqual(opening["k_openings"][0]["signed_units"], "0")
         self.assertEqual(opening["h_holdings"], [])
         self.assertEqual(result["workflow"]["report"]["actual_spendable"]["actual_spendable"], "370")
@@ -201,7 +201,7 @@ class NextMonthTests(unittest.TestCase):
     def test_new_import_after_draft_requires_account_changes_to_be_revisited(self):
         self.create()
         self.approve()
-        self.ledger.write_text(self.ledger.read_text() +
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
             '2026-10-01 open Assets:NewBank\n'
             '2026-10-05 * "new salary bank"\n'
             '  Assets:NewBank 10 CNY\n  Income:Salary -10 CNY\n', encoding="utf-8")
@@ -210,7 +210,7 @@ class NextMonthTests(unittest.TestCase):
         self.assertIsNone(result["config"])
 
     def test_year_transition_empty_month_and_overwrite_guard(self):
-        settings = yaml.safe_load(self.config.read_text())
+        settings = yaml.safe_load(self.config.read_text(encoding="utf-8"))
         settings["month"] = "2026-12"
         self.save(self.config, settings)
         with redirect_stdout(StringIO()) as captured:
@@ -230,7 +230,7 @@ class NextMonthTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "NEXT_MONTH_CONTEXT_CHANGED")
 
     def test_ambiguous_new_transfer_is_reviewed_after_month_preparation(self):
-        self.ledger.write_text(self.ledger.read_text().replace(
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace(
             '  Assets:Cash -200 CNY\n    fund: "已收入资金"\n',
             '  Assets:Cash -200 CNY\n'), encoding="utf-8")
         self.create()
@@ -240,7 +240,7 @@ class NextMonthTests(unittest.TestCase):
         draft = create_review(Path(prepared["config"]), self.base / "decisions")
         self.assertEqual(draft["editable_items"], 1)
         sheet = Path(draft["worksheet"])
-        document = yaml.safe_load(sheet.read_text())
+        document = yaml.safe_load(sheet.read_text(encoding="utf-8"))
         document["rows"][0].update(decision="已收入资金", reason="salary funds assigned to living", approved=True)
         self.save(sheet, document)
         result = apply_review(sheet)
@@ -249,7 +249,7 @@ class NextMonthTests(unittest.TestCase):
 
     def test_original_approved_account_semantics_cannot_be_changed_in_month_preparation(self):
         accounts_path = self.config.parent / "accounts.yaml"
-        accounts = yaml.safe_load(accounts_path.read_text())
+        accounts = yaml.safe_load(accounts_path.read_text(encoding="utf-8"))
         accounts["accounts"][0]["payment_scope"]["CNY"] = "pending"
         self.save(accounts_path, accounts)
         self.create()
@@ -262,7 +262,7 @@ class NextMonthTests(unittest.TestCase):
 
     def test_deleting_an_inherited_target_cannot_silently_restore_it(self):
         expense = self.config.parent / "expense_plans.yaml"
-        plans = yaml.safe_load(expense.read_text())
+        plans = yaml.safe_load(expense.read_text(encoding="utf-8"))
         plans["defaults"] = {"expense_targets": {"category_1": "10"}}
         self.save(expense, plans)
         self.create()
@@ -275,7 +275,7 @@ class NextMonthTests(unittest.TestCase):
         self.assertTrue(any("原计划已为本月声明" in item["detail"] for item in result["review_items"]))
 
     def test_month_end_confirmation_preserves_latest_transaction_decisions(self):
-        self.ledger.write_text(self.ledger.read_text().replace(
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace(
             '  Assets:Cash -200 CNY\n    fund: "已收入资金"\n',
             '  Assets:Cash -200 CNY\n'), encoding="utf-8")
         self.create()
@@ -283,7 +283,7 @@ class NextMonthTests(unittest.TestCase):
         prepared = compile_next_month(self.worksheet)
         draft = create_review(Path(prepared["config"]), self.base / "decisions")
         sheet = Path(draft["worksheet"])
-        document = yaml.safe_load(sheet.read_text())
+        document = yaml.safe_load(sheet.read_text(encoding="utf-8"))
         document["rows"][0].update(decision="已收入资金", reason="salary allocation reviewed", approved=True)
         self.save(sheet, document)
         reviewed = apply_review(sheet)
@@ -292,13 +292,13 @@ class NextMonthTests(unittest.TestCase):
         closed = confirm_month(Path(reviewed["config"]), "October imports and liabilities checked", self.base / "closed")
         self.assertEqual(closed["workflow"]["status"], "CERTIFIED_SCOPED")
         self.assertEqual(closed["workflow"]["report"]["max_spendable"]["max_spendable"], "180")
-        settings = yaml.safe_load(Path(closed["config"]).read_text())
-        current = yaml.safe_load(Path(reviewed["config"]).read_text())
+        settings = yaml.safe_load(Path(closed["config"]).read_text(encoding="utf-8"))
+        current = yaml.safe_load(Path(reviewed["config"]).read_text(encoding="utf-8"))
         self.assertEqual((Path(closed["config"]).parent / settings["ownership"]).resolve(),
                          (Path(reviewed["config"]).parent / current["ownership"]).resolve())
 
     def test_confirm_month_still_requires_all_other_report_evidence(self):
-        self.ledger.write_text(self.ledger.read_text().replace(
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace(
             '  Assets:Cash -200 CNY\n    fund: "已收入资金"\n',
             '  Assets:Cash -200 CNY\n'), encoding="utf-8")
         self.create()
