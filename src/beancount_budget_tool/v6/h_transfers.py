@@ -13,12 +13,12 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import load_yaml, require_yaml
 from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_transaction_refs
 from .ownership import _owners, audit_ownership
-from .provenance import valid_digest
+from .event_declarations import validate_event_declaration
 from .source import scan_v6_source
 
 
@@ -26,9 +26,10 @@ ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
 
 
-def _number(value: object, key: str) -> Fraction:
-    require(type(value) is str and bool(NUMBER.fullmatch(value)),
-            "H_TRANSFER_UNITS_INVALID", "H 转账切片须使用精确数字字符串", key)
+def _number(value: object, path: Path, keys: tuple) -> Fraction:
+    require_yaml(type(value) is str and bool(NUMBER.fullmatch(value)),
+        "H_TRANSFER_UNITS_INVALID", "H 转账切片须使用精确数字字符串",
+        path, keys)
     return Fraction(value)
 
 
@@ -92,72 +93,82 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
         order.append(key)
 
     claims = {}
+    claim_locations = {}
     review_sha = None
     if declarations is not None:
         document = load_yaml(declarations)
-        require(type(document) is dict and set(document) == {
-            "schema", "cutover", "ledger_snapshot", "loader_version", "events"},
-            "H_TRANSFER_DECLARATION_INVALID", "H 转账侧文件字段不完整或含未知字段")
-        require(type(document["schema"]) is int and document["schema"] == 6 and
-                type(document["cutover"]) is str and document["cutover"] == cutover.isoformat() and
-                valid_digest(document["ledger_snapshot"]) and
-                document["loader_version"] == fin.loader_version and
-                type(document["events"]) is list,
-                "H_TRANSFER_DECLARATION_INVALID", "H 转账版本或原审快照格式不匹配")
+        validate_event_declaration(document, declarations, cutover, fin.loader_version,
+                                   "H_TRANSFER_DECLARATION_INVALID")
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         used_to = set()
         used_slices = set()
         for row_index, row in enumerate(document["events"]):
-            require(type(row) is dict and set(row) == {"from_ref", "to_ref", "reason", "slices"} and
+            location = ("events", row_index)
+            require_yaml(type(row) is dict and set(row) == {"from_ref", "to_ref", "reason", "slices"} and
                     type(row["from_ref"]) is dict and type(row["to_ref"]) is dict,
-                    "H_TRANSFER_CLAIM_INVALID", "H 转账须有双方完整 booked 来源、理由和切片")
+                "H_TRANSFER_CLAIM_INVALID", "H 转账须有双方完整 booked 来源、理由和切片",
+                declarations, location)
             key = _key(row["from_ref"])
-            location = yaml_path_location(declarations, ("events", row_index))
             if key in future_pairs:
-                require(row["to_ref"] == future_pairs[key], "H_TRANSFER_TO_REF_INVALID",
-                        "未来 H 转入来源须为同一交易的完整对手", location)
+                require_yaml(row["to_ref"] == future_pairs[key],
+                    "H_TRANSFER_TO_REF_INVALID", "未来 H 转入来源须为同一交易的完整对手",
+                    declarations, (*location, "to_ref"))
                 continue
-            require(key in candidates, "H_TRANSFER_REF_INVALID", "H 转出来源不存在或过期", location)
-            require(key not in claims, "H_TRANSFER_DOUBLE_CLAIM", "H 转出来源重复认领", key)
+            require_yaml(key in candidates,
+                "H_TRANSFER_REF_INVALID", "H 转出来源不存在或过期",
+                declarations, (*location, "from_ref"))
+            require_yaml(key not in claims,
+                "H_TRANSFER_DOUBLE_CLAIM", "H 转出来源重复认领",
+                declarations, (*location, "from_ref"))
             candidate = candidates[key]
-            require(candidate["shape"] == "simple_cash", "H_TRANSFER_UNSUPPORTED",
-                    "本事件不符合简单同币种 H 转账协议", key)
+            require_yaml(candidate["shape"] == "simple_cash",
+                "H_TRANSFER_UNSUPPORTED", "本事件不符合简单同币种 H 转账协议",
+                declarations, location)
             to_key = _key(row["to_ref"])
-            require(to_key == _key(candidate["to_ref"]) and to_key not in used_to,
-                    "H_TRANSFER_TO_REF_INVALID", "H 转入来源不存在、过期或重复使用", to_key)
+            require_yaml(to_key == _key(candidate["to_ref"]) and to_key not in used_to,
+                "H_TRANSFER_TO_REF_INVALID", "H 转入来源不存在、过期或重复使用",
+                declarations, (*location, "to_ref"))
             used_to.add(to_key)
-            require(type(row["reason"]) is str and bool(row["reason"].strip()) and
+            require_yaml(type(row["reason"]) is str and bool(row["reason"].strip()) and
                     type(row["slices"]) is list and bool(row["slices"]),
-                    "H_TRANSFER_CLAIM_INVALID", "H 转账须有非空人工理由和切片", key)
+                "H_TRANSFER_CLAIM_INVALID", "H 转账须有非空人工理由和切片",
+                declarations, location)
             from_total = Fraction(0)
             to_total = Fraction(0)
             parsed = []
             net_allocations = {}
-            for part in row["slices"]:
-                require(type(part) is dict and set(part) == {
+            for part_index, part in enumerate(row["slices"]):
+                part_location = (*location, "slices", part_index)
+                require_yaml(type(part) is dict and set(part) == {
                     "id", "from_owner_id", "to_owner_id", "signed_from_units",
                     "signed_to_units", "boundary_role"},
-                    "H_TRANSFER_SLICE_INVALID", "H 转账切片字段无效", key)
+                    "H_TRANSFER_SLICE_INVALID", "H 转账切片字段无效",
+                    declarations, part_location)
                 ident, source, target = (part[field] for field in
                                          ("id", "from_owner_id", "to_owner_id"))
-                require(type(ident) is str and bool(ID.fullmatch(ident)) and
+                require_yaml(type(ident) is str and bool(ID.fullmatch(ident)) and
                         ident not in used_slices,
-                        "H_TRANSFER_SLICE_INVALID", "H 转账切片 ID 非法或重复", key)
+                    "H_TRANSFER_SLICE_INVALID", "H 转账切片 ID 非法或重复",
+                    declarations, (*part_location, "id"))
                 used_slices.add(ident)
-                require(type(source) is str and (source == "-" or source in owner_ids) and
+                require_yaml(type(source) is str and (source == "-" or source in owner_ids) and
                         type(target) is str and (target == "-" or target in owner_ids),
-                        "H_TRANSFER_OWNER_INVALID", "H 转账用途未登记", key)
-                from_units = _number(part["signed_from_units"], key)
-                to_units = _number(part["signed_to_units"], key)
-                require(from_units < 0 and to_units == -from_units,
-                        "H_TRANSFER_UNITS_MISMATCH", "双方 H 切片须精确反向", key)
+                    "H_TRANSFER_OWNER_INVALID", "H 转账用途未登记",
+                    declarations, part_location)
+                from_units = _number(part["signed_from_units"], declarations, (*part_location, "signed_from_units"))
+                to_units = _number(part["signed_to_units"], declarations, (*part_location, "signed_to_units"))
+                require_yaml(from_units < 0 and to_units == -from_units,
+                    "H_TRANSFER_UNITS_MISMATCH", "双方 H 切片须精确反向",
+                    declarations, part_location)
                 role = part["boundary_role"]
                 valid = ((role == "preserve" and source == target) or
                          (role == "allocate" and source == "-" and target != "-") or
                          (role == "release" and source != "-" and target == "-") or
                          (role == "reallocate" and source != target and
                           source in owner_ids and target in owner_ids))
-                require(valid, "H_TRANSFER_ROLE_INVALID", "H 转账边界角色与双方用途不一致", key)
+                require_yaml(valid,
+                    "H_TRANSFER_ROLE_INVALID", "H 转账边界角色与双方用途不一致",
+                    declarations, (*part_location, "boundary_role"))
                 from_total += from_units
                 to_total += to_units
                 if role == "allocate":
@@ -172,9 +183,11 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
                                "signed_from_units": exact_text(from_units),
                                "signed_to_units": exact_text(to_units),
                                "boundary_role": role})
-            require(from_total == Fraction(candidate["signed_from_units"]) and
+            require_yaml(from_total == Fraction(candidate["signed_from_units"]) and
                     to_total == Fraction(candidate["signed_to_units"]),
-                    "H_TRANSFER_UNITS_MISMATCH", "切片未精确加回双侧 H posting", key)
+                "H_TRANSFER_UNITS_MISMATCH", "切片未精确加回双侧 H posting",
+                declarations, location)
+            claim_locations[key] = location
             claims[key] = {"reason": row["reason"], "slices": parsed,
                            "net_allocations": {owner: exact_text(value)
                                                for owner, value in sorted(net_allocations.items())}}
@@ -248,18 +261,20 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
                 if candidate["from_account"] != candidate["to_account"]:
                     source_mix = {owner: -units for owner, units in expected_from.items() if units}
                     target_mix = {owner: units for owner, units in expected_to.items() if units}
-                    require(len(source_mix) == 1 or source_mix == target_mix,
-                            "H_TRANSFER_MIXED_REMAP_INVALID",
-                            "跨账户混合用途转账不能顺带改变多项用途；须单独记同账户虚拟划拨", key)
+                    require_yaml(len(source_mix) == 1 or source_mix == target_mix,
+                        "H_TRANSFER_MIXED_REMAP_INVALID", "跨账户混合用途转账不能顺带改变多项用途；须单独记同账户虚拟划拨",
+                        declarations, claim_locations[key])
                 for h_claim, expected in ((from_claim, expected_from), (to_claim, expected_to)):
                     actual = {}
                     for part in h_claim["slices"]:
-                        require(part["role"] == "hold", "H_TRANSFER_OWNER_ROLE_INVALID",
-                                "H 转账用途边界由事件独占，H 双侧须为 hold", key)
+                        require_yaml(part["role"] == "hold",
+                            "H_TRANSFER_OWNER_ROLE_INVALID", "H 转账用途边界由事件独占，H 双侧须为 hold",
+                            declarations, claim_locations[key])
                         owner = part["owner_id"]
                         actual[owner] = actual.get(owner, Fraction(0)) + Fraction(part["signed_units"])
-                    require(actual == expected, "H_TRANSFER_OWNER_MISMATCH",
-                            "H 转账切片与真实两侧归属不一致", key)
+                    require_yaml(actual == expected,
+                        "H_TRANSFER_OWNER_MISMATCH", "H 转账切片与真实两侧归属不一致",
+                        declarations, claim_locations[key])
                 state, codes = "CERTIFIED", []
         events.append({**candidate, "status": state, "reason_codes": codes,
                        "origin": claim.get("origin", "external") if claim else None,
