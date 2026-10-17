@@ -60,7 +60,7 @@ def propose(root: Path, cutover: date, through: date | None = None) -> dict:
     }
 
 
-def main() -> None:
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", required=True, type=Path)
     period = parser.add_mutually_exclusive_group(required=True)
@@ -68,7 +68,7 @@ def main() -> None:
                         help="从指定月起，列出之后所有缺少行内 budget 的费用／收入")
     period.add_argument("--month", help="只列出 YYYY-MM 当月缺少行内 budget 的费用／收入")
     parser.add_argument("--output", required=True, type=Path)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.month:
         try:
             first = date.fromisoformat(args.month + "-01")

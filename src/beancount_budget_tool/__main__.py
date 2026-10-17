@@ -1,3 +1,3 @@
-from .v6.monthly_report import main
+from .launcher import main
 
 raise SystemExit(main())

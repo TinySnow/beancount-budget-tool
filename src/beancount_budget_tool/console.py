@@ -1,6 +1,17 @@
-"""Keep redirected Windows command output readable for UTF-8 ledger reviews."""
+"""UTF-8 console output and runnable instructions for installed/frozen tools."""
 
 import sys
+
+
+def command(name: str) -> str:
+    """Render runnable worksheet instructions for installed or frozen tools."""
+    if not getattr(sys, "frozen", False):
+        if name == "classification-proposals":
+            return "python -m beancount_budget_tool.tools.v6_classification_proposals"
+        return name
+    action = "" if name == "beancount-budget-tool" else name.removeprefix("beancount-budget-")
+    prefix = "& " if sys.platform == "win32" else ""
+    return f'{prefix}"{sys.executable}"' + (f" {action}" if action else "")
 
 
 def configure_output() -> None:
