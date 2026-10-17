@@ -323,7 +323,8 @@ def compile_next_month(worksheet: Path, output: Path | None = None) -> dict:
                 "report_error": {"code": exc.code, "message": exc.message, "source": exc.source}}
 
 
-def confirm_month(config: Path, reason: str, output: Path) -> dict:
+def confirm_month(config: Path, reason: str, output: Path, *, include_transactions: bool = False,
+                  expected_inputs: dict[Path, bytes] | None = None) -> dict:
     """Attach a new month-end assertion to the latest reviewed config."""
     config, output = config.resolve(), output.resolve()
     doc, paths, _ = _config(config)
@@ -336,14 +337,20 @@ def confirm_month(config: Path, reason: str, output: Path) -> dict:
     statement = {"schema": 6, "cutover": doc["cutover"], "as_of": last.isoformat(),
                  "unbooked_obligations": "none", "inflight_payments": "none", "reason": reason}
     _unchanged(before)
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     _publish(output, {"month.yaml": candidate, "completeness.yaml": statement})
     result = {"status": "COMPLETENESS_SAVED", "month": doc["month"],
               "config": str(output / "month.yaml"), "review_items": []}
     try:
-        return {**result, "workflow": audit_month_workflow(output / "month.yaml")}
-    except BudgetError as exc:
+        workflow = (audit_month_workflow(output / "month.yaml", include_transactions=True) if include_transactions else
+                    audit_month_workflow(output / "month.yaml"))
+        return {**result, "workflow": workflow}
+    except (BudgetError, OSError, UnicodeError) as exc:
         return {**result, "workflow": None,
-                "report_error": {"code": exc.code, "message": exc.message, "source": exc.source}}
+                "report_error": {"code": exc.code if isinstance(exc, BudgetError) else "NEXT_MONTH_IO_ERROR",
+                                 "message": exc.message if isinstance(exc, BudgetError) else str(exc),
+                                 "source": exc.source if isinstance(exc, BudgetError) else str(output / "month.yaml")}}
 
 
 def main(argv=None) -> int:

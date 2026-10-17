@@ -161,7 +161,6 @@ class ReportBrowser:
         self.help = False
 
     def refresh(self):
-        previous_view = self.view
         self.clear()
         try:
             if self.period:
@@ -171,18 +170,40 @@ class ReportBrowser:
             else:
                 outcome = self.loader(self.config)
                 renderer = self.renderer
-            # Blocked workflows may never expose an earlier or partial report.
-            if outcome["status"] != "CERTIFIED_SCOPED":
-                outcome = {**outcome, "report": None}
-            rendered = renderer(outcome)
-            self.outcome, self.lines = outcome, rendered.splitlines()
-            self.view = "reviews" if outcome.get("review_items") else "report"
-            if previous_view == "transactions" and self.has_transactions():
-                self.view = "transactions"
+            self._accept_outcome(outcome, renderer)
         except BudgetError as exc:
             self.error = exc
         except (OSError, UnicodeError) as exc:
             self.error = BudgetError("TUI_INPUT_ERROR", str(exc), str(getattr(exc, "filename", None) or self.config))
+
+    def _accept_outcome(self, outcome: dict, renderer: Callable):
+        """Display a fresh audit result, including one returned after publication."""
+        previous_view = self.view
+        if outcome["status"] != "CERTIFIED_SCOPED":
+            outcome = {**outcome, "report": None}
+        rendered = renderer(outcome)
+        self.outcome, self.lines = outcome, rendered.splitlines()
+        self.view = "reviews" if outcome.get("review_items") else "report"
+        if previous_view == "transactions" and self.has_transactions():
+            self.view = "transactions"
+
+    def show_saved_month(self, result: dict):
+        """Keep the published path even if its following audit could not finish."""
+        self.configs[self.index] = Path(result["config"]).resolve()
+        self.saved.add(self.index)
+        self.period = False
+        self.filter("")
+        self.clear()
+        if result.get("report_error"):
+            error = result["report_error"]
+            self.error = BudgetError(error["code"], error["message"], error.get("source"))
+            return
+        try:
+            self._accept_outcome(result["workflow"], self.renderer)
+        except BudgetError as exc:
+            self.error = exc
+        except (OSError, UnicodeError) as exc:
+            self.error = BudgetError("TUI_INPUT_ERROR", str(exc), str(self.config))
 
     def switch(self, direction: int) -> bool:
         target = max(0, min(len(self.configs) - 1, self.index + direction))
@@ -295,6 +316,8 @@ HELP = [
     "↑↓ 或 j/k：滚动文本；在待审列表选择项目。PgUp/PgDn 或空格翻页，g/G 到首尾。",
     "Enter：打开所选待审／交易详情；交易显示逐腿原币、分类、用途、责任及原始账本内容。",
     "e：填写选中的分类／H 资产用途，写理由、核对预览，明确输入 y 并回车才保存。",
+    "f：本月出现 EXTERNAL_SCOPE_PENDING 时，核对截至月末已发生的漏记责任／在途付款，填写依据并明确输入 y 才保存。",
+    "月末核对只声明截止日及以前的事实，不保证未来没有负债；其他待审仍须处理。存在漏记责任／在途付款时请取消。",
     "保存生成新的 tui-reviews/本次记录/reviewed/month.yaml，当前月份自动使用新配置并重审。",
     "重启或准备下一月时使用新配置；原配置不改写。取消填写不保存。其他待审按对应配置处理。",
     "Esc：关闭详情／帮助，或清除筛选；无这些状态时退出。q 退出。? 打开帮助。",
@@ -400,7 +423,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
     footer = ("x 导出  c 月报  m 转到该月  r 重算区间  / 筛选  Enter 详情  ? 帮助  q 退出" if browser.period else
-              "x 导出  c 区间比较  r 重算  / 筛选  e 填写  a 交易  [ ] 切配置  ? 帮助  q 退出")
+              "f 月末核对  x 导出  c 区间比较  r 重算  / 筛选  e 填写  a 交易  ? 帮助  q 退出")
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -601,6 +624,61 @@ def _export_report(stdscr, browser: ReportBrowser):
         _message(stdscr, "导出失败", [str(exc), "本次导出未完成。可核对路径或输入文件后重新按 x 导出。"])
 
 
+def _confirm_month_end(stdscr, browser: ReportBrowser):
+    from .tui_month_end import prepare_month_end, save_month_end
+
+    if browser.period or browser.error or browser.help or not browser.outcome:
+        return
+    if not any(item.get("reason_code") == "EXTERNAL_SCOPE_PENDING"
+               for item in browser.outcome.get("review_items", [])):
+        _message(stdscr, "本轮无需补充月末核对", [
+            "当前清单没有 EXTERNAL_SCOPE_PENDING；如还有待审，请先按清单处理。未发现此项不代表月报已签发。"])
+        return
+    output = browser.review_roots[browser.index] / (
+        datetime.now().strftime("%Y%m%d-%H%M%S-month-end-") + uuid4().hex[:12]) / "reviewed"
+    try:
+        _put(stdscr, max(0, stdscr.getmaxyx()[0] - 1), "正在读取本月截止日和账本来源……")
+        stdscr.refresh()
+        prepared = prepare_month_end(browser.config, browser.outcome["month"])
+        context = [f"核对月份：{prepared.month}；截止日：{prepared.as_of} 日末。",
+                   f"原 cutover：{prepared.cutover}；本月已记交易 {prepared.transactions} 笔。",
+                   f"截至该日最近已记交易：{prepared.latest_transaction or '无'}。",
+                   "请核对 importer 已覆盖本月，并确认截至截止日：",
+                   "没有已发生但漏记的本人责任；没有已发起而尚未结算的付款。",
+                   "存在这些事项时请取消，先补账或处理相关事实。",
+                   "这不要求预测截止日之后新发生的消费、负债或付款。",
+                   "本项不会批准其他交易、目标或责任；只有其余审计也通过才签发月报。"]
+        if not prepared.transactions:
+            context.append("本月没有已记交易：请特别核对账单是否真的已导入；零笔不能证明资料完整。")
+        reason = ""
+        while True:
+            reason = _read_field(stdscr, "核对本月末资料", context, "核对依据：", reason)
+            if reason is None:
+                return
+            if reason.strip():
+                break
+            _message(stdscr, "尚未保存", ["请填写实际核对的依据；不能留空。"])
+        preview = [*context, f"核对依据：{reason.strip()}", f"新配置：{output / 'month.yaml'}",
+                   "保存后当前月份使用新配置；重启、导出或准备下一月时也使用此路径。"]
+        approved = _read_field(stdscr, "明确批准本月末声明", preview,
+                               "输入 y 并回车保存；其他输入或 Esc 取消：")
+        if approved != "y":
+            return
+        browser.clear()
+        _draw_browser(stdscr, browser)
+        result = save_month_end(prepared, reason, output, approved=True)
+        browser.show_saved_month(result)
+        lines = [f"本月末核对声明已保存：{browser.config}", "原账本与原配置未改写。"]
+        if browser.error:
+            lines += ["新配置已保存，月报仍未通过：", str(browser.error)]
+        else:
+            lines += [f"本月状态：{browser.outcome['status']}；待审 {len(browser.reviews())} 项。"]
+        _message(stdscr, "已保存月末核对", lines)
+    except (BudgetError, OSError, UnicodeError) as exc:
+        browser.refresh()
+        _message(stdscr, "未保存月末核对", [str(exc), "请重算并重新核对；本次没有批准月末声明。"])
+
+
 def _report_browser(stdscr, browser: ReportBrowser):
     try:
         curses.curs_set(0)
@@ -649,6 +727,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             _edit_review(stdscr, browser)
         elif key == "x":
             _export_report(stdscr, browser)
+        elif key == "f":
+            _confirm_month_end(stdscr, browser)
         elif key == "t":
             browser.view = "reviews" if browser.view == "report" else "report"
             browser.detail, browser.help, browser.offset, browser.selected = None, False, 0, 0
