@@ -21,14 +21,14 @@ from ..exact import exact, exact_text
 from ..financial import frozen_financial, load_financial
 from ..yamlstrict import load_yaml, yaml_key_location
 from .accounts import _lot, audit_accounts
-from .classification import _key, audit_classification
+from .classification import _key, _registry, audit_classification
 from .facts import FactIndex, frozen_fact_indices
 from .h_fx import audit_h_fx
 from .h_transfers import audit_h_transfers
 from .inline_amounts import parse_inline_amounts
 from .k_events import audit_k_events
 from .obligations import audit_simple_obligations
-from .ownership import audit_ownership
+from .ownership import _owners, audit_ownership
 from .purpose_pools import audit_purpose_pools
 from .review_diagnostics import annotate_source_items
 
@@ -39,6 +39,7 @@ LABELS = {"account_semantics": "新资产账户语义", "payment_scope": "账户
           "classification": "费用／收入分类", "asset_ownership": "资产用途",
           "pool_boundary": "证券池对外边界", "booked_obligation": "已记负债事件",
           "liability_opening": "期初负债", "fund_amount": "fund 金额",
+          "budget_amount": "budget 金额",
           "inventory": "真实库存顺序与余额",
           "h_transfer": "资产用途转账", "k_event": "基金申赎用途事件",
           "h_fx": "购汇用途事件"}
@@ -120,32 +121,48 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                         first_asset_date[posting.account] = entry.date
                         first_asset_source[posting.account] = source
 
-        # Syntax errors in inline fund slices are actionable source review.
-        # Collect every bad posting before deeper audits, which require valid
-        # fund vectors and would otherwise stop at the first error.
-        fund_errors = []
+        # A bare name can end in digits. Only the same registries used by the
+        # compilers can distinguish that name from a single explicit amount.
+        # Collect all invalid vectors before either compiler stops at one.
+        ownership_doc = load_yaml(path("ownership"))
+        classification_doc = load_yaml(path("classifications"))
+        names = {
+            "fund": set(_owners(ownership_doc.get("owners") if type(ownership_doc) is dict else None,
+                                source=path("ownership"))),
+            "budget": set(_registry(classification_doc.get("categories") if type(classification_doc) is dict else None,
+                                    source=path("classifications"))),
+        }
+        tag_errors = []
         for entry in fin.entries:
             if not isinstance(entry, data.Transaction) or not cutover <= entry.date <= through:
                 continue
             for posting in entry.postings:
-                raw = (posting.meta or {}).get("fund")
-                if not isinstance(raw, str):
-                    continue  # The source gate reports non-string metadata.
                 ref = facts.for_posting(posting).as_dict()
-                try:
-                    parse_inline_amounts(raw, exact(posting.units.number),
-                                         source_by_ref[_key(ref)] or str(ref),
-                                         code="FUND_GRAMMAR")
-                except BudgetError as exc:
-                    if exc.code != "FUND_GRAMMAR":
-                        raise
-                    fund_errors.append({"kind": "fund_amount", "date": entry.date.isoformat(),
-                                        "account": posting.account,
-                                        "commodity": posting.units.currency,
-                                        "signed_units": exact_text(exact(posting.units.number)),
-                                        "ref": ref, "source": source_by_ref[_key(ref)],
-                                        "reason_code": exc.code, "detail": exc.message})
-        if fund_errors:
+                kind = posting.account.split(":", 1)[0]
+                for tag in ("fund", "budget"):
+                    if tag not in (posting.meta or {}) or (tag == "fund" and kind != asset_root) or (
+                            tag == "budget" and kind not in (fin.options["name_income"], fin.options["name_expenses"])):
+                        continue  # Misplaced metadata is rejected by the source gate.
+                    code = "FUND_GRAMMAR" if tag == "fund" else "TAG_SYNTAX_INVALID"
+                    raw = posting.meta[tag]
+                    try:
+                        parse_inline_amounts(raw, exact(posting.units.number),
+                                             source_by_ref[_key(ref)] or str(ref),
+                                             known_names=names[tag], code=code)
+                    except BudgetError as exc:
+                        if exc.code != code:
+                            raise
+                        tag_errors.append({"kind": tag + "_amount", "date": entry.date.isoformat(),
+                                           "account": posting.account,
+                                           "commodity": posting.units.currency,
+                                           "signed_units": exact_text(exact(posting.units.number)),
+                                           "ref": ref, "source": source_by_ref[_key(ref)],
+                                           "reason_code": exc.code,
+                                           "detail": f'{tag}: {raw!r}；{exc.message}。'
+                                                     f'请核对标签金额与分录 {exact_text(exact(posting.units.number))} '
+                                                     f'{posting.units.currency}；标签金额使用正数，'
+                                                     '不拆分时也可只写已登记的名称。'})
+        if tag_errors:
             require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
                         for item, digest in before.items()),
                     "INPUT_CHANGED", "待审清单运行期间配置或审阅文件发生变化", str(config))
@@ -154,9 +171,9 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                     "latest_booked_transaction_date": max(booked_dates).isoformat() if booked_dates else None,
                     "booked_transactions_in_range": sum(since <= day <= through for day in booked_dates),
                     "source_review_state": "NEEDS_REVIEW",
-                    "counts": {"fund_amount": len(fund_errors)}, "items": fund_errors,
+                    "counts": dict(sorted(Counter(item["kind"] for item in tag_errors).items())), "items": tag_errors,
                     "suppressed_pool_internal_h_postings": None, "preflight_only": True,
-                    "note": "先修正上述 fund 标签并重跑；本次尚未检查其他待审来源。"}
+                    "note": "先修正上述 fund／budget 标签并重跑；本次尚未检查其他待审来源。"}
 
         try:
             accounts = audit_accounts(root, cutover, path("accounts"))

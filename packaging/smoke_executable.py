@@ -70,11 +70,14 @@ def check(executable: Path) -> None:
         # noninteractive-terminal guard. A pipe cannot validate keyboard/display.
         _, stderr = run("--config", config, "--format", "tui", code=2)
         assert json.loads(stderr)["error"]["code"] == "TUI_TERMINAL_REQUIRED", stderr
-        ledger.write_text(ledger.read_text(encoding="utf-8").replace('fund: "待支出资金"',
-                                                                   'fund: "待支出资金100,已收入资金99"'), encoding="utf-8")
-        pending = document("--config", config)
-        assert pending["report"] is None and pending["review_items"], pending
-        assert any(str(ledger) + ":" in row["source"] for row in pending["review_items"]), pending
+        original = ledger.read_text(encoding="utf-8")
+        for old, new in (('fund: "待支出资金"', 'fund: "待支出资金199"'),
+                         ('fund: "待支出资金"', 'fund: "待支出资金100,已收入资金99"'),
+                         ('budget: "日常开销.餐饮"', 'budget: "日常开销.餐饮9"')):
+            ledger.write_text(original.replace(old, new), encoding="utf-8")
+            pending = document("--config", config)
+            assert pending["report"] is None and pending["review_items"], pending
+            assert any(str(ledger) + ":" in row["source"] for row in pending["review_items"]), pending
         print("Standalone smoke passed: init, 190 CNY certified report, Unicode/includes/balance plugin, "
               "CSV, review, references, next-month, curses import, located review queue.")
 

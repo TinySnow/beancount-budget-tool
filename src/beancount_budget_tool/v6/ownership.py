@@ -27,7 +27,7 @@ from .inline_amounts import parse_inline_amounts
 from .native_flows import native_asset_flow
 from .opening import audit_opening
 from .provenance import valid_digest
-from .source import scan_v6_source
+from .source import _source, scan_v6_source
 
 
 ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
@@ -216,13 +216,14 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
         raw = (posting.meta or {}).get("fund")
         if raw is None:
             continue
-        parts = parse_inline_amounts(raw, exact(posting.units.number), str(record["ref"]),
+        source = _source(posting.meta or {})
+        parts = parse_inline_amounts(raw, exact(posting.units.number), source,
                                      known_names=set(names), code="OWNERSHIP_UNITS_MISMATCH")
         slice_id = "inline:" + sha256(key.encode()).hexdigest()
         slices = []
         for index, (name, amount) in enumerate(parts):
             owner = "-" if name == "-" else names.get(name)
-            require(owner is not None, "OWNER_UNKNOWN", "行内 fund 用途未登记", name)
+            require(owner is not None, "OWNER_UNKNOWN", f"行内 fund 用途未登记：{name}", source)
             slices.append({"id": slice_id if len(parts) == 1 else f"{slice_id}:{index}",
                            "owner_id": owner, "role": "hold",
                            "signed_units": exact_text(amount)})
