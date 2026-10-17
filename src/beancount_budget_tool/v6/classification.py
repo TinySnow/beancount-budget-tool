@@ -22,7 +22,7 @@ from ..financial import load_financial
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .facts import FactIndex, future_posting_refs
 from .inline_amounts import parse_inline_amounts
-from .source import scan_v6_source
+from .source import _source, scan_v6_source
 
 
 ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
@@ -221,13 +221,14 @@ def audit_classification(root: Path, cutover: date, declarations: Path | None = 
                             "signed_units": exact_text(exact(posting.units.number)),
                             "commodity": posting.units.currency})
             continue
-        parts = parse_inline_amounts(inline, exact(posting.units.number), str(ref),
+        source = _source(posting.meta or {})
+        parts = parse_inline_amounts(inline, exact(posting.units.number), source,
                                      known_names=set(registry), code="CLASSIFICATION_UNITS_MISMATCH")
         slice_id = "inline:" + sha256(key.encode()).hexdigest()
         slices = []
         for index, (name, amount) in enumerate(parts):
             category = "-" if name == "-" else registry.get(_name(name))
-            require(category is not None, "CATEGORY_UNKNOWN", "行内 budget 类别未登记", name)
+            require(category is not None, "CATEGORY_UNKNOWN", f"行内 budget 类别未登记：{name}", source)
             slices.append({"id": slice_id if len(parts) == 1 else f"{slice_id}:{index}",
                            "category_id": category, "signed_units": exact_text(amount)})
         compiled.append({"ref": ref, "account": posting.account,
