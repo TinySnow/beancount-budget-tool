@@ -12,7 +12,7 @@ import sys
 
 from beancount.core import data
 
-from ..console import configure_output
+from ..console import command, configure_output
 from ..errors import BudgetError, require
 from ..yamlstrict import load_yaml, yaml_path_location
 from ..v6.accounts import audit_accounts
@@ -152,12 +152,12 @@ def create_next_month(config: Path, output: Path) -> dict:
             f"3. 确认 importer 已覆盖至 {last}，截至该日没有未入账责任或在途付款后，"
             "completeness_confirmed 填 true，并在 completeness_reason 写核对依据。"
             "尚未核对时保持 false，也可先生成配置审交易；月报会继续提示月末声明待审。\n\n"
-            "```\nbeancount-budget-next-month --apply next-month.yaml\n```\n\n"
-            "生成 compiled/month.yaml 并自动运行本月检查。之后用该配置运行月报或导出 beancount-budget-review 待审表。"
+            f"```\n{command('beancount-budget-next-month')} --apply next-month.yaml\n```\n\n"
+            f"生成 compiled/month.yaml 并自动运行本月检查。之后用该配置运行月报或导出 {command('beancount-budget-review')} 待审表。"
             "原账本和原审阅文件只读，输出不覆盖；已有 compiled 时用 --output 指定新目录。\n\n"
             "如果先审交易、后来才确认月末，请以交易审阅后最新的 month.yaml 运行下列命令，"
             "保留本月已有决定，不必重新编译原填写表：\n\n"
-            "```\nbeancount-budget-next-month --confirm-completeness path/to/latest/month.yaml "
+            f"```\n{command('beancount-budget-next-month')} --confirm-completeness path/to/latest/month.yaml "
             "--reason '已核对截至本月末全部账单，无漏记责任或在途付款' --output closed\n```\n\n"
             "上月完整性声明、专项卡债覆盖和外币清偿报价不自动沿用。"
             "未清债务、其他责任及新月交易仍需按月报提示审阅；原有交易认领和 cutover 期初继续复用。"

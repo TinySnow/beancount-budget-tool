@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 from beancount.core import data
 import yaml
 
-from ..console import configure_output
+from ..console import command, configure_output
 from ..errors import BudgetError, require
 from ..exact import exact_text
 from ..yamlstrict import load_yaml, yaml_path_location
@@ -95,7 +95,7 @@ def create_review(config: Path, output: Path) -> dict:
             "2. reason 写这次判断的依据。确定后把 approved 改为 true。不确定就保持 false；可以只批准部分。\n"
             "3. 不要修改 ref、kind、日期、账户、币种和分录金额；无需手工复制来源引用。"
             "改了原交易、加了行内标签或已有别人认领时，重新导出待审表。\n\n"
-            "```\nbeancount-budget-review --apply decisions.yaml\n```\n\n"
+            f"```\n{command('beancount-budget-review')} --apply decisions.yaml\n```\n\n"
             "保存到新的 reviewed 目录，并自动重跑该月月报；原账本及原审阅文件只读。"
             "已有 reviewed 时用 --output 另选目录。后续以新目录的 month.yaml 继续审核。\n\n"
             "other-items.yaml 保留本轮不能通过这张表决定的项目，例如账户、期初、负债、转账协议、计价和目标。"

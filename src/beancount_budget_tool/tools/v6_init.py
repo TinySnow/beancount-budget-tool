@@ -16,7 +16,7 @@ from tempfile import TemporaryDirectory
 from beancount.core import data
 import yaml
 
-from ..console import configure_output
+from ..console import command, configure_output
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import booked_through, frozen_financial
@@ -161,8 +161,8 @@ def create_setup(ledger: Path, month: str, output: Path, *, cutover: date | None
             "4. expense_targets 是本月各类别及其子类别的合计消费上限，金额填带引号的非负数字。allocation_targets 填划拨目标，或明确填 not_assessed。\n"
             f"5. 确认导入资料覆盖到 {last}，无该截止日尚未入账的责任或付款后，completeness_confirmed 改为 true；报告不代表截止日之后的现实余额。\n\n"
             "填不出来就保留 null 或 false。在本目录运行下列命令会列出待确认字段和行号，不会自动批准。\n\n"
-            "```\nbeancount-budget-init --apply setup.yaml\n```\n\n"
-            "全部首轮决定明确后生成 compiled/month.yaml，再运行 `beancount-budget-tool --config compiled/month.yaml`。复杂转账、负债或缺价仍可能出现在后续待审清单中。\n"
+            f"```\n{command('beancount-budget-init')} --apply setup.yaml\n```\n\n"
+            f"全部首轮决定明确后生成 compiled/month.yaml，再运行 `{command('beancount-budget-tool')} --config compiled/month.yaml`。复杂转账、负债或缺价仍可能出现在后续待审清单中。\n"
             "生成目录不会覆盖已有文件；如已生成 compiled，请用 --output 指定新的目录。账本始终只读。\n")}
     _publish(output, files)
     return {"status": "DRAFT_CREATED", "setup": str((output / "setup.yaml").resolve()),
@@ -418,9 +418,9 @@ def main(argv=None) -> int:
             print(f"  {item['detail']} [{item['source']}]")
         if "setup" in result:
             print(f"填写表：{result['setup']}")
-            print(f"检查并生成配置：beancount-budget-init --apply \"{result['setup']}\"")
+            print(f"检查并生成配置：{command('beancount-budget-init')} --apply \"{result['setup']}\"")
         if result.get("config"):
-            print(f"查看月报：beancount-budget-tool --config \"{result['config']}\"")
+            print(f"查看月报：{command('beancount-budget-tool')} --config \"{result['config']}\"")
         print(result.get("note", ""))
     return 0
 
