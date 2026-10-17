@@ -20,7 +20,8 @@ def check(executable: Path) -> None:
         environment.pop("PYTHONHOME", None)
         environment.pop("PYTHONPATH", None)
         # No interpreter, venv Scripts directory, or build dependency DLLs in PATH.
-        environment["PATH"] = (str(Path(environment["SystemRoot"]) / "System32")
+        # os.environ is case insensitive on Windows; a copied dict is not.
+        environment["PATH"] = (str(Path(os.environ["SystemRoot"]) / "System32")
                                if os.name == "nt" else "/usr/bin:/bin")
 
         def run(*args, code=0):
