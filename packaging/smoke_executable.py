@@ -62,7 +62,7 @@ def check(executable: Path) -> None:
         assert project["status"] == "PROJECT_CREATED", project
         assert document("--month", "2026-09")["report"]["max_spendable"]["max_spendable"] == "190"
         assert "190 CNY" in run()[0]
-        run("report", "--config", config, "--format", "csv", "--output", "report.csv")
+        run("report", "--format", "csv", "--output", "report.csv")
         assert (directory / "report.csv").read_bytes().startswith(b"\xef\xbb\xbf")
         review = document("review", "--config", config, "--output", "review")
         assert review["editable_items"] == 0, review
@@ -70,6 +70,21 @@ def check(executable: Path) -> None:
         assert refs["status"] == "REFERENCES_CURRENT", refs
         following = document("next-month", "--config", config, "--output", "next")
         assert following["status"] == "DRAFT_CREATED", following
+        worksheet = Path(following["worksheet"])
+        # Confirm only the proposed targets of this public virtual fixture.
+        # Deliberately leave October's month-end declaration unconfirmed.
+        worksheet.write_text(worksheet.read_text(encoding="utf-8").replace(
+            "targets_confirmed: false", "targets_confirmed: true"), encoding="utf-8")
+        next_config = document("next-month", "--apply", worksheet)
+        assert next_config["status"] == "MONTH_PREPARED", next_config
+        updated = document("project", "--update", "budget-project.yaml", "--config", next_config["config"],
+                           "--default-month", "2026-10")
+        assert updated["status"] == "PROJECT_UPDATED" and updated["months"] == ["2026-09", "2026-10"], updated
+        assert document()["report"] is None  # Default October still needs review.
+        pending_period = document("report", "--project", "budget-project.yaml")
+        assert pending_period["status"] == "NEEDS_REVIEW" and pending_period["report"] is None, pending_period
+        september = document("report", "--from", "2026-09", "--through", "2026-09")
+        assert september["report"]["closing"]["max_spendable"]["max_spendable"] == "190", september
         # Import curses and its native extension, then stop at the expected
         # noninteractive-terminal guard. A pipe cannot validate keyboard/display.
         _, stderr = run("--config", config, "--format", "tui", code=2)
@@ -83,7 +98,7 @@ def check(executable: Path) -> None:
             assert pending["report"] is None and pending["review_items"], pending
             assert any(str(ledger) + ":" in row["source"] for row in pending["review_items"]), pending
         print("Standalone smoke passed: init, 190 CNY certified report, Unicode/includes/balance plugin, "
-              "CSV, review, references, next-month, curses import, located review queue.")
+              "project registration/update/range, CSV, review, references, next-month, curses import, located review queue.")
 
 
 if __name__ == "__main__":

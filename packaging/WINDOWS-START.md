@@ -31,6 +31,16 @@ TUI 按 `q` 退出；若不想用 TUI，去掉 `--format tui` 即可看文本。
 TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明或载入下一月时，项目入口会更新到新配置。
 入口只记录路径；每次查看仍重新审计，不能代替逐月确认。
 
+命令行保存了新的月份配置时，登记到原项目即可；同月替换入口，其他月份保留：
+
+```powershell
+.\beancount-budget-tool.exe project --update .\budget-project.yaml --config "新配置路径\month.yaml" --default-month 2026-10
+.\beancount-budget-tool.exe report --from 2026-09 --through 2026-10
+.\beancount-budget-tool.exe report --from 2026-09 --through 2026-10 --format csv --output .\累计.csv
+```
+
+把路径和月份换成自己的；区间必须逐月齐全。待审未完成时会列原因和位置，暂不输出累计数字。
+
 ## 2. 使用真实账本
 
 如果已经有月报配置，直接换成它的路径：

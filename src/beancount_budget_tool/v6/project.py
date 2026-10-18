@@ -83,14 +83,39 @@ class Project:
     def remember(self, config: Path, previous: Path) -> None:
         """Publish only navigation paths, refusing concurrent external edits."""
         config = config.resolve()
-        month, identity = _metadata(config)
-        require(identity == self.identity, "PROJECT_CONTEXT_MISMATCH", "新配置不属于当前账本／cutover／报告货币项目", str(config))
+        original = config.read_bytes()
+        month, _ = _metadata(config)
         require(month not in self.months or self.months[month] == previous.resolve(),
                 "PROJECT_MONTH_CHANGED", "该月份的入口与当前保存来源不同；请核对项目文件", str(self.path))
-        months = {**self.months, month: config}
-        before = {path: path.read_bytes() for path in months.values()}
-        _validate(months, self.path)
-        content = _content(self.path, months, month)
+        self.register([config], default_month=month, expected_inputs={config: original})
+
+    def register(self, configs: list[Path], default_month: str | None = None, *,
+                 expected_inputs: dict[Path, bytes] | None = None) -> None:
+        """Explicitly add/replace months as one atomic navigation update."""
+        months, replacements = dict(self.months), {}
+        before = dict(expected_inputs or {})
+        for config in configs:
+            config = config.resolve()
+            require(config.is_file(), "PROJECT_MONTH_MISSING", "指定的月份配置不存在", str(config))
+            if config not in before:
+                before[config] = config.read_bytes()
+            month, identity = _metadata(config)
+            require(identity == self.identity, "PROJECT_CONTEXT_MISMATCH",
+                    "新配置不属于当前账本／cutover／报告货币项目", str(config))
+            require(month not in replacements, "PROJECT_MONTH_DUPLICATE",
+                    f"{month} 登记了不止一个配置，请选择最新配置", str(config))
+            replacements[month] = config
+        months.update(replacements)
+        default = self.default_month if default_month is None else _month(default_month)
+        require(default in months, "PROJECT_DEFAULT_INVALID", "默认月份须已登记", str(self.path))
+        # Keep the pre-read bytes of replacement headers; never bless a header
+        # edited between its identity check and publication.
+        for path in months.values():
+            if path not in before:
+                before[path] = path.read_bytes()
+        require(_validate(months, self.path) == self.identity, "PROJECT_CONTEXT_MISMATCH",
+                "项目月份的账本／cutover／报告货币发生变化；请重新打开项目", str(self.path))
+        content = _content(self.path, months, default)
         with TemporaryDirectory(prefix=".budget-project-", dir=self.path.parent) as folder:
             staging = Path(folder) / "project.yaml"
             staging.write_bytes(content)
@@ -98,7 +123,7 @@ class Project:
                     all(path.read_bytes() == data for path, data in before.items()),
                     "PROJECT_CHANGED", "项目或月份入口在会话中发生变化；本次不覆盖，请核对后重新打开项目", str(self.path))
             os.replace(staging, self.path)
-        self.months, self.default_month, self.original = dict(sorted(months.items())), month, content
+        self.months, self.default_month, self.original = dict(sorted(months.items())), default, content
 
 
 def load_project(path: Path) -> Project:
@@ -163,20 +188,30 @@ def create_project(configs: list[Path], output: Path, default_month: str | None 
 
 def main(argv=None) -> int:
     configure_output()
-    parser = argparse.ArgumentParser(description="登记已有月报配置，生成默认项目入口；不批准任何预算事实")
-    parser.add_argument("--config", type=Path, action="append", required=True, help="已有月份的最新配置，可重复")
-    parser.add_argument("--output", type=Path, default=Path(DEFAULT_PROJECT))
-    parser.add_argument("--default-month", help="默认启动月份；省略时选登记月份中最近的一月")
+    parser = argparse.ArgumentParser(description="登记已有月报配置，创建或更新项目入口；不批准任何预算事实")
+    parser.add_argument("--config", type=Path, action="append", default=[], help="新增或替换月份的最新配置，可重复")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--output", type=Path, help=f"新建入口；默认 {DEFAULT_PROJECT}，不覆盖已有文件")
+    mode.add_argument("--update", type=Path, help="更新已有项目；显式替换所提供月份的入口，保留其他月份")
+    parser.add_argument("--default-month", help="默认启动月份；新建时默认最近一月，更新时默认保留原选择")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)
+    if not args.config and (not args.update or not args.default_month):
+        parser.error("请提供 --config；仅更新默认月份时可用 --update 项目 --default-month YYYY-MM")
+    path = args.update or args.output or Path(DEFAULT_PROJECT)
     try:
-        project = create_project(args.config, args.output, args.default_month)
+        if args.update:
+            project = load_project(path)
+            project.register(args.config, args.default_month)
+        else:
+            project = create_project(args.config, path, args.default_month)
     except (BudgetError, OSError, UnicodeError) as exc:
         error = {"code": exc.code, "message": exc.message, "source": exc.source} if isinstance(exc, BudgetError) else {
-            "code": "PROJECT_IO_ERROR", "message": str(exc), "source": str(getattr(exc, "filename", None) or args.output)}
+            "code": "PROJECT_IO_ERROR", "message": str(exc), "source": str(getattr(exc, "filename", None) or path)}
         print(json.dumps({"error": error}, ensure_ascii=False), file=sys.stderr)
         return 2
-    result = {"status": "PROJECT_CREATED", "project": str(project.path), "default_month": project.default_month,
+    result = {"status": "PROJECT_UPDATED" if args.update else "PROJECT_CREATED",
+              "project": str(project.path), "default_month": project.default_month,
               "months": sorted(project.months), "note": "只登记已有配置；每次查看仍重新审计，不代表月份已经签发。"}
     print(json.dumps(result, ensure_ascii=False, indent=2) if args.format == "json" else
           f"项目入口：{project.path}\n默认月份：{project.default_month}\n{result['note']}")
