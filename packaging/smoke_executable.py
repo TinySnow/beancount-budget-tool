@@ -25,7 +25,7 @@ def check(executable: Path) -> None:
                                if os.name == "nt" else "/usr/bin:/bin")
 
         def run(*args, code=0):
-            print(f"Standalone check: {args[0]}", flush=True)
+            print(f"Standalone check: {args[0] if args else 'default project'}", flush=True)
             result = subprocess.run([str(binary), *map(str, args)], cwd=directory,
                                     env=environment, capture_output=True,
                                     encoding="utf-8", timeout=90)
@@ -38,7 +38,7 @@ def check(executable: Path) -> None:
 
         run("--version")
         for command in ("monthly", "init", "review-month", "review", "review-refs",
-                        "next-month", "report", "audit", "classification-proposals"):
+                        "next-month", "report", "audit", "classification-proposals", "project"):
             run(command, "--help")
         ledger = directory / "账本 2026.bean"
         text = (source / "first-month.bean").read_text(encoding="utf-8")
@@ -58,6 +58,10 @@ def check(executable: Path) -> None:
         assert outcome["status"] == "CERTIFIED_SCOPED", outcome
         assert outcome["report"]["max_spendable"]["max_spendable"] == "190", outcome
         assert outcome["review_items"] == [], outcome
+        project = document("project", "--config", config, "--output", "budget-project.yaml")
+        assert project["status"] == "PROJECT_CREATED", project
+        assert document("--month", "2026-09")["report"]["max_spendable"]["max_spendable"] == "190"
+        assert "190 CNY" in run()[0]
         run("report", "--config", config, "--format", "csv", "--output", "report.csv")
         assert (directory / "report.csv").read_bytes().startswith(b"\xef\xbb\xbf")
         review = document("review", "--config", config, "--output", "review")

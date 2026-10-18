@@ -28,4 +28,5 @@ jobs:
           beancount-budget-review-month --help
           beancount-budget-audit --help
           beancount-budget-review-refs --help
+          beancount-budget-project --help
           python -c "import curses"
