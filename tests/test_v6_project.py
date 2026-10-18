@@ -17,6 +17,7 @@ from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.launcher import main as launch
 from beancount_budget_tool.tools.v6_init import _SetupDumper, compile_setup
 from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
+from beancount_budget_tool.tools.v6_review_decisions import apply_review
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, main, render_workflow_text
 from beancount_budget_tool.v6.period_report import audit_period, audit_project_period
 from beancount_budget_tool.v6.project import create_project, load_project, _metadata, _validate
@@ -418,6 +419,203 @@ class ProjectTests(unittest.TestCase):
         after = audit_project_period(self.path, "2026-09", "2026-09")
         self.assertEqual(before["report"]["closing"]["max_spendable"]["max_spendable"], "190")
         self.assertEqual(after["report"]["closing"]["max_spendable"]["max_spendable"], "185")
+
+    def review_sheet(self, folder="review", *, approve=True):
+        classifications = self.configs[0].parent / "classifications.yaml"
+        document = yaml.safe_load(classifications.read_text(encoding="utf-8"))
+        document.pop("defaults", None)
+        save(classifications, document)
+        code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--month", "2026-09",
+                                                   "--output", str(self.base / folder), "--format", "json"])
+        self.assertEqual((code, errors), (0, ""))
+        sheet = Path(json.loads(output)["worksheet"])
+        document = yaml.safe_load(sheet.read_text(encoding="utf-8"))
+        self.assertEqual(len(document["rows"]), 1)
+        if approve:
+            document["rows"][0].update(approved=True, reason="公开虚构工资分类确认", decision="已收入资金")
+            save(sheet, document)
+        return sheet
+
+    def test_project_cli_lifecycle_reviews_prepares_and_closes_next_month(self):
+        project = self.project(False)
+        original = self.path.read_bytes()
+        sheet = self.review_sheet()
+        self.assertEqual(self.path.read_bytes(), original)
+        instructions = sheet.with_name("START_HERE.md").read_text(encoding="utf-8")
+        self.assertIn("--project", instructions)
+        self.assertIn(str(self.path), instructions)
+        code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--apply", str(sheet), "--format", "json"])
+        self.assertEqual((code, errors), (0, ""))
+        reviewed = json.loads(output)
+        self.assertEqual(reviewed["project_status"], "UPDATED")
+        self.assertEqual(reviewed["workflow"]["status"], "CERTIFIED_SCOPED")
+        september = Path(reviewed["config"])
+        self.assertEqual(load_project(self.path).select(), september)
+        code, output, errors = self.invoke(launch, ["next-month", "--project", str(self.path),
+                                                   "--output", str(self.base / "october"), "--format", "json"])
+        self.assertEqual((code, errors), (0, ""))
+        draft = json.loads(output)
+        worksheet = Path(draft["worksheet"])
+        document = yaml.safe_load(worksheet.read_text(encoding="utf-8"))
+        self.assertEqual((worksheet.parent / document["config"]).resolve(), september)
+        self.assertFalse(document["completeness_confirmed"])
+        document["targets_confirmed"] = True
+        save(worksheet, document)
+        code, output, errors = self.invoke(launch, ["next-month", "--project", str(self.path),
+                                                   "--apply", str(worksheet), "--format", "json"])
+        self.assertEqual((code, errors), (0, ""))
+        october = json.loads(output)
+        self.assertEqual(october["project_status"], "UPDATED")
+        self.assertEqual(october["workflow"]["status"], "NEEDS_REVIEW")
+        self.assertIsNone(october["workflow"]["report"])
+        self.assertEqual(load_project(self.path).select(), Path(october["config"]))
+        code, output, errors = self.invoke(launch, ["review", "--project", str(self.path),
+            "--output", str(self.base / "october-review"), "--format", "json"])
+        self.assertEqual((code, errors), (0, ""))
+        october_sheet = Path(json.loads(output)["worksheet"])
+        document = yaml.safe_load(october_sheet.read_text(encoding="utf-8"))
+        self.assertEqual(len(document["rows"]), 1)
+        document["rows"][0].update(approved=True, reason="公开虚构十月餐饮确认", decision="日常开销.餐饮")
+        save(october_sheet, document)
+        code, output, errors = self.invoke(launch, ["review", "--project", str(self.path),
+            "--apply", str(october_sheet), "--format", "json"])
+        self.assertEqual((code, errors), (0, ""))
+        self.assertEqual(json.loads(output)["workflow"]["status"], "NEEDS_REVIEW")  # Month-end still unconfirmed.
+        code, output, errors = self.invoke(launch, ["next-month", "--project", str(self.path),
+            "--confirm-completeness", "--reason", "公开虚构十月已完整核对", "--output", str(self.base / "closed"), "--format", "json"])
+        self.assertEqual((code, errors), (0, ""))
+        closed = json.loads(output)
+        self.assertEqual(closed["project_status"], "UPDATED")
+        self.assertEqual(closed["workflow"]["status"], "CERTIFIED_SCOPED")
+        reopened = load_project(self.path)
+        self.assertEqual(reopened.months, {"2026-09": september, "2026-10": Path(closed["config"])})
+        period = audit_project_period(self.path)
+        self.assertEqual(period["report"]["expense_totals"]["direct_spent"], "30")
+        self.assertEqual(period["report"]["closing"]["max_spendable"]["max_spendable"], "170")
+        self.assertEqual(project.default_month, "2026-09")  # The original in-memory view is not reused.
+
+    def test_unapproved_review_keeps_project_and_other_months_unchanged(self):
+        self.project()
+        original = self.path.read_bytes()
+        sheet = self.review_sheet(approve=False)
+        code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--apply", str(sheet), "--format", "json"])
+        self.assertEqual((code, errors), (0, ""))
+        result = json.loads(output)
+        self.assertEqual(result["status"], "NO_APPROVED_DECISIONS")
+        self.assertEqual(result["project_status"], "UNCHANGED")
+        self.assertIsNone(result["config"])
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertFalse(sheet.with_name("reviewed").exists())
+
+    def test_stale_review_sheet_cannot_replace_a_more_recent_project_entry(self):
+        project = self.project(False)
+        sheet = self.review_sheet()
+        replacement = self.configs[0].with_name("later-review.yaml")
+        replacement.write_bytes(self.configs[0].read_bytes())
+        project.register([replacement])
+        original = self.path.read_bytes()
+        code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--apply", str(sheet), "--format", "json"])
+        self.assertEqual((code, output), (2, ""))
+        error = json.loads(errors)["error"]
+        self.assertEqual(error["code"], "PROJECT_MONTH_CHANGED")
+        self.assertTrue(error["source"].startswith(str(sheet) + ":"))
+        self.assertFalse(sheet.with_name("reviewed").exists())
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_stale_next_month_sheet_requires_latest_base_config(self):
+        project = self.project(False)
+        draft = create_next_month(self.configs[0], self.base / "october")
+        worksheet = Path(draft["worksheet"])
+        replacement = self.configs[0].with_name("later-review.yaml")
+        replacement.write_bytes(self.configs[0].read_bytes())
+        project.register([replacement])
+        code, output, errors = self.invoke(launch, ["next-month", "--project", str(self.path), "--apply", str(worksheet), "--format", "json"])
+        self.assertEqual((code, output), (2, ""))
+        self.assertEqual(json.loads(errors)["error"]["code"], "PROJECT_MONTH_CHANGED")
+        self.assertFalse(worksheet.with_name("compiled").exists())
+
+    def test_registered_successor_is_not_regenerated_from_the_previous_month(self):
+        self.project()
+        output_dir = self.base / "duplicate"
+        code, output, errors = self.invoke(launch, ["next-month", "--project", str(self.path), "--month", "2026-09",
+                                                   "--output", str(output_dir), "--format", "json"])
+        self.assertEqual((code, output), (2, ""))
+        self.assertEqual(json.loads(errors)["error"]["code"], "PROJECT_NEXT_MONTH_EXISTS")
+        self.assertFalse(output_dir.exists())
+
+    def test_project_edit_before_review_publication_leaves_no_saved_decisions(self):
+        self.project(False)
+        sheet = self.review_sheet()
+        changed = self.path.read_bytes() + b"\n# concurrent edit\n"
+        def change_before_apply(*args, **kwargs):
+            self.path.write_bytes(changed)
+            return apply_review(*args, **kwargs)
+        with patch("beancount_budget_tool.tools.v6_review_decisions.apply_review", side_effect=change_before_apply):
+            code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--apply", str(sheet), "--format", "json"])
+        self.assertEqual((code, output), (2, ""))
+        self.assertEqual(json.loads(errors)["error"]["code"], "INPUT_CHANGED")
+        self.assertFalse(sheet.with_name("reviewed").exists())
+        self.assertEqual(self.path.read_bytes(), changed)
+
+    def test_project_update_failure_keeps_saved_review_path_and_external_edit(self):
+        self.project(False)
+        sheet = self.review_sheet()
+        changed = self.path.read_bytes() + b"\n# concurrent edit after save\n"
+        def fail_after_save(*args):
+            self.path.write_bytes(changed)
+            raise BudgetError("PROJECT_CHANGED", "外部已修改项目", str(self.path))
+        with patch("beancount_budget_tool.v6.project.Project.remember", side_effect=fail_after_save):
+            code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--apply", str(sheet), "--format", "json"])
+        self.assertEqual((code, errors), (2, ""))
+        result = json.loads(output)
+        self.assertEqual(result["status"], "DECISIONS_SAVED")
+        self.assertEqual(result["project_status"], "UPDATE_FAILED")
+        self.assertTrue(Path(result["config"]).is_file())
+        self.assertEqual(result["workflow"]["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(self.path.read_bytes(), changed)
+        self.assertEqual(load_project(self.path).select(), self.configs[0])
+
+    def test_review_post_save_io_failure_keeps_and_registers_saved_config(self):
+        self.project(False)
+        sheet = self.review_sheet()
+        calls = 0
+        def fail_post_save(config):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise PermissionError("virtual post-save read failure")
+            return audit_month_workflow(config)
+        with patch("beancount_budget_tool.tools.v6_review_decisions.audit_month_workflow", side_effect=fail_post_save):
+            code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--apply", str(sheet), "--format", "json"])
+        self.assertEqual((code, errors), (2, ""))
+        result = json.loads(output)
+        self.assertIsNone(result["workflow"])
+        self.assertEqual(result["report_error"]["code"], "REVIEW_IO_ERROR")
+        self.assertEqual(result["project_status"], "UPDATED")
+        self.assertEqual(load_project(self.path).select(), Path(result["config"]))
+        self.assertEqual(audit_month_workflow(Path(result["config"]))["status"], "CERTIFIED_SCOPED")
+
+    def test_project_cli_closes_selected_month_and_retains_later_months(self):
+        self.project()
+        with patch("beancount_budget_tool.tools.v6_next_month.audit_month_workflow", side_effect=PermissionError("virtual failed read")):
+            code, output, errors = self.invoke(launch, ["next-month", "--project", str(self.path), "--month", "2026-09",
+                "--confirm-completeness", "--reason", "公开虚构九月完整", "--output", str(self.base / "closed"), "--format", "json"])
+        self.assertEqual((code, errors), (2, ""))
+        result = json.loads(output)
+        self.assertEqual(result["project_status"], "UPDATED")
+        self.assertIsNone(result["workflow"])
+        reopened = load_project(self.path)
+        self.assertEqual(reopened.select(), Path(result["config"]))
+        self.assertEqual(reopened.months["2026-10"], self.configs[1])
+        self.assertEqual(reopened.months["2026-11"], self.configs[2])
+
+    def test_project_selection_and_explicit_config_must_agree(self):
+        self.project()
+        code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--month", "2026-09",
+            "--config", str(self.configs[1]), "--output", str(self.base / "wrong"), "--format", "json"])
+        self.assertEqual((code, output), (2, ""))
+        self.assertEqual(json.loads(errors)["error"]["code"], "PROJECT_MONTH_MISMATCH")
+        self.assertFalse((self.base / "wrong").exists())
 
 
 if __name__ == "__main__":
