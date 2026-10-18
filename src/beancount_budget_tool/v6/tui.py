@@ -139,6 +139,7 @@ class ReportBrowser:
                              path.parent.parent.parent.name == "tui-reviews" else
                              path.parent / "tui-reviews" for path in self.configs]
         self.saved = set()
+        self.next_worksheets: dict[Path, Path] = {}
         self.index = 0
         self.period = False
         self.query = ""
@@ -204,6 +205,16 @@ class ReportBrowser:
             self.error = exc
         except (OSError, UnicodeError) as exc:
             self.error = BudgetError("TUI_INPUT_ERROR", str(exc), str(self.config))
+
+    def show_next_month(self, result: dict):
+        """Retain the current month's latest path, then select its successor."""
+        target = self.index + 1
+        path = Path(result["config"]).resolve()
+        self.configs.insert(target, path)
+        self.review_roots.insert(target, path.parent / "tui-reviews")
+        self.saved = {index + (index >= target) for index in self.saved}
+        self.index = target
+        self.show_saved_month(result)
 
     def switch(self, direction: int) -> bool:
         target = max(0, min(len(self.configs) - 1, self.index + direction))
@@ -305,6 +316,8 @@ class ReportBrowser:
 HELP = [
     "按键帮助", "r：读取当前账本与配置，重新运行全部月报审计；计算期间旧结果清除。",
     "[ / ]：按命令提供的顺序切换配置，每次重新审计，不复用其他月份的声明或数字。",
+    "n：准备下一月填写表；用编辑器填好后，再按 n 选择载入。未确认的目标／账户继续列待审，不自动沿用月末声明。",
+    "下一月保存后自动加入当前配置清单，可用 [／] 返回前月；重启时仍须提供已保存配置路径。",
     "c：切换当前月报与连续月份比较；使用命令提供的全部最新配置，区间内不能缺月。",
     "区间重新审计每个月：只累计流量，目标差逐月比较，余额与可花取期末，任何月待审均不显示区间数字。",
     "m：在区间待审列表／详情中转到所选月份，重新审计后可按 e 填写；保存的新配置会用于下次区间比较。",
@@ -423,7 +436,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
     footer = ("x 导出  c 月报  m 转到该月  r 重算区间  / 筛选  Enter 详情  ? 帮助  q 退出" if browser.period else
-              "f 月末核对  x 导出  c 区间比较  r 重算  / 筛选  e 填写  a 交易  ? 帮助  q 退出")
+              "n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 a 交易 ? 帮助 q 退出")
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -624,6 +637,69 @@ def _export_report(stdscr, browser: ReportBrowser):
         _message(stdscr, "导出失败", [str(exc), "本次导出未完成。可核对路径或输入文件后重新按 x 导出。"])
 
 
+def _next_month(stdscr, browser: ReportBrowser):
+    from .tui_next_month import load_next_month, month_workspace, next_month_context, prepare_next_month
+
+    if browser.period or browser.error or browser.help or not browser.outcome:
+        return
+    try:
+        month, _ = next_month_context(browser.config, browser.configs)
+        remembered = browser.next_worksheets.get(browser.config)
+        context = [f"当前最新配置：{browser.config}", f"下一月：{month}",
+                   "1：准备填写表。目标只是提议，账户变化及月末完整性都不自动批准。",
+                   "2：载入已填好的 next-month.yaml。沿原 cutover 重放，原月份配置保留。",
+                   "请先用编辑器填写该表；未填完时只列出字段及行号，不生成新月配置。"]
+        default_action = "2" if remembered else "1"
+        action = _read_field(stdscr, "准备／载入下一月", context, f"选择 1 或 2（Enter 采用 {default_action}）：")
+        if action is None:
+            return
+        action = action.strip() or default_action
+        require(action in {"1", "2"}, "TUI_NEXT_MONTH_ACTION_INVALID", "请输入 1（准备）或 2（载入）")
+        if action == "1":
+            suggested = month_workspace(browser.config, browser.review_roots[browser.index]) / (
+                month + datetime.now().strftime("-%Y%m%d-%H%M%S-") + uuid4().hex[:8])
+            destination = _read_field(stdscr, "保存下一月填写表", context, "新的输出目录：", str(suggested))
+            if destination is None:
+                return
+            require(bool(destination.strip()), "TUI_NEXT_MONTH_PATH_INVALID", "请填写新的输出目录")
+            output = Path(destination.strip()).expanduser().resolve()
+            result = prepare_next_month(browser.config, browser.configs, output)
+            browser.next_worksheets[browser.config] = Path(result["worksheet"])
+            lines = [f"填写表：{result['worksheet']}", f"说明：{output / 'START_HERE.md'}",
+                     f"待确认账户／币种 {result['changed_accounts']} 户；本月已记交易 {result['booked_transactions_in_month']} 条。",
+                     "用编辑器填好并保存后，回到这里按 n，选择 2 载入；当前月报仍保留。",
+                     "生成填写表不等于批准目标、月末完整性或签发下一月月报。"]
+            if not result["booked_transactions_in_month"]:
+                lines.append("下一月没有已记交易：请核对账单是否确已导入；零笔不能证明资料完整。")
+            _message(stdscr, "下一月填写表已准备", lines)
+        else:
+            filename = _read_field(stdscr, "载入已填写的下一月表", context, "next-month.yaml 完整路径：", str(remembered or ""))
+            if filename is None:
+                return
+            require(bool(filename.strip()), "TUI_NEXT_MONTH_PATH_INVALID", "请填写 next-month.yaml 路径")
+            worksheet = Path(filename.strip()).expanduser().resolve()
+            result = load_next_month(browser.config, browser.configs, worksheet)
+            browser.next_worksheets[browser.config] = worksheet
+            if not result.get("config"):
+                _message(stdscr, "下一月填写仍待确认", [f"填写表：{worksheet}",
+                    *[f"{item['detail']} [{item['source']}]" for item in result["review_items"]],
+                    "尚未生成下一月配置；填好保存后再次按 n 选择 2。"])
+                return
+            browser.show_next_month(result)
+            lines = [f"下一月配置已保存并载入：{browser.config}",
+                     "按 [ 可返回原月份；重启时请使用这里的新配置路径。"]
+            if browser.error:
+                lines += ["配置已保存，月报计算仍有错误；修正后按 r 重算：", str(browser.error)]
+            else:
+                lines.append(f"{result['month']} 状态：{browser.outcome['status']}；待审 {len(browser.reviews())} 项。")
+                if any(item.get("reason_code") == "EXTERNAL_SCOPE_PENDING" for item in browser.reviews()):
+                    lines.append("月末资料尚未确认；核对该截止日资料后可按 f。")
+            _message(stdscr, "下一月已载入", lines)
+    except (BudgetError, OSError, UnicodeError, ValueError) as exc:
+        browser.refresh()
+        _message(stdscr, "下一月操作未完成", [str(exc), "核对填写表、配置与输出目录后可再次按 n。"])
+
+
 def _confirm_month_end(stdscr, browser: ReportBrowser):
     from .tui_month_end import prepare_month_end, save_month_end
 
@@ -729,6 +805,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             _export_report(stdscr, browser)
         elif key == "f":
             _confirm_month_end(stdscr, browser)
+        elif key == "n":
+            _next_month(stdscr, browser)
         elif key == "t":
             browser.view = "reviews" if browser.view == "report" else "report"
             browser.detail, browser.help, browser.offset, browser.selected = None, False, 0, 0

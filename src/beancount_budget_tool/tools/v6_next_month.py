@@ -117,8 +117,10 @@ def _proposals(paths, doc, month):
                                           "allocation_proposal_from": sources}
 
 
-def create_next_month(config: Path, output: Path) -> dict:
+def create_next_month(config: Path, output: Path, *, expected_inputs: dict[Path, bytes] | None = None) -> dict:
     config, output = config.resolve(), output.resolve()
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     doc, paths, cutover = _config(config)
     month = _next(doc["month"])
     before = {path: path.read_bytes() for path in {config, *paths.values()} if path != paths["ledger"]}
@@ -163,14 +165,19 @@ def create_next_month(config: Path, output: Path) -> dict:
             "未清债务、其他责任及新月交易仍需按月报提示审阅；原有交易认领和 cutover 期初继续复用。"
             "本月零交易时，请检查账单是否真的导入；生成配置不是资料完整或月报签发。\n")
     _unchanged(before)
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     _publish(output, {"next-month.yaml": worksheet, "preparation.yaml": notes, "START_HERE.md": instructions})
     return {"status": "DRAFT_CREATED", "month": month, "worksheet": str(output / "next-month.yaml"),
             "changed_accounts": len(changes), "booked_transactions_in_month": transactions}
 
 
-def compile_next_month(worksheet: Path, output: Path | None = None) -> dict:
+def compile_next_month(worksheet: Path, output: Path | None = None, *, include_transactions: bool = False,
+                       expected_inputs: dict[Path, bytes] | None = None) -> dict:
     worksheet = worksheet.resolve()
     output = (output or worksheet.parent / "compiled").resolve()
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     proposal = load_yaml(worksheet)
     require(type(proposal) is dict and set(proposal) == FIELDS and
             type(proposal["schema"]) is int and proposal["schema"] == 6 and
@@ -278,6 +285,9 @@ def compile_next_month(worksheet: Path, output: Path | None = None) -> dict:
                 type(proposal["completeness_reason"]) is not str or not proposal["completeness_reason"].strip()):
             pending(("completeness_reason",), "填写截至本月末账单、责任及在途付款完整性的核对依据")
         if issues:
+            _unchanged(before)
+            if expected_inputs is not None:
+                _unchanged(expected_inputs)
             return {"status": "NEEDS_REVIEW", "config": None, "month": month, "review_items": issues}
         # Validate all preserved template layers, not just the entered amounts.
         load_purpose_targets(paths["purpose_plans"], month, doc["report_currency"], set(owner_ids.values()))
@@ -314,13 +324,22 @@ def compile_next_month(worksheet: Path, output: Path | None = None) -> dict:
             candidate["completeness"] = "completeness.yaml"
         files["month.yaml"] = candidate
     _unchanged(before)
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     _publish(output, files)
     result = {"status": "MONTH_PREPARED", "month": month, "config": str(output / "month.yaml"), "review_items": []}
     try:
-        return {**result, "workflow": audit_month_workflow(output / "month.yaml")}
-    except BudgetError as exc:
+        workflow = (audit_month_workflow(output / "month.yaml", include_transactions=True) if include_transactions else
+                    audit_month_workflow(output / "month.yaml"))
+        _unchanged(before)
+        if expected_inputs is not None:
+            _unchanged(expected_inputs)
+        return {**result, "workflow": workflow}
+    except (BudgetError, OSError, UnicodeError) as exc:
         return {**result, "workflow": None,
-                "report_error": {"code": exc.code, "message": exc.message, "source": exc.source}}
+                "report_error": {"code": exc.code if isinstance(exc, BudgetError) else "NEXT_MONTH_IO_ERROR",
+                                 "message": exc.message if isinstance(exc, BudgetError) else str(exc),
+                                 "source": exc.source if isinstance(exc, BudgetError) else str(output / "month.yaml")}}
 
 
 def confirm_month(config: Path, reason: str, output: Path, *, include_transactions: bool = False,
