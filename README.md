@@ -38,6 +38,18 @@
 
 月报签发后在 TUI 按 `a` 可查看当月交易，筛选后按 Enter 看各分录分类、资金用途、卡债责任及账本原文；CLI 加 `--transactions` 可附完整逐笔来源。修改文件后重算，来源和详情随新审计更新。
 
+## 登记常用月份，直接启动
+
+已有月份配置时，可登记一个项目入口：
+
+```bash
+beancount-budget-project --config budget/2023-07/compiled/month.yaml --config budget/2023-08/compiled/month.yaml --output budget-project.yaml
+beancount-budget-tool --format tui
+beancount-budget-tool --month 2023-07 --format tui
+```
+
+在该目录运行会读取 `budget-project.yaml`；在其他目录可用 `--project 路径` 指定。TUI 按 `m` 直接跳到已登记月份，按 `n` 准备／载入下一月。在 TUI 中保存审阅或月末声明、载入下一月时，入口自动指向新配置；重启默认打开上次保存的月份。入口只记录路径，每次查看仍会重新审计。Windows exe 写法见[试用步骤](packaging/WINDOWS-START.md)。
+
 ## 开发资料
 
 实现或审阅 v6：从[文档导航](docs/README.md)进入需求、架构和实施状态。

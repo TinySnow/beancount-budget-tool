@@ -19,6 +19,18 @@
 TUI 按 `q` 退出；若不想用 TUI，去掉 `--format tui` 即可看文本。
 `demo` 已存在时请换一个新的输出目录；程序不会覆盖它。
 
+可再登记一个默认项目入口，以后不用反复填写配置路径：
+
+```powershell
+.\beancount-budget-tool.exe project --config .\demo\month.yaml --output .\budget-project.yaml
+.\beancount-budget-tool.exe --format tui
+```
+
+已有多个月份时，可重复提供 `--config`。从这个文件夹启动会读取 `budget-project.yaml`；
+也可用 `--project "项目文件路径" --month 2026-09 --format tui` 指定月份。
+TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明或载入下一月时，项目入口会更新到新配置。
+入口只记录路径；每次查看仍重新审计，不能代替逐月确认。
+
 ## 2. 使用真实账本
 
 如果已经有月报配置，直接换成它的路径：
@@ -49,6 +61,7 @@ TUI 按 `q` 退出；若不想用 TUI，去掉 `--format tui` 即可看文本。
 |---|---|
 | `beancount-budget-tool` | `.\beancount-budget-tool.exe` |
 | `beancount-budget-init` | `.\beancount-budget-tool.exe init` |
+| `beancount-budget-project` | `.\beancount-budget-tool.exe project` |
 | `beancount-budget-review-month` | `.\beancount-budget-tool.exe review-month` |
 | `beancount-budget-review` | `.\beancount-budget-tool.exe review` |
 | `beancount-budget-next-month` | `.\beancount-budget-tool.exe next-month` |

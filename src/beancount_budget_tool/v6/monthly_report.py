@@ -527,7 +527,10 @@ def main(argv=None) -> int:
     from ..console import configure_output
     configure_output()
     parser = argparse.ArgumentParser(description="从已审侧文件生成 v6 月报")
-    parser.add_argument("--config", required=True, type=Path, help="schema 6 月报配置 YAML")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--config", type=Path, help="schema 6 月报配置 YAML")
+    source.add_argument("--project", type=Path, help="项目入口；省略输入时读取当前目录 budget-project.yaml")
+    parser.add_argument("--month", help="选择项目已登记月份 YYYY-MM；省略时使用项目默认月份")
     parser.add_argument("--format", choices=("text", "json", "tui"), default="text")
     parser.add_argument("--transactions", action="store_true", help="已签发时附逐笔来源详情；TUI 自动启用，可按 a 浏览")
     parser.add_argument("--tui-config", type=Path, action="append", default=[],
@@ -535,12 +538,34 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.tui_config and args.format != "tui":
         parser.error("--tui-config 仅用于 --format tui")
+    if args.month is not None and args.config:
+        parser.error("--month 只用于项目入口；--config 已经指定月份")
+    from .project import DEFAULT_PROJECT, load_project
+    project = None
+    if not args.config:
+        project_path = args.project or Path.cwd() / DEFAULT_PROJECT
+        if not args.project and not project_path.is_file():
+            parser.error("请提供 --config 或 --project，或先用 project 命令生成当前目录的 budget-project.yaml")
+        if args.tui_config:
+            parser.error("项目模式使用已登记的月份清单，不同时使用 --tui-config")
+        try:
+            project = load_project(project_path)
+            args.config = project.select(args.month)
+        except (BudgetError, OSError, UnicodeError) as exc:
+            print(json.dumps({"error": {"code": exc.code if isinstance(exc, BudgetError) else "PROJECT_IO_ERROR",
+                "message": exc.message if isinstance(exc, BudgetError) else str(exc),
+                "source": exc.source if isinstance(exc, BudgetError) else str(project_path)}}, ensure_ascii=False), file=sys.stderr)
+            return 2
     if args.format == "tui":
         from functools import partial
         from .tui import run_report_tui
         try:
-            run_report_tui([args.config, *args.tui_config],
-                           partial(audit_month_workflow, include_transactions=True), render_workflow_text)
+            if project:
+                run_report_tui(list(project.months.values()), partial(audit_month_workflow, include_transactions=True),
+                               render_workflow_text, project=project, initial_config=args.config)
+            else:
+                run_report_tui([args.config, *args.tui_config],
+                               partial(audit_month_workflow, include_transactions=True), render_workflow_text)
         except BudgetError as exc:
             print(json.dumps({"error": {"code": exc.code, "message": exc.message,
                                         "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
