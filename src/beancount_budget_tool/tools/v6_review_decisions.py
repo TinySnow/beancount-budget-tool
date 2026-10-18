@@ -55,12 +55,15 @@ def _config(config: Path):
 
 
 def _unchanged(before: dict[Path, bytes]):
-    require(all(path.is_file() and path.read_bytes() == content for path, content in before.items()),
-            "INPUT_CHANGED", "审阅期间配置或侧文件发生变化；请重跑")
+    for path, content in before.items():
+        require(path.is_file() and path.read_bytes() == content,
+                "INPUT_CHANGED", "审阅期间配置或侧文件发生变化；请重跑", str(path))
 
 
-def create_review(config: Path, output: Path) -> dict:
+def create_review(config: Path, output: Path, *, expected_inputs: dict[Path, bytes] | None = None) -> dict:
     config, output = config.resolve(), output.resolve()
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     doc, paths, cutover = _config(config)
     before = {path: path.read_bytes() for path in {config, *paths.values()} if path != paths["ledger"]}
     with _inputs(paths["ledger"], doc["month"], cutover) as (fin, _):
@@ -102,6 +105,8 @@ def create_review(config: Path, output: Path) -> dict:
             "它们不会被批准或隐藏；本表只覆盖当前已发现的分类和 H 用途待审。"
             "保存后可能出现下一层待审，待审清零也须通过月报指标检查才能签发。\n")
     _unchanged(before)
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     _publish(output, {"decisions.yaml": worksheet, "choices.yaml": choices,
                       "other-items.yaml": {"status": workflow["status"], "items": other},
                       "START_HERE.md": instructions})
@@ -110,9 +115,12 @@ def create_review(config: Path, output: Path) -> dict:
             "workflow_status": workflow["status"]}
 
 
-def apply_review(worksheet: Path, output: Path | None = None) -> dict:
+def apply_review(worksheet: Path, output: Path | None = None, *,
+                 expected_inputs: dict[Path, bytes] | None = None) -> dict:
     worksheet = worksheet.resolve()
     output = (output or worksheet.parent / "reviewed").resolve()
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     document = load_yaml(worksheet)
     require(type(document) is dict and set(document) == {"schema", "config", "month", "cutover", "rows"} and
             type(document["schema"]) is int and document["schema"] == 6 and
@@ -179,6 +187,9 @@ def apply_review(worksheet: Path, output: Path | None = None) -> dict:
             changed[target][field].append({"claim": item["ref"], "reason": row["reason"], "slices": slices})
             accepted.append({"kind": row["kind"], "source": item["source"], "decision": row["decision"]})
         if not accepted:
+            _unchanged(before)
+            if expected_inputs is not None:
+                _unchanged(expected_inputs)
             return {"status": "NO_APPROVED_DECISIONS", "config": None, "accepted": [], "workflow": current}
         require(not output.exists(), "SETUP_OUTPUT_EXISTS", "输出目录已存在；请选择新目录", str(output))
         # Validate both claim domains before publishing any review decisions.
@@ -195,35 +206,57 @@ def apply_review(worksheet: Path, output: Path | None = None) -> dict:
         published_config = {**doc, **{key: _ledger_reference(path, output) for key, path in paths.items()},
                             **{key: key + ".yaml" for key in changed}}
     _unchanged(before)
+    if expected_inputs is not None:
+        _unchanged(expected_inputs)
     _publish(output, {"month.yaml": published_config,
                       **{key + ".yaml": value for key, value in changed.items()}})
     # Render from final paths, so any remaining diagnostics open real files.
     result = {"status": "DECISIONS_SAVED", "config": str(output / "month.yaml"), "accepted": accepted}
     try:
-        return {**result, "workflow": audit_month_workflow(output / "month.yaml")}
-    except BudgetError as exc:
+        workflow = audit_month_workflow(output / "month.yaml")
+        _unchanged(before)
+        if expected_inputs is not None:
+            _unchanged(expected_inputs)
+        return {**result, "workflow": workflow}
+    except (BudgetError, OSError, UnicodeError) as exc:
         # Valid source decisions remain available if the next report stage
         # uncovers a separate plan/configuration error.
         return {**result, "workflow": None,
-                "report_error": {"code": exc.code, "message": exc.message, "source": exc.source}}
+                "report_error": {"code": exc.code if isinstance(exc, BudgetError) else "REVIEW_IO_ERROR",
+                                 "message": exc.message if isinstance(exc, BudgetError) else str(exc),
+                                 "source": exc.source if isinstance(exc, BudgetError) else str(output / "month.yaml")}}
 
 
 def main(argv=None) -> int:
     configure_output()
     parser = argparse.ArgumentParser(description=__doc__)
-    action = parser.add_mutually_exclusive_group(required=True)
+    action = parser.add_mutually_exclusive_group()
     action.add_argument("--config", type=Path, help="导出该月分类与 H 资金用途待审表")
     action.add_argument("--apply", type=Path, help="保存已明确批准的待审表决定并重跑月报")
+    parser.add_argument("--project", type=Path, help="使用项目最新月份；保存新配置后自动更新该月入口")
+    parser.add_argument("--month", help="项目中的月份 YYYY-MM；省略时使用默认月份，仅用于导出填写表")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)
-    if args.config and args.output is None:
+    if not (args.config or args.apply or args.project):
+        parser.error("请提供 --project、--config 或 --apply")
+    if args.month and (not args.project or args.apply):
+        parser.error("--month 须与 --project 一起用于导出；保存时按填写表引用的月份")
+    if not args.apply and args.output is None:
         parser.error("导出待审表须提供 --output 新目录")
     try:
-        result = apply_review(args.apply, args.output) if args.apply else create_review(args.config, args.output)
+        context = None
+        if args.project:
+            from ..v6.project_actions import prepare_project_action
+            context = prepare_project_action(args.project, config=args.config, worksheet=args.apply, month=args.month)
+        config = context.config if context else args.config
+        guard = {"expected_inputs": context.inputs} if context else {}
+        result = apply_review(args.apply, args.output, **guard) if args.apply else create_review(config, args.output, **guard)
+        if context:
+            result = context.finish(result)
     except (BudgetError, OSError, UnicodeError) as exc:
         error = {"code": exc.code, "message": exc.message, "source": exc.source} if isinstance(exc, BudgetError) else {
-            "code": "REVIEW_IO_ERROR", "message": str(exc), "source": str(args.apply or args.config)}
+            "code": "REVIEW_IO_ERROR", "message": str(exc), "source": str(args.apply or args.config or args.project)}
         print(json.dumps({"error": error}, ensure_ascii=False), file=sys.stderr)
         return 2
     if args.format == "json":
@@ -238,7 +271,10 @@ def main(argv=None) -> int:
             print(f"决定已保存，月报尚未通过：{error['code']} {error['message']} ({error['source']})")
         else:
             print(render_workflow_text(result["workflow"]))
-    return 2 if result.get("report_error") else 0
+    if args.format != "json":
+        from ..v6.project_actions import print_project_result
+        print_project_result(result)
+    return 2 if result.get("report_error") or result.get("project_error") else 0
 
 
 if __name__ == "__main__":

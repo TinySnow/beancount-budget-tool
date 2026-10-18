@@ -31,7 +31,7 @@ TUI 按 `q` 退出；若不想用 TUI，去掉 `--format tui` 即可看文本。
 TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明或载入下一月时，项目入口会更新到新配置。
 入口只记录路径；每次查看仍重新审计，不能代替逐月确认。
 
-命令行保存了新的月份配置时，登记到原项目即可；同月替换入口，其他月份保留：
+没有带 `--project` 的命令保存了新配置时，可登记到原项目；同月替换入口，其他月份保留：
 
 ```powershell
 .\beancount-budget-tool.exe project --update .\budget-project.yaml --config "新配置路径\month.yaml" --default-month 2026-10
@@ -40,6 +40,17 @@ TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明
 ```
 
 把路径和月份换成自己的；区间必须逐月齐全。待审未完成时会列原因和位置，暂不输出累计数字。
+
+后续审阅和准备下一月也能直接使用项目，保存后自动更新入口：
+
+```powershell
+.\beancount-budget-tool.exe review --project .\budget-project.yaml --output .\review-current
+# 填写 review-current\decisions.yaml 的决定、理由和批准项后：
+.\beancount-budget-tool.exe review --project .\budget-project.yaml --apply .\review-current\decisions.yaml
+.\beancount-budget-tool.exe next-month --project .\budget-project.yaml --output .\next-month
+```
+
+打开新目录的 `START_HERE.md` 继续。准备填写表不会批准交易或月末资料；旧表引用的配置已被更新时，程序会要求从最新配置重新生成填写表。
 
 ## 2. 使用真实账本
 
