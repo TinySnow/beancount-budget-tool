@@ -50,6 +50,16 @@ beancount-budget-tool --month 2023-07 --format tui
 
 在该目录运行会读取 `budget-project.yaml`；在其他目录可用 `--project 路径` 指定。TUI 按 `m` 直接跳到已登记月份，按 `n` 准备／载入下一月。在 TUI 中保存审阅或月末声明、载入下一月时，入口自动指向新配置；重启默认打开上次保存的月份。入口只记录路径，每次查看仍会重新审计。Windows exe 写法见[试用步骤](packaging/WINDOWS-START.md)。
 
+用命令行生成下一月或保存新审阅配置后，将新路径登记到已有项目：
+
+```bash
+beancount-budget-project --update budget-project.yaml --config budget/2023-09/compiled/month.yaml --default-month 2023-09
+beancount-budget-report --from 2023-07 --through 2023-09
+beancount-budget-report --from 2023-07 --through 2023-09 --format csv --output 2023-Q3.csv
+```
+
+登记同一个月会替换该月入口，其他月份保留；省略 `--default-month` 会保留原启动月份。区间命令也支持 `--project 路径`，不指定范围时检查全部已登记月份。缺月会报错；有月份待审时，先显示待审原因和位置，完成审阅后再输出累计数字。
+
 ## 开发资料
 
 实现或审阅 v6：从[文档导航](docs/README.md)进入需求、架构和实施状态。
