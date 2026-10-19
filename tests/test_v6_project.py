@@ -16,12 +16,12 @@ import yaml
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.launcher import main as launch
 from beancount_budget_tool.tools.v6_init import _SetupDumper, compile_setup
-from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
+from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month, confirm_month
 from beancount_budget_tool.tools.v6_review_decisions import apply_review
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, main, render_workflow_text
 from beancount_budget_tool.v6.period_report import audit_period, audit_project_period
 from beancount_budget_tool.v6.project import create_project, load_project, _metadata, _validate
-from beancount_budget_tool.v6.tui import ReportBrowser, _confirm_month_end, _edit_review, _jump_month, _next_month, _report_browser
+from beancount_budget_tool.v6.tui import ReportBrowser, _confirm_month_end, _draw_browser, _edit_review, _export_report, _jump_month, _next_month, _report_browser
 from test_v6_tui import FakeScreen
 
 
@@ -616,6 +616,173 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual((code, output), (2, ""))
         self.assertEqual(json.loads(errors)["error"]["code"], "PROJECT_MONTH_MISMATCH")
         self.assertFalse((self.base / "wrong").exists())
+
+    def external_revision(self):
+        """A virtual CLI save lowers September's target from 200 to 100."""
+        config = self.configs[0]
+        document = yaml.safe_load(config.read_text(encoding="utf-8"))
+        plans = yaml.safe_load((config.parent / document["expense_plans"]).read_text(encoding="utf-8"))
+        targets = plans["months"]["2026-09"]["expense_subtree_targets"]
+        targets[next(iter(targets))] = "100"
+        revised_plan = config.with_name("external-plans.yaml")
+        save(revised_plan, plans)
+        document["expense_plans"] = revised_plan.name
+        revised = config.with_name("external-month.yaml")
+        save(revised, document)
+        return revised
+
+    def test_tui_refresh_follows_external_save_and_new_months_without_jumping_default(self):
+        browser = self.browser(self.project(False))
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "190")
+        revised = self.external_revision()
+        load_project(self.path).register([revised, *self.configs[1:]], default_month="2026-11")
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.config, revised)
+        self.assertEqual(browser.project.default_month, "2026-11")
+        self.assertEqual(browser.configs, [revised, *self.configs[1:]])
+        self.assertEqual(browser.outcome["month"], "2026-09")
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "90")
+        browser.jump_month("2026-11")
+        browser.refresh()
+        self.assertEqual(browser.outcome["month"], "2026-11")
+
+    def test_actual_r_key_reloads_project_paths(self):
+        browser = self.browser(self.project(False))
+        revised = self.external_revision()
+        keys = iter(("r", "q"))
+        screen = FakeScreen(size=(30, 150))
+        def get_key():
+            key = next(keys)
+            if key == "r":
+                load_project(self.path).register([revised])
+            return key
+        with patch.object(screen, "get_wch", side_effect=get_key), patch("beancount_budget_tool.v6.tui.curses.curs_set"):
+            _report_browser(screen, browser)
+        self.assertEqual(browser.config, revised)
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "90")
+
+    def test_project_refresh_does_not_need_obsolete_config_file_to_still_exist(self):
+        browser = self.browser(self.project(False))
+        revised = self.external_revision()
+        load_project(self.path).register([revised])
+        self.configs[0].unlink()
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.config, revised)
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "90")
+
+    def test_project_interval_refresh_uses_external_revised_month_config(self):
+        browser = self.browser(self.project())
+        browser.toggle_period()
+        browser.refresh()
+        revised = self.external_revision()
+        load_project(self.path).register([revised])
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertTrue(browser.period)
+        self.assertEqual(browser.config, self.configs[2])
+        self.assertEqual(browser.outcome["months"][0]["config"], str(revised))
+        first = browser.outcome["report"]["monthly_reports"][0]
+        self.assertEqual(first["max_spendable"]["max_spendable"], "90")
+        self.assertEqual(browser.outcome["report"]["closing"]["max_spendable"]["max_spendable"], "170")
+
+    def test_tui_export_follows_project_save_during_export_form(self):
+        browser = self.browser(self.project(False))
+        revised = self.external_revision()
+        exported = self.base / "最新月报.json"
+        def form(_screen, title, *_args):
+            if title == "导出报表":
+                return "json"
+            load_project(self.path).register([revised])
+            return str(exported)
+        with patch("beancount_budget_tool.v6.tui._read_field", side_effect=form), \
+             patch("beancount_budget_tool.v6.tui._message") as message:
+            _export_report(FakeScreen(), browser)
+        self.assertEqual(message.call_args.args[1], "已导出")
+        self.assertEqual(browser.config, revised)
+        self.assertEqual(json.loads(exported.read_text(encoding="utf-8"))["report"]["max_spendable"]["max_spendable"], "90")
+
+    def test_invalid_project_clears_old_numbers_and_recovers_after_repair(self):
+        browser = self.browser(self.project(False))
+        original = self.path.read_bytes()
+        browser.toggle_transactions()
+        browser.open_detail()
+        self.path.write_text("months: [\n", encoding="utf-8")
+        browser.refresh()
+        self.assertEqual(browser.error.code, "YAML_INVALID")
+        self.assertIsNone(browser.outcome)
+        self.assertIsNone(browser.detail)
+        self.assertEqual(browser.lines, [])
+        screen = FakeScreen(size=(30, 150))
+        _draw_browser(screen, browser)
+        self.assertNotIn("最多能花：190", "\n".join(value for _, _, value in screen.rows))
+        self.path.write_bytes(original)
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "190")
+
+    def test_removed_current_month_is_reported_instead_of_silently_switching_month(self):
+        browser = self.browser(self.project())
+        browser.jump_month("2026-09")
+        browser.refresh()
+        project = yaml.safe_load(self.path.read_text(encoding="utf-8"))
+        del project["months"]["2026-09"]
+        save(self.path, project)
+        browser.refresh()
+        self.assertEqual(browser.error.code, "PROJECT_MONTH_MISSING")
+        self.assertIsNone(browser.outcome)
+        self.assertEqual(browser.config, self.configs[0])
+
+    def test_changing_project_ledger_requires_reopening_instead_of_changing_scope(self):
+        browser = self.browser(self.project(False))
+        other_ledger = self.ledger_root / "other.bean"
+        other_ledger.write_bytes((self.ledger_root / "main.bean").read_bytes())
+        document = yaml.safe_load(self.configs[0].read_text(encoding="utf-8"))
+        document["ledger"] = str(other_ledger)
+        save(self.configs[0], document)
+        browser.refresh()
+        self.assertEqual(browser.error.code, "PROJECT_CONTEXT_CHANGED")
+        self.assertIsNone(browser.outcome)
+
+    def test_project_edit_while_tui_audits_prevents_publishing_numbers_or_export(self):
+        browser = self.browser(self.project(False))
+        loader = browser.loader
+        def calculate_and_edit(config):
+            result = loader(config)
+            self.path.write_bytes(self.path.read_bytes() + b"\n# project edited during audit\n")
+            return result
+        exported = self.base / "must-not-export.json"
+        with patch.object(browser, "loader", side_effect=calculate_and_edit), \
+             patch("beancount_budget_tool.v6.tui._read_field", side_effect=["json", str(exported)]), \
+             patch("beancount_budget_tool.v6.tui._message") as message:
+            _export_report(FakeScreen(), browser)
+        self.assertEqual(message.call_args.args[1], "导出失败")
+        self.assertEqual(browser.error.code, "INPUT_CHANGED")
+        self.assertIsNone(browser.outcome)
+        self.assertFalse(exported.exists())
+        browser.refresh()
+        self.assertIsNone(browser.error)
+
+    def test_refresh_retains_unregistered_local_save_then_recovers_after_registration(self):
+        browser = self.browser(self.project(False))
+        result = confirm_month(browser.config, "公开虚构九月完整", self.base / "closed")
+        with patch.object(browser.project, "remember", side_effect=PermissionError("virtual write failure")):
+            browser.show_saved_month(result)
+        local = Path(result["config"])
+        self.assertEqual(browser.config, local)
+        self.assertIsNotNone(browser.project_error)
+        load_project(self.path).register([self.configs[1]], default_month="2026-10")
+        browser.refresh()
+        self.assertEqual(browser.config, local)
+        self.assertIsNotNone(browser.project_error)
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "190")
+        load_project(self.path).register([local])
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertIsNone(browser.project_error)
+        self.assertEqual(browser.config, local)
+        self.assertEqual(browser.configs, [local, self.configs[1]])
 
 
 if __name__ == "__main__":

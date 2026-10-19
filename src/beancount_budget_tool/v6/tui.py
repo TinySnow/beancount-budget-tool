@@ -124,6 +124,12 @@ def _wrap(lines: list[str], columns: int) -> list[str]:
     return wrapped
 
 
+def _review_root(path: Path) -> Path:
+    return (path.parent.parent.parent if
+            path.name == "month.yaml" and path.parent.name == "reviewed" and
+            path.parent.parent.parent.name == "tui-reviews" else path.parent / "tui-reviews")
+
+
 class ReportBrowser:
     """Fresh workflow results and the current configuration for each supplied month."""
 
@@ -137,10 +143,7 @@ class ReportBrowser:
         self.project_error = None
         # Reopening a saved configuration continues in the same record root;
         # repeated sessions must not grow paths indefinitely on Windows.
-        self.review_roots = [path.parent.parent.parent if
-                             path.name == "month.yaml" and path.parent.name == "reviewed" and
-                             path.parent.parent.parent.name == "tui-reviews" else
-                             path.parent / "tui-reviews" for path in self.configs]
+        self.review_roots = [_review_root(path) for path in self.configs]
         self.saved = set()
         self.next_worksheets: dict[Path, Path] = {}
         self.index = self.configs.index(initial_config.resolve()) if initial_config is not None else 0
@@ -167,6 +170,8 @@ class ReportBrowser:
     def refresh(self):
         self.clear()
         try:
+            self.sync_project()
+            project_before = self.project.original if self.project is not None and self.project_error is None else None
             if self.period:
                 from .period_report import audit_period, render_text
                 outcome = audit_period(list(self.configs))
@@ -174,11 +179,46 @@ class ReportBrowser:
             else:
                 outcome = self.loader(self.config)
                 renderer = self.renderer
+            if project_before is not None:
+                require(self.project.path.read_bytes() == project_before, "INPUT_CHANGED",
+                        "计算期间项目入口发生变化；请重新重算", str(self.project.path))
             self._accept_outcome(outcome, renderer)
         except BudgetError as exc:
             self.error = exc
         except (OSError, UnicodeError) as exc:
             self.error = BudgetError("TUI_INPUT_ERROR", str(exc), str(getattr(exc, "filename", None) or self.config))
+
+    def sync_project(self):
+        """Follow external CLI saves, preserving the selected month and local work."""
+        if self.project is None:
+            return
+        from .project import _metadata, load_project
+        latest = load_project(self.project.path)
+        require(latest.identity == self.project.identity, "PROJECT_CONTEXT_CHANGED",
+                "项目的账本／cutover／报告货币已更换；请退出后重新打开项目", str(latest.path))
+        registered = set(self.project.months.values())
+        local = [self.configs[index] for index in self.saved if self.configs[index] not in registered]
+        for path in local:
+            month, _ = _metadata(path)
+            if latest.months.get(month) != path:
+                # A failed project save must not discard an already published
+                # financial config, even when a CLI session changes the manifest.
+                self.project_error = self.project_error or BudgetError(
+                    "PROJECT_LOCAL_SAVE_PENDING", "本次保存的配置尚未登记；请先登记新路径或显式打开它", str(path))
+                return
+        month = next((month for month, path in self.project.months.items() if path == self.config), None)
+        if month is None:
+            month, _ = _metadata(self.config)
+        require(month in latest.months, "PROJECT_MONTH_MISSING",
+                f"当前查看的 {month} 已从项目移除；请退出后重新选择月份", str(latest.path))
+        roots = dict(zip(self.configs, self.review_roots))
+        saved = {self.configs[index] for index in self.saved}
+        configs = list(latest.months.values())
+        self.review_roots = [roots.get(path, _review_root(path)) for path in configs]
+        self.saved = {index for index, path in enumerate(configs) if path in saved}
+        self.next_worksheets = {path: worksheet for path, worksheet in self.next_worksheets.items() if path in configs}
+        self.index = configs.index(latest.months[month])
+        self.configs, self.project, self.project_error = configs, latest, None
 
     def _accept_outcome(self, outcome: dict, renderer: Callable):
         """Display a fresh audit result, including one returned after publication."""
@@ -353,6 +393,8 @@ HELP = [
     "[ / ]：按命令提供的顺序切换配置，每次重新审计，不复用其他月份的声明或数字。",
     "m：月报中输入 YYYY-MM 直接跳到已载入的月份；每次重新审计。区间待审中仍转到所选待审月份。",
     "项目模式会在保存审阅／月末声明或载入下一月后更新项目入口，默认进入上次保存的月份；登记路径不代表签发。",
+    "项目模式按 r 重读已登记路径，跟进其他命令行会话的保存；保持当前查看月份，不随外部默认月份跳转。导出也先重读。",
+    "项目更新失败但配置已保存时，保留本次新路径及警告；先登记该路径或显式打开，避免刷新丢失审阅结果。",
     "n：准备下一月填写表；用编辑器填好后，再按 n 选择载入。未确认的目标／账户继续列待审，不自动沿用月末声明。",
     "下一月保存后自动加入当前配置清单，可用 [／] 返回前月；重启时仍须提供已保存配置路径。",
     "c：切换当前月报与连续月份比较；使用命令提供的全部最新配置，区间内不能缺月。",
