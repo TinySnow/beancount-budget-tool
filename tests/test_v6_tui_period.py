@@ -8,8 +8,11 @@ from unittest.mock import patch
 
 import yaml
 
+from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
-from beancount_budget_tool.v6.tui import ReportBrowser, _draw_browser, _report_browser
+from beancount_budget_tool.v6.period_report import audit_period, render_csv
+from beancount_budget_tool.v6.project import create_project, load_project
+from beancount_budget_tool.v6.tui import ReportBrowser, _draw_browser, _export_report, _report_browser, _select_period
 from test_v6_tui import FakeScreen
 
 
@@ -193,6 +196,181 @@ class IntervalBrowserTests(unittest.TestCase):
         browser.refresh()
         self.assertEqual(browser.outcome["months"][1]["config"], str(latest))
         self.assertIn("包含 TUI 已保存的新配置", self.screen(browser))
+
+    def test_selected_range_audits_only_two_months_and_keeps_closing_stock_once(self):
+        browser = self.browser(list(reversed(self.configs)))
+        browser.select_period("2026-11", "2026-12")
+        with patch("beancount_budget_tool.v6.period_report.audit_month_workflow", wraps=audit_month_workflow) as audit:
+            browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual([call.args[0] for call in audit.call_args_list], self.configs[1:])
+        self.assertEqual(browser.outcome, audit_period(self.configs[1:], "2026-11", "2026-12"))
+        report = browser.outcome["report"]
+        self.assertEqual(report["expense_totals"]["direct_spent"], "-740")
+        self.assertEqual(report["closing"]["max_spendable"]["max_spendable"], "1160")
+        self.assertEqual(set(browser.period_inputs), set(self.configs[1:]))
+        self.assertIn("区间 2026-11 至 2026-12", self.screen(browser))
+        browser.help = True
+        text = self.screen(browser)
+        self.assertNotIn(str(self.configs[0]), text)
+        self.assertIn(str(self.configs[1]), text)
+
+    def test_one_month_range_and_returning_from_monthly_keep_the_query(self):
+        browser = self.browser()
+        browser.select_period("2026-10", "2026-10")
+        browser.refresh()
+        self.assertEqual(browser.outcome["report"]["expense_totals"]["direct_spent"], "2081")
+        self.assertEqual(browser.outcome["report"]["closing"]["max_spendable"]["max_spendable"], "880")
+        browser.toggle_period()
+        browser.refresh()
+        self.assertFalse(browser.period)
+        self.assertEqual(browser.outcome["month"], "2026-10")
+        browser.toggle_period()
+        browser.refresh()
+        self.assertEqual(browser.period_range, ("2026-10", "2026-10"))
+        self.assertEqual(len(browser.outcome["months"]), 1)
+
+    def test_pending_month_outside_range_does_not_block_selected_months(self):
+        original = self.configs[0]
+        document = yaml.safe_load(original.read_text(encoding="utf-8"))
+        document.pop("completeness")
+        self.runner["save"](original, document)
+        browser = self.browser()
+        browser.select_period("2026-11", "2026-12")
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(browser.outcome["review_items"], [])
+        browser.select_period()
+        browser.refresh()
+        self.assertEqual(browser.outcome["status"], "NEEDS_REVIEW")
+        self.assertIsNone(browser.outcome["report"])
+        self.assertEqual({item["month"] for item in browser.reviews()}, {"2026-10"})
+
+    def test_selected_pending_month_links_to_review_and_returns_to_same_range(self):
+        self.make_pending()
+        browser = self.browser()
+        browser.select_period("2026-11", "2026-12")
+        browser.refresh()
+        self.assertEqual(browser.outcome["status"], "NEEDS_REVIEW")
+        self.assertIsNone(browser.outcome["report"])
+        self.assertTrue(browser.open_review_month())
+        browser.refresh()
+        self.assertEqual(browser.outcome["month"], "2026-11")
+        self.configs[1].write_bytes(self.originals[self.configs[1]])  # Restore only this public fixture's statement.
+        browser.toggle_period()
+        browser.refresh()
+        self.assertEqual(browser.period_range, ("2026-11", "2026-12"))
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(browser.outcome["report"]["expense_totals"]["direct_spent"], "-740")
+
+    def test_missing_range_month_fails_then_a_valid_subrange_recovers(self):
+        browser = self.browser([self.configs[0], self.configs[2]])
+        browser.select_period("2026-10", "2026-12")
+        browser.refresh()
+        self.assertEqual(browser.error.code, "PERIOD_MONTHS_INCOMPLETE")
+        self.assertIn("2026-11", browser.error.message)
+        self.assertTrue(browser.error.source.startswith(str(self.configs[0]) + ":"))
+        self.assertIsNone(browser.outcome)
+        self.assertEqual(browser.lines, [])
+        self.assertIn("区间 2026-10 至 2026-12", self.screen(browser))
+        browser.select_period("2026-12", "2026-12")
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(browser.outcome["report"]["expense_totals"]["direct_spent"], "0")
+
+    def test_duplicate_month_is_rejected_only_when_inside_the_selected_range(self):
+        duplicate = self.configs[1].with_name("duplicate-month.yaml")
+        duplicate.write_bytes(self.configs[1].read_bytes())
+        self.addCleanup(duplicate.unlink)
+        browser = self.browser([*self.configs, duplicate])
+        browser.select_period("2026-11", "2026-12")
+        browser.refresh()
+        self.assertEqual(browser.error.code, "PERIOD_MONTH_DUPLICATE")
+        self.assertIsNone(browser.outcome)
+        browser.select_period("2026-12", "2026-12")
+        browser.refresh()
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+
+    def test_cancel_or_invalid_bounds_do_not_change_active_results_or_filter(self):
+        browser = self.browser()
+        browser.select_period("2026-11", "2026-12")
+        browser.refresh()
+        browser.filter("旅游")
+        original = browser.outcome
+        for answers in ((None,), ("2026-10", None), ("invalid", "2026-12"), ("2026-12", "2026-11")):
+            with self.subTest(answers=answers), patch("beancount_budget_tool.v6.tui._read_field", side_effect=answers), \
+                 patch("beancount_budget_tool.v6.tui._message"), \
+                 patch("beancount_budget_tool.v6.period_report.audit_period") as audit:
+                _select_period(FakeScreen(), browser)
+            audit.assert_not_called()
+            self.assertIs(browser.outcome, original)
+            self.assertEqual(browser.period_range, ("2026-11", "2026-12"))
+            self.assertEqual(browser.query, "旅游")
+        with self.assertRaises(BudgetError):
+            browser.select_period("2026-11", None)
+        self.assertIs(browser.outcome, original)
+
+    def test_real_p_key_selects_range_and_c_preserves_it(self):
+        browser = self.browser()
+        screen = FakeScreen(keys=("p", "\x15", "2026-11", "\n", "\x15", "2026-12", "\n", "c", "c", "q"), size=(30, 160))
+        with patch("beancount_budget_tool.v6.tui.curses.curs_set"):
+            _report_browser(screen, browser)
+        self.assertTrue(browser.period)
+        self.assertEqual(browser.period_range, ("2026-11", "2026-12"))
+        self.assertEqual(browser.outcome["report"]["expense_totals"]["direct_spent"], "-740")
+        self.assertTrue(any("p 选择范围" in value for frame in screen.frames for _, _, value in frame))
+
+    def test_all_option_restores_full_range(self):
+        browser = self.browser()
+        browser.select_period("2026-11", "2026-12")
+        browser.refresh()
+        with patch("beancount_budget_tool.v6.tui._read_field", return_value=" ALL ") as prompt:
+            _select_period(FakeScreen(), browser)
+        self.assertEqual(prompt.call_count, 1)
+        self.assertIsNone(browser.period_range)
+        self.assertEqual(len(browser.outcome["months"]), 3)
+        self.assertEqual(browser.outcome["report"]["expense_totals"]["direct_spent"], "1341")
+
+    def test_export_csv_uses_selected_range_ignoring_display_filter(self):
+        browser = self.browser()
+        browser.select_period("2026-11", "2026-12")
+        browser.refresh()
+        browser.filter("no matching row")
+        exported = self.base / "selected-range.csv"
+        self.addCleanup(lambda: exported.unlink(missing_ok=True))
+        with patch("beancount_budget_tool.v6.tui._read_field", side_effect=["csv", str(exported)]), \
+             patch("beancount_budget_tool.v6.tui._message") as message:
+            _export_report(FakeScreen(), browser)
+        self.assertEqual(message.call_args.args[1], "已导出")
+        self.assertEqual(exported.read_bytes(), render_csv(audit_period(self.configs[1:], "2026-11", "2026-12")).encode("utf-8-sig"))
+        self.assertEqual(browser.query, "no matching row")
+
+    def test_fixed_range_follows_revised_project_paths_without_adding_new_month(self):
+        project_path = self.base / "range-project.yaml"
+        self.addCleanup(lambda: project_path.unlink(missing_ok=True))
+        project = create_project(self.configs, project_path)
+        browser = ReportBrowser(self.configs, audit_month_workflow, render_workflow_text,
+                                project=project, initial_config=self.configs[0])
+        browser.select_period("2026-11", "2026-12")
+        browser.refresh()
+        revised = self.configs[1].with_name("revised-november.yaml")
+        revised.write_bytes(self.configs[1].read_bytes())
+        self.addCleanup(revised.unlink)
+        future = self.configs[2].with_name("future-january.yaml")
+        document = yaml.safe_load(self.configs[2].read_text(encoding="utf-8"))
+        document["month"] = "2027-01"
+        self.runner["save"](future, document)
+        self.addCleanup(future.unlink)
+        load_project(project_path).register([revised, future], default_month="2027-01")
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.period_range, ("2026-11", "2026-12"))
+        self.assertEqual(browser.config, self.configs[0])
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual([row["config"] for row in browser.outcome["months"]], [str(revised), str(self.configs[2])])
+        self.assertEqual(browser.period_inputs, [revised, self.configs[2]])
 
 
 if __name__ == "__main__":

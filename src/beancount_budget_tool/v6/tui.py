@@ -148,6 +148,7 @@ class ReportBrowser:
         self.next_worksheets: dict[Path, Path] = {}
         self.index = self.configs.index(initial_config.resolve()) if initial_config is not None else 0
         self.period = False
+        self.period_range: tuple[str, str] | None = None
         self.query = ""
         self.view = "report"
         self.help = False
@@ -164,6 +165,7 @@ class ReportBrowser:
         self.error = None
         self.lines = []
         self.detail = None
+        self.period_inputs: list[Path] = []
         self.selected = self.offset = 0
         self.help = False
 
@@ -174,7 +176,9 @@ class ReportBrowser:
             project_before = self.project.original if self.project is not None and self.project_error is None else None
             if self.period:
                 from .period_report import audit_period, render_text
-                outcome = audit_period(list(self.configs))
+                self.period_inputs = self.period_configs()
+                outcome = (audit_period(self.period_inputs, *self.period_range) if self.period_range is not None else
+                           audit_period(self.period_inputs))
                 renderer = render_text
             else:
                 outcome = self.loader(self.config)
@@ -306,6 +310,36 @@ class ReportBrowser:
         self.filter("")
         self.clear()
 
+    def select_period(self, since: str | None = None, through: str | None = None):
+        """Remember only query bounds; configuration paths are selected afresh."""
+        from .targets import _month
+        require((since is None) == (through is None), "PERIOD_RANGE_INVALID", "起始与结束月份须同时填写")
+        bounds = None
+        if since is not None:
+            bounds = (_month(since), _month(through))
+            require(bounds[0] <= bounds[1], "PERIOD_RANGE_INVALID", "起始月份不能晚于结束月份")
+        self.period_range, self.period, self.view = bounds, True, "report"
+        self.filter("")
+        self.clear()
+
+    def period_configs(self) -> list[Path]:
+        if self.period_range is None:
+            return list(self.configs)
+        from .period_report import _months
+        from ..yamlstrict import require_yaml
+        since, through = self.period_range
+        rows = [(month, path) for month, path in self.month_choices() if since <= month <= through]
+        missing = sorted(set(_months(since, through)) - {month for month, _ in rows})
+        require_yaml(not missing, "PERIOD_MONTHS_INCOMPLETE",
+                     f"所选区间缺少月份：{', '.join(missing)}。请先载入各月配置；缺月不能当作零交易。",
+                     self.project.path if self.project is not None else self.config,
+                     ("months",) if self.project is not None else ("month",))
+        return [path for _, path in rows]
+
+    def period_label(self) -> str:
+        return (f"区间 {self.period_range[0]} 至 {self.period_range[1]}" if self.period_range is not None else
+                f"区间使用全部 {len(self.configs)} 份配置")
+
     def open_review_month(self) -> bool:
         """Leave the interval for the latest supplied config of a pending month."""
         if not self.period or self.view != "reviews" or self.error or self.help:
@@ -397,7 +431,9 @@ HELP = [
     "项目更新失败但配置已保存时，保留本次新路径及警告；先登记该路径或显式打开，避免刷新丢失审阅结果。",
     "n：准备下一月填写表；用编辑器填好后，再按 n 选择载入。未确认的目标／账户继续列待审，不自动沿用月末声明。",
     "下一月保存后自动加入当前配置清单，可用 [／] 返回前月；重启时仍须提供已保存配置路径。",
-    "c：切换当前月报与连续月份比较；使用命令提供的全部最新配置，区间内不能缺月。",
+    "p：输入起始与结束月份，查看所选连续区间；起始填 all 恢复全部已载入月份。Esc 取消，不改变当前查询。",
+    "查询区间不改变 cutover；各月余额仍按原历史重放，所需的历史归属及责任资料须齐全。",
+    "c：切换当前月报与上次选择的区间；未选择时使用全部已载入最新配置。范围仅在本次 TUI 会话保留。",
     "区间重新审计每个月：只累计流量，目标差逐月比较，余额与可花取期末，任何月待审均不显示区间数字。",
     "m：在区间待审列表／详情中转到所选月份，重新审计后可按 e 填写；保存的新配置会用于下次区间比较。",
     "x：导出当前月份／区间的完整 text、json 或 csv；填写格式与新文件路径，Esc 取消。",
@@ -433,7 +469,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
             _put(stdscr, 1, "窗口过小；放大终端，q 退出")
         stdscr.refresh()
         return
-    _put(stdscr, 1, f"区间使用全部 {len(browser.configs)} 份配置；? 查看清单，c 返回月报" if browser.period else
+    _put(stdscr, 1, f"{browser.period_label()}；p 选择范围，c 返回月报" if browser.period else
          f"配置：{browser.config}")
     page = height - 4
     total_reviews = len(browser.outcome.get("review_items", [])) if browser.outcome else 0
@@ -455,7 +491,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         if browser.project is not None:
             lines += [f"项目入口：{browser.project.path}", *browser.project_messages()]
         if browser.period:
-            lines += ["区间使用的最新配置：", *map(str, browser.configs)]
+            lines += [browser.period_label(), "区间使用的最新配置：", *map(str, browser.period_inputs)]
         subtitle = "帮助；Esc 返回"
     elif browser.error:
         lines = ["本次计算失败；旧月报已清除。修正文件后按 r 重算。",
@@ -518,8 +554,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
-    footer = ("x 导出  c 月报  m 转到该月  r 重算区间  / 筛选  Enter 详情  ? 帮助  q 退出" if browser.period else
-              "m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
+    footer = ("p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
+              "p 区间 m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -685,18 +721,19 @@ def _edit_review(stdscr, browser: ReportBrowser):
 def _export_report(stdscr, browser: ReportBrowser):
     from .tui_export import FORMATS, write_export
 
-    scope = "区间报表" if browser.period else "月报"
+    scope = browser.period_label() if browser.period else "月报"
     context = [f"导出：{scope}（完整结果，忽略显示筛选）",
                "重新读取账本与最新配置后导出；待审时只保存待审清单。",
                "格式：text 文本、json 完整结构、csv 表格。已有文件不会覆盖。",
-               *[str(path) for path in (browser.configs if browser.period else [browser.config])]]
+               *[str(path) for path in (browser.period_inputs if browser.period else [browser.config])]]
     try:
         format = _read_field(stdscr, "导出报表", context, "格式（text / json / csv）：", "text")
         if format is None:
             return
         format = format.strip().casefold()
         require(format in FORMATS, "TUI_EXPORT_FORMAT_INVALID", "导出格式须为 text、json 或 csv")
-        label = ("period" if browser.period else (browser.outcome or {}).get("month", "month"))
+        label = (("period-" + "-to-".join(browser.period_range) if browser.period_range else "period")
+                 if browser.period else (browser.outcome or {}).get("month", "month"))
         suggested = Path.cwd() / f"budget-{label}-{datetime.now():%Y%m%d-%H%M%S}{FORMATS[format]}"
         destination = _read_field(stdscr, "保存到新文件", context,
                                   "输出文件完整路径：", str(suggested))
@@ -856,6 +893,33 @@ def _jump_month(stdscr, browser: ReportBrowser):
         _message(stdscr, "无法跳到该月", [str(exc)])
 
 
+def _select_period(stdscr, browser: ReportBrowser):
+    if browser.help:
+        return
+    try:
+        months = [month for month, _ in browser.month_choices()]
+        first, last = browser.period_range or (min(months), max(months))
+        context = ["只查询起止月份内的连续月报；区间内不能缺月。",
+                   "只累计流量，余额与可花取期末；所选月份待审时只显示待审清单。",
+                   "区间不改变 cutover，余额仍按原历史重放；历史归属及责任资料仍须齐全。",
+                   "起始月份输入 all 恢复全部已载入月份；Esc 取消。",
+                   "当前载入月份：" + "、".join(sorted(months))]
+        since = _read_field(stdscr, "选择报表区间", context, "起始月份 YYYY-MM（或 all）：", first)
+        if since is None:
+            return
+        if since.strip().casefold() == "all":
+            browser.select_period()
+        else:
+            through = _read_field(stdscr, "选择报表区间", context, "结束月份 YYYY-MM：", last)
+            if through is None:
+                return
+            browser.select_period(since.strip(), through.strip())
+        _draw_browser(stdscr, browser)
+        browser.refresh()
+    except (BudgetError, OSError, UnicodeError) as exc:
+        _message(stdscr, "未切换查询范围", [str(exc), "请核对起止月份后再次按 p；当前结果不代表新范围。"])
+
+
 def _report_browser(stdscr, browser: ReportBrowser):
     try:
         curses.curs_set(0)
@@ -888,6 +952,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
         elif key == "c":
             browser.toggle_period()
             reload()
+        elif key == "p":
+            _select_period(stdscr, browser)
         elif key == "m":
             if browser.period:
                 if browser.open_review_month():
