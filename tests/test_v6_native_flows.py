@@ -1,12 +1,14 @@
 """Native multi-leg cash flows certify joint evidence without inventing pairings."""
 
 from pathlib import Path
+from datetime import date
 from tempfile import TemporaryDirectory
 import unittest
 
 import yaml
 
 from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
+from beancount_budget_tool.tools.v6_propose_benefit_groups import propose
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.review_diagnostics import review_item
 
@@ -146,7 +148,15 @@ class NativeFlowTests(unittest.TestCase):
         outcome = audit_month_workflow(self.config)
         self.assertIsNone(outcome["report"])
         codes = {item["reason_code"] for item in outcome["review_items"]}
-        self.assertIn("BENEFIT_GROUP_REQUIRED", codes)
+        self.assertIn("BENEFIT_GROUP_SHAPE_UNSUPPORTED", codes)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertTrue(all(item["reason_kind"] == "implementation_limit" for item in outcome["review_items"]
+                            if item["reason_code"] == "BENEFIT_GROUP_SHAPE_UNSUPPORTED"))
+        document = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        proposal = propose(self.ledger, date(2026, 9, 1),
+                           (self.config.parent / document["classifications"]).resolve(), "CNY")
+        self.assertEqual(proposal["unsupported_complex_benefits"], 2)
+        self.assertEqual(proposal["proposed_groups"], 0)
 
     def test_asset_change_or_compound_k_fee_does_not_become_an_ordinary_expense(self):
         for name, transactions in (

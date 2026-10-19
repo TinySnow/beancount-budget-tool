@@ -37,6 +37,7 @@ MESSAGES = {
     "VALUATION_MISSING": "这条外币消费缺少有来源的报告货币计价或已审核的实际还款成本。",
     "BENEFIT_SOURCE_PENDING": "退款或收入的经济利益来源尚未审定。",
     "BENEFIT_GROUP_REQUIRED": "这笔多分录退款或收入需要审阅来源分组，防止本金与收益重复计入。",
+    "BENEFIT_GROUP_SHAPE_UNSUPPORTED": "该复合退款或收入不符合当前已实现的来源组协议；需要补程序实现，不能通过人工批准收益来源组放行。",
     "BENEFIT_SOURCE_UNPROVED": "退款或收入尚未找到同笔、同币种、金额相反的唯一资产或负债对手。",
     "BENEFIT_CLASSIFICATION_PENDING": "先确定这条退款或收入的预算类别，再审阅其来源。",
     "PLAN_MISSING": "本月有消费的类别缺少目标；请声明该类别目标或覆盖它的父类别子树目标。",
@@ -65,6 +66,7 @@ IMPLEMENTATION_LIMITS = frozenset((
     "K_EVENT_SHAPE_UNSUPPORTED",
     "H_TRANSFER_SHAPE_UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED",
     "NAMED_H_EVENT_UNSUPPORTED",
+    "BENEFIT_GROUP_SHAPE_UNSUPPORTED",
 ))
 
 

@@ -37,6 +37,8 @@ def propose(root: Path, cutover: date, classifications: Path,
             "cutover": cutover.isoformat(), "ledger_snapshot": fin.digest,
             "loader_version": fin.loader_version, "report_currency": report_currency,
             "pending_complex_benefits": len(pending), "proposed_groups": len(proposals),
+            "unsupported_complex_benefits": sum(row["reason_code"] == "BENEFIT_GROUP_SHAPE_UNSUPPORTED"
+                                                for row in benefit_audit["pending_benefits"]),
             "proposals": proposals,
             "note": "候选恒等式只核账，不构成经济组批准或资产用途归属"}
 
