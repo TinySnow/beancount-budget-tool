@@ -173,10 +173,10 @@ class BookedDebtSnapshotTests(unittest.TestCase):
 
             ledger = base / "main.bean"
             ledger.write_text(ledger.read_text(encoding="utf-8") +
-                              '2026-09-23 * "complex card purchase"\n'
+                              '2026-09-23 * "purchase with cash received"\n'
                               '  Expenses:Food 10 CNY\n'
-                              '  Assets:Bank -2 CNY\n'
-                              '  Liabilities:Card -8 CNY\n', encoding="utf-8")
+                              '  Assets:Bank 2 CNY\n'
+                              '  Liabilities:Card -12 CNY\n', encoding="utf-8")
             source_blocked = audit_month_workflow(base / "month.yaml")
             self.assertEqual((source_blocked["status"], source_blocked["stage"]),
                              ("IMPLEMENTATION_BLOCKED", "source"))

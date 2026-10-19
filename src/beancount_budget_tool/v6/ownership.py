@@ -24,7 +24,7 @@ from .accounts import _lot, audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_posting_refs
 from .inline_amounts import parse_inline_amounts
-from .native_flows import native_asset_flow
+from .native_flows import native_asset_flow, native_card_purchase
 from .opening import audit_opening
 from .provenance import valid_digest
 from .source import _source, scan_v6_source
@@ -283,7 +283,8 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
 
             roots = [p.account.split(":", 1)[0] for p in entry.postings]
             native = native_asset_flow(fin, entry, semantics) if len(entry.postings) > 2 else None
-            if native is not None or len(h_legs) == 1 and len(entry.postings) == 2:
+            card_purchase = native_card_purchase(fin, entry, semantics)
+            if native is not None or card_purchase is not None or len(h_legs) == 1 and len(entry.postings) == 2:
                 # Defaults select each asset's owner, not an allocation of
                 # payments to individual expense/income counterparts.
                 for key in missing_keys:

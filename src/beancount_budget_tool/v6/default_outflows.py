@@ -42,7 +42,8 @@ def audit_default_outflows(root: Path, cutover: date, month: str, accounts: Path
                            purpose_pools: Path | None = None) -> dict:
     """Count source-bound default-purpose cash movements by original commodity.
 
-    Card purchases have no asset leg; payments use the actual paying purpose.
+    Joint cash/card purchases count only their actual asset payments here;
+    later repayments use the actual paying purpose.
     Transfers and FX never create payments in this projection. Unsupported
     mixed flow cannot be replaced by a guessed share or an incomplete zero.
     """
@@ -66,7 +67,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
               "basis": "booked_native_asset_units", "events": [], "review_items": [],
               "excluded_pools": [],
               "reason_codes": [], "totals": None,
-              "note": "按默认支出用途的实记资产数量分币种汇总；消费分类与用途净划拨另算。刷卡在还款时计入，资产搬移、购汇和申赎不计入。"}
+              "note": "按默认支出用途的实记资产数量分币种汇总；消费分类与用途净划拨另算。消费现金部分当次计入，刷卡部分在还款时计入；资产搬移、购汇和申赎不计入。"}
     if owner is None:
         return {**result, "status": "NOT_CONFIGURED"}
     nondefault_pool_accounts = set()
@@ -89,9 +90,13 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                                                  "owner_ids": sorted(members)})
     modes = {row["account"]: row.get("semantics") for row in account_audit["accounts"]}
     claims = {_key(row["ref"]): row for row in owned["ownership"]}
-    debt = audit_simple_obligations(root, cutover, obligations, last) if obligations else None
+    # Even without a declaration file, recognize supported shapes as data
+    # awaiting review rather than labelling their cash share unsupported.
+    debt = audit_simple_obligations(root, cutover, obligations, last)
     payments = {_key(row["counterpart_ref"]): row for row in debt["events"]
-                if row["counterpart_ref"] is not None} if debt else {}
+                if row["counterpart_ref"] is not None}
+    purchases = {_key(ref): row for row in debt["events"]
+                 if row["shape"] == "consumer_purchase" for ref in row.get("asset_refs", [])}
     sources = posting_sources(fin)
     by_currency = defaultdict(lambda: defaultdict(Fraction))
     by_account = defaultdict(lambda: defaultdict(Fraction))
@@ -148,6 +153,13 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                     and sum((exact(p.units.number) for p in entry.postings), Fraction(0)) == 0):
                 kind = "expenses_paid" if units < 0 else "expense_refunds"
                 counterparts = [facts.for_posting(p).as_dict() for p in expense_legs]
+            elif _key(ref) in purchases:
+                event = purchases[_key(ref)]
+                if event["status"] != "CERTIFIED":
+                    pending("OBLIGATION_UNCLAIMED", ref, posting.account)
+                    continue
+                kind = "expenses_paid"
+                counterparts = event["expense_refs"]
             elif liability_legs and len(entry.postings) == 2:
                 event = payments.get(_key(ref))
                 if event is None or event["status"] != "CERTIFIED" or event["kind"] not in KINDS:

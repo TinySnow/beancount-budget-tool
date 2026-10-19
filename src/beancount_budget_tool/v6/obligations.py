@@ -1,7 +1,8 @@
 """Source-bound replay of simple booked obligations and clearing advances.
 
-This contract covers a single expense/card purchase and a later single
-asset/card payment. A separately reviewed asset-outflow / asset-inflow pair
+This contract covers a card purchase (including native expenses jointly paid
+by cash and one card) and later single asset/card payments.
+A separately reviewed asset-outflow / asset-inflow pair
 can settle a third-party advance recorded in a liability account without
 creating a personal consumption obligation.
 """
@@ -26,6 +27,7 @@ from .classification import _key
 from .facts import FactIndex, reference_fact_index
 from .obligation_opening import compile_obligation_opening, opening_source, paired_price_value
 from .ownership import _owners
+from .native_flows import native_card_purchase
 from .provenance import valid_digest
 from .source import scan_v6_source
 
@@ -86,6 +88,9 @@ def audit_simple_obligations(root: Path, cutover: date,
                     "负债 booked 来源重复", key)
             counterpart = next((p for p in entry.postings if p is not posting), None) if len(entry.postings) == 2 else None
             shape = None
+            group = native_card_purchase(fin, entry) if len(entry.postings) > 2 else None
+            if group is not None:
+                shape = "consumer_purchase"
             if counterpart is not None and amount != 0 and (
                     posting.cost is None and counterpart.cost is None and
                     counterpart.units.currency == posting.units.currency and
@@ -102,10 +107,15 @@ def audit_simple_obligations(root: Path, cutover: date,
                       other_root == asset_root):
                     shape = "asset_outflow" if amount > 0 else "asset_inflow"
             candidate = {"liability_ref": ref, "counterpart_ref":
-                         facts.for_posting(counterpart).as_dict() if shape else None,
+                         facts.for_posting(counterpart).as_dict() if shape and counterpart is not None else None,
                          "account": posting.account, "commodity": posting.units.currency,
                          "lot": coord[2], "date": entry.date.isoformat(),
                          "signed_units": exact_text(amount), "shape": shape or "unsupported"}
+            if group is not None:
+                candidate.update(
+                    counterpart_refs=[facts.for_posting(p).as_dict() for p in entry.postings if p is not posting],
+                    expense_refs=[facts.for_posting(p).as_dict() for p in group.expenses],
+                    asset_refs=[facts.for_posting(p).as_dict() for p in group.assets])
             candidates[key] = candidate
             order.append(key)
 
@@ -144,15 +154,26 @@ def audit_simple_obligations(root: Path, cutover: date,
                 "liability_ref", "counterpart_ref", "kind", "obligation_id",
                 "owner_id", "reason"}, {
                 "liability_ref", "counterpart_ref", "kind", "obligation_id", "reason"}, {
-                "liability_ref", "counterpart_ref", "kind", "clearing_id", "reason"}),
+                "liability_ref", "counterpart_ref", "kind", "clearing_id", "reason"}, {
+                "liability_ref", "counterpart_refs", "kind", "obligation_id", "owner_id", "reason"}),
                 "OBLIGATION_CLAIM_INVALID", "责任事件字段无效", location)
-            check_event(type(row["liability_ref"]) is dict and type(row["counterpart_ref"]) is dict,
-                    "OBLIGATION_CLAIM_INVALID", "责任事件必须绑定两侧完整 booked 来源", location)
-            key = _key(row["liability_ref"])
+            grouped = "counterpart_refs" in row
+            ref_field = "counterpart_refs" if grouped else "counterpart_ref"
+            refs = row[ref_field] if grouped else [row[ref_field]]
+            check_event(type(row["liability_ref"]) is dict and type(refs) is list and bool(refs) and
+                        all(type(ref) is dict for ref in refs),
+                    "OBLIGATION_CLAIM_INVALID", "责任事件必须绑定全部对手的完整 booked 来源", location)
+            try:
+                ref_keys = [_key(ref) for ref in refs]
+                key = _key(row["liability_ref"])
+            except (TypeError, ValueError):
+                check_event(False, "OBLIGATION_CLAIM_INVALID", "责任来源须为可序列化的完整引用", location)
+            check_event(len(set(ref_keys)) == len(ref_keys), "OBLIGATION_COUNTERPART_INVALID",
+                        "负债对手来源不得重复", (*location, ref_field))
             if key in future_pairs:
-                check_event(_key(row["counterpart_ref"]) in future_pairs[key],
-                        "OBLIGATION_COUNTERPART_INVALID", "未来负债对手须为同一交易的完整来源",
-                        (*location, "counterpart_ref"))
+                check_event(set(ref_keys) == future_pairs[key] if grouped else ref_keys[0] in future_pairs[key],
+                        "OBLIGATION_COUNTERPART_INVALID", "未来负债对手须为同一交易的完整来源组",
+                        (*location, ref_field))
                 continue  # Existing source after the report date; do not apply its claim.
             check_event(key in candidates, "OBLIGATION_REF_INVALID", "负债来源不存在或过期",
                         (*location, "liability_ref"))
@@ -160,9 +181,11 @@ def audit_simple_obligations(root: Path, cutover: date,
             candidate = candidates[key]
             check_event(candidate["shape"] != "unsupported", "OBLIGATION_EVENT_UNSUPPORTED",
                     "本事件不符合简单消费刷卡／付款协议", location)
-            check_event(_key(row["counterpart_ref"]) == _key(candidate["counterpart_ref"]),
+            expected = candidate.get("counterpart_refs", [candidate["counterpart_ref"]])
+            check_event(grouped == ("counterpart_refs" in candidate) and
+                        set(ref_keys) == {_key(ref) for ref in expected},
                     "OBLIGATION_COUNTERPART_INVALID", "负债对手来源错误或过期",
-                    (*location, "counterpart_ref"))
+                    (*location, ref_field))
             kind = row["kind"]
             allowed = {"consumer_purchase": {"consumer_purchase"},
                        "asset_outflow": {"payment", "advance_outflow"},

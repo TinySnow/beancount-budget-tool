@@ -278,6 +278,9 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                           "account": row["account"], "commodity": row["commodity"],
                           "signed_units": row["signed_units"],
                           "ref": row["liability_ref"], "shape": row["shape"],
+                          **({"counterpart_refs": row["counterpart_refs"],
+                              "expense_refs": row["expense_refs"], "asset_refs": row["asset_refs"]}
+                             if "counterpart_refs" in row else {}),
                           "source": source_by_ref[_key(row["liability_ref"])],
                           "reason_code": row["reason_codes"][0]})
         for row in transfers["events"]:
