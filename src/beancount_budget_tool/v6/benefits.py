@@ -15,10 +15,10 @@ from pathlib import Path
 
 from beancount.core import data
 
-from ..errors import require
+from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import load_financial, reference_financial
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
 from .classification import _key, audit_classification
 from .provenance import valid_digest
 from .facts import FactIndex, future_transaction_refs, reference_fact_index
@@ -119,7 +119,9 @@ def audit_economic_benefits(root: Path, cutover: date,
                     proved.append({**record, "proof": "same_transaction_native_asset_group",
                                    "evidence_group": native_proof})
                     continue
-                pending.append({**record, "reason_code": "BENEFIT_GROUP_REQUIRED"})
+                candidate = costed_sale_candidate(entry, posting, fin, facts, posting.units.currency)
+                pending.append({**record, "reason_code": ("BENEFIT_GROUP_REQUIRED" if candidate is not None else
+                                                          "BENEFIT_GROUP_SHAPE_UNSUPPORTED")})
                 complex_context[_key(ref)] = (entry, posting)
                 continue
             counterpart = entry.postings[1] if entry.postings[0] is posting else entry.postings[0]
@@ -141,29 +143,43 @@ def audit_economic_benefits(root: Path, cutover: date,
         reference_fin = reference_financial(fin)
         reference_facts = reference_fact_index(fin) if future_groups else facts
         document = load_yaml(approved_groups)
-        require(type(document) is dict and set(document) == {
+        fields = {
             "schema", "cutover", "ledger_snapshot", "loader_version",
-            "report_currency", "approvals"},
-            "BENEFIT_GROUP_INVALID", "经济组批准文件字段不完整或含未知字段")
+            "report_currency", "approvals"}
+        invalid = sorted(set(document) - fields, key=str) if type(document) is dict else []
+        require_yaml(type(document) is dict and set(document) == fields,
+                     "BENEFIT_GROUP_INVALID", "经济组批准文件字段不完整或含未知字段", approved_groups,
+                     (invalid[0],) if invalid else ())
         currency = document["report_currency"]
-        require(type(document["schema"]) is int and document["schema"] == 6 and
-                document["cutover"] == cutover.isoformat() and
-                valid_digest(document["ledger_snapshot"]) and
-                document["loader_version"] == fin.loader_version and
-                type(currency) is str and currency in fin.options.get("operating_currency", []) and
-                type(document["approvals"]) is list,
-                "BENEFIT_GROUP_INVALID", "经济组版本、原审快照格式或报告货币不匹配")
+        for field, valid in (
+            ("schema", type(document["schema"]) is int and document["schema"] == 6),
+            ("cutover", type(document["cutover"]) is str and document["cutover"] == cutover.isoformat()),
+            ("ledger_snapshot", valid_digest(document["ledger_snapshot"])),
+            ("loader_version", document["loader_version"] == fin.loader_version),
+            ("report_currency", type(currency) is str and currency in fin.options.get("operating_currency", [])),
+            ("approvals", type(document["approvals"]) is list),
+        ):
+            require_yaml(valid, "BENEFIT_GROUP_INVALID", "经济组版本、原审快照格式或报告货币不匹配",
+                         approved_groups, (field,))
         seen = set()
         approved = set()
         for row_index, row in enumerate(document["approvals"]):
-            require(type(row) is dict and set(row) == {"income_ref", "reason"} and
-                    type(row["income_ref"]) is dict and type(row["reason"]) is str and
-                    bool(row["reason"].strip()),
-                    "BENEFIT_GROUP_INVALID", "经济组批准须有完整收入引用与理由")
-            key = _key(row["income_ref"])
-            require(key not in seen, "BENEFIT_GROUP_DUPLICATE", "同一收入重复认领经济组", key)
+            keys = ("approvals", row_index)
+            invalid = sorted(set(row) - {"income_ref", "reason"}, key=str) if type(row) is dict else []
+            require_yaml(type(row) is dict and set(row) == {"income_ref", "reason"},
+                         "BENEFIT_GROUP_INVALID", "经济组批准须有完整收入引用与理由", approved_groups,
+                         (*keys, invalid[0]) if invalid else keys)
+            require_yaml(type(row["income_ref"]) is dict, "BENEFIT_GROUP_INVALID",
+                         "income_ref 须为完整收入引用", approved_groups, (*keys, "income_ref"))
+            require_yaml(type(row["reason"]) is str and bool(row["reason"].strip()),
+                         "BENEFIT_GROUP_INVALID", "经济组批准须填写理由", approved_groups, (*keys, "reason"))
+            location = yaml_path_location(approved_groups, (*keys, "income_ref"))
+            try:
+                key = _key(row["income_ref"])
+            except (TypeError, ValueError) as exc:
+                raise BudgetError("BENEFIT_GROUP_REF_INVALID", "收入引用格式无效；请重新导出完整引用", location) from exc
+            require(key not in seen, "BENEFIT_GROUP_DUPLICATE", "同一收入重复认领经济组", location)
             seen.add(key)
-            location = yaml_path_location(approved_groups, ("approvals", row_index))
             if key in future_groups:
                 entry, posting = future_groups[key]
                 require(costed_sale_candidate(entry, posting, reference_fin, reference_facts, currency)
@@ -175,7 +191,7 @@ def audit_economic_benefits(root: Path, cutover: date,
             entry, posting = complex_context[key]
             candidate = costed_sale_candidate(entry, posting, fin, facts, currency)
             require(candidate is not None and candidate["income_ref"] == row["income_ref"],
-                    "BENEFIT_GROUP_UNPROVED", "证券成本、到账、收益与费用未构成唯一守恒组", key)
+                    "BENEFIT_GROUP_UNPROVED", "证券成本、到账、收益与费用未构成唯一守恒组", location)
             approved.add(key)
             source = next(item for item in pending if _key(item["ref"]) == key)
             proved.append({k: v for k, v in source.items() if k != "reason_code"} |

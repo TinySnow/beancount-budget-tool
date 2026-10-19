@@ -19,7 +19,7 @@ from beancount.core import data
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import FinancialInput, load_financial
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
 from .accounts import _lot
 from .facts import FactIndex
 from .ownership import ID
@@ -72,65 +72,73 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
             "资金池需要自然月 cutover 和不早于它的日末日期")
     fin = load_financial(root)
     document = load_yaml(declarations)
-    require(type(document) is dict and set(document) == {
-        "schema", "cutover", "report_currency", "pools"},
-        "POOL_DECLARATION_INVALID", "资金池声明字段不完整或含未知字段")
+    fields = {"schema", "cutover", "report_currency", "pools"}
+    invalid = sorted(set(document) - fields, key=str) if type(document) is dict else []
+    require_yaml(type(document) is dict and set(document) == fields,
+                 "POOL_DECLARATION_INVALID", "资金池声明字段不完整或含未知字段", declarations,
+                 (invalid[0],) if invalid else ())
     currency = document["report_currency"]
-    require(type(document["schema"]) is int and document["schema"] == 6 and
-            document["cutover"] == cutover.isoformat() and
-            type(currency) is str and currency in fin.options.get("operating_currency", []) and
-            type(document["pools"]) is list,
-            "POOL_DECLARATION_INVALID", "资金池版本、报告货币或列表无效")
+    for field, valid in (
+        ("schema", type(document["schema"]) is int and document["schema"] == 6),
+        ("cutover", type(document["cutover"]) is str and document["cutover"] == cutover.isoformat()),
+        ("report_currency", type(currency) is str and currency in fin.options.get("operating_currency", [])),
+        ("pools", type(document["pools"]) is list),
+    ):
+        require_yaml(valid, "POOL_DECLARATION_INVALID", "资金池版本、报告货币或列表无效", declarations, (field,))
 
     used_accounts: set[str] = set()
     used_ids: set[str] = set()
     reports = []
     for row_index, row in enumerate(document["pools"]):
-        source = yaml_path_location(declarations, ("pools", row_index))
+        keys = ("pools", row_index)
+        source = yaml_path_location(declarations, keys)
+
+        def check(condition, code, message, *fields):
+            require_yaml(condition, code, message, declarations, (*keys, *fields))
+
         required = {
             "id", "accounts", "reserve_order", "payment_scope",
             "protected_owner_id", "protected_label", "protected_principal",
             "remainder_owner_id", "remainder_label", "reason"}
-        require(type(row) is dict and required <= set(row) <= required | {
-            "opening_fingerprint", "remainder_policy"},
-            "POOL_DECLARATION_INVALID", "每个资金池须明确账户、本金、用途和理由", source)
+        allowed = required | {"opening_fingerprint", "remainder_policy"}
+        invalid = sorted(set(row) - allowed, key=str) if type(row) is dict else []
+        check(type(row) is dict and required <= set(row) <= allowed,
+              "POOL_DECLARATION_INVALID", "每个资金池须明确账户、本金、用途和理由", *invalid[:1])
         policy = row.get("remainder_policy", "require_coverage")
-        require(type(policy) is str and policy in {"require_coverage", "allow_negative"},
-                "POOL_REMAINDER_POLICY_INVALID", "资金池余款规则须为 require_coverage 或 allow_negative",
-                yaml_path_location(declarations, ("pools", row_index, "remainder_policy")))
+        check(type(policy) is str and policy in {"require_coverage", "allow_negative"},
+              "POOL_REMAINDER_POLICY_INVALID", "资金池余款规则须为 require_coverage 或 allow_negative", "remainder_policy")
         ident = row["id"]
         names = row["accounts"]
-        require(type(ident) is str and bool(ident) and ident not in used_ids and
-                type(names) is list and bool(names) and
-                all(type(name) is str for name in names) and len(names) == len(set(names)),
-                "POOL_DECLARATION_INVALID", "资金池 ID 或账户列表重复／无效")
+        check(type(ident) is str and bool(ident) and ident not in used_ids,
+              "POOL_DECLARATION_INVALID", "资金池 ID 重复／无效", "id")
+        check(type(names) is list and bool(names) and
+              all(type(name) is str for name in names) and len(names) == len(set(names)),
+              "POOL_DECLARATION_INVALID", "资金池账户列表重复／无效", "accounts")
         used_ids.add(ident)
-        require(row["payment_scope"] == "excluded",
-                "POOL_PAYMENT_SCOPE_INVALID", "资金池账户必须由用户声明排除直接支付", ident)
+        check(row["payment_scope"] == "excluded",
+              "POOL_PAYMENT_SCOPE_INVALID", "资金池账户必须由用户声明排除直接支付", "payment_scope")
         order = row["reserve_order"]
-        require(type(order) is list and order and order == list(dict.fromkeys(order)) and
-                set(order) == set(names), "POOL_RESERVE_ORDER_INVALID",
-                "账户展示的保护额分配顺序须恰好覆盖资金池账户", ident)
-        require(type(row["reason"]) is str and bool(row["reason"].strip()),
-                "POOL_REASON_MISSING", "资金池保护需要人工审阅理由", ident)
+        check(type(order) is list and bool(order) and all(type(name) is str for name in order) and
+              order == list(dict.fromkeys(order)) and set(order) == set(names), "POOL_RESERVE_ORDER_INVALID",
+              "账户展示的保护额分配顺序须恰好覆盖资金池账户", "reserve_order")
+        check(type(row["reason"]) is str and bool(row["reason"].strip()),
+              "POOL_REASON_MISSING", "资金池保护需要人工审阅理由", "reason")
         protected, remainder = row["protected_owner_id"], row["remainder_owner_id"]
-        require(type(protected) is str and type(remainder) is str and
-                ID.fullmatch(protected) is not None and
-                ID.fullmatch(remainder) is not None and protected != remainder,
-                "POOL_OWNER_INVALID", "资金池须声明不同的稳定用途 ID", ident)
-        require(all(type(row[field]) is str and bool(row[field].strip()) and
-                    row[field] == row[field].strip()
-                    for field in ("protected_label", "remainder_label")),
-                "POOL_LABEL_INVALID", "资金池用途展示名称不能为空", ident)
+        for field in ("protected_owner_id", "remainder_owner_id"):
+            check(type(row[field]) is str and ID.fullmatch(row[field]) is not None,
+                  "POOL_OWNER_INVALID", "资金池须声明不同的稳定用途 ID", field)
+        check(protected != remainder, "POOL_OWNER_INVALID", "资金池须声明不同的稳定用途 ID", "remainder_owner_id")
+        for field in ("protected_label", "remainder_label"):
+            check(type(row[field]) is str and bool(row[field].strip()) and row[field] == row[field].strip(),
+                  "POOL_LABEL_INVALID", "资金池用途展示名称不能为空", field)
         raw_amount = row["protected_principal"]
-        require(type(raw_amount) is str and AMOUNT.fullmatch(raw_amount) is not None and
-                Fraction(raw_amount) > 0, "POOL_PRINCIPAL_INVALID",
-                "受保护本金须为正的精确金额字符串", ident)
+        check(type(raw_amount) is str and AMOUNT.fullmatch(raw_amount) is not None and
+              Fraction(raw_amount) > 0, "POOL_PRINCIPAL_INVALID",
+              "受保护本金须为正的精确金额字符串", "protected_principal")
         principal = Fraction(raw_amount)
-        for name in names:
-            require(name.startswith(fin.options["name_assets"] + ":") and
-                    name not in used_accounts,
-                    "POOL_ACCOUNT_INVALID", "资金池只能包含不重复的完整资产账户", name)
+        for index, name in enumerate(names):
+            check(name.startswith(fin.options["name_assets"] + ":") and name not in used_accounts,
+                  "POOL_ACCOUNT_INVALID", "资金池只能包含不重复的完整资产账户", "accounts", index)
             used_accounts.add(name)
         balance = Fraction(0)
         per_account = {name: Fraction(0) for name in names}
@@ -146,7 +154,7 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                 opening = balance
                 minimum = opening
                 require(all(units >= 0 for units in lots.values()),
-                        "POOL_NEGATIVE_OPENING", "资金池期初 booked lot 为负", ident)
+                        "POOL_NEGATIVE_OPENING", "资金池期初 booked lot 为负", source)
             if entry.date > as_of:
                 break
             relevant = [posting for posting in entry.postings if posting.account in names]
@@ -164,7 +172,8 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                 lots[key] = lots.get(key, Fraction(0)) + delta
                 if entry.date >= cutover:
                     require(lots[key] >= 0, "POOL_NEGATIVE_LOT",
-                            "资金池证券或现金 booked 库存为负", str(key))
+                            "资金池证券或现金 booked 库存为负",
+                            f"{entry.meta.get('filename')}:{entry.meta.get('lineno')}")
             if entry.date >= cutover:
                 if policy == "allow_negative" and balance < min(principal, before_balance):
                     # A realised loss can overdraw a purpose, but moving money
@@ -181,14 +190,14 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
         if opening is None:
             opening = balance
             require(all(units >= 0 for units in lots.values()),
-                    "POOL_NEGATIVE_OPENING", "资金池期初 booked lot 为负", ident)
+                    "POOL_NEGATIVE_OPENING", "资金池期初 booked lot 为负", source)
         if minimum is None:
             minimum = opening
         require(policy == "allow_negative" or opening >= principal and minimum >= principal,
                 "POOL_PRINCIPAL_UNCOVERED",
                 "资金池 booked 成本曾不足覆盖受保护本金", source)
         require(all(value >= 0 for value in per_account.values()),
-                "POOL_NEGATIVE_ACCOUNT_BOOK", "资金池账户日末 booked 成本为负", ident)
+                "POOL_NEGATIVE_ACCOUNT_BOOK", "资金池账户日末 booked 成本为负", source)
         remaining = principal
         assignments = {}
         for name in order:
@@ -213,7 +222,7 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                                "remainder_label": row["remainder_label"],
                                "remainder_book_cost": exact_text(per_account[name] - assigned)})
         require(remaining == 0, "POOL_PRINCIPAL_UNCOVERED",
-                "资金池账户分配后没有足额保护本金", ident)
+                "资金池账户分配后没有足额保护本金", source)
         reports.append({"id": ident, "accounts": names,
                         "reserve_order": order,
                         "remainder_policy": policy,
