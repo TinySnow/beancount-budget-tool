@@ -110,10 +110,20 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
             pending.append({"kind": "h_gain", "ref": event["h_ref"],
                             "reason": event["status"]})
     if debt is not None:
-        claimed_h = {_key(row["ref"]) for row in owner_audit["ownership"]}
+        claimed = {_key(row["ref"]): row for row in owner_audit["ownership"]}
+        claimed_h = set(claimed)
         for event in debt["events"]:
-            if event["date"][:7] != month or event["status"] != "CERTIFIED" or event["kind"] not in (
-                    "payment", "advance_outflow", "advance_reimbursement"):
+            if event["date"][:7] != month or event["status"] != "CERTIFIED":
+                continue
+            if event["kind"] == "consumer_purchase":
+                # Only the observed cash share changes H holdings. The card
+                # share remains a debt, not another asset payment or G.
+                refs = event.get("asset_refs", [])
+                if refs and all(_key(ref) in claimed_h and all(
+                        part["role"] == "hold" for part in claimed[_key(ref)]["slices"]) for ref in refs):
+                    add("liability_consumer_purchase", event, refs, {})
+                continue
+            if event["kind"] not in ("payment", "advance_outflow", "advance_reimbursement"):
                 continue
             ref = event["counterpart_ref"]
             if ref is not None and _key(ref) in claimed_h:
