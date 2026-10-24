@@ -6,12 +6,14 @@ import curses
 from datetime import datetime
 import json
 from pathlib import Path
+import re
 import sys
 import unicodedata
 from uuid import uuid4
 from collections.abc import Callable
 
 from ..errors import BudgetError, require
+from ..exact import amount_text
 
 
 def _width(character: str) -> int:
@@ -122,6 +124,65 @@ def _wrap(lines: list[str], columns: int) -> list[str]:
             used += width
         wrapped.append(current)
     return wrapped
+
+
+def _review_location(source: str | None) -> str:
+    if not source:
+        return "位置：未提供"
+    path, separator, line = source.rpartition(":")
+    # A Windows drive colon is part of the path, not a line number.
+    if not separator or not line.isdigit():
+        path, line = source, ""
+    name = re.split(r"[\\/]", path)[-1]
+    return f"位置：第 {line} 行 · {name}" if line else f"位置：{name}"
+
+
+def _review_reason(item: dict) -> str:
+    detail = item.get("detail") or "尚未提供详细说明；请查看原因码和来源资料。"
+    if item.get("reason_code") == "H_NEGATIVE_INVENTORY":
+        match = re.fullmatch(r"真实库存变为负数：(\S+) (\S+) (-?\d+(?:/\d+)?)", detail)
+        if match:
+            currency, lot, balance = match.groups()
+            scope = "账户" if lot == f"{currency}/no-cost" else f"批次 {lot}"
+            return f"这笔交易后，{scope}真实余额为 {amount_text(balance)} {currency}（低于 0）。"
+    return detail
+
+
+def _review_card(item: dict, index: int, selected: int, columns: int, period: bool) -> list[str]:
+    label = "程序实现缺口" if item.get("reason_kind") == "implementation_limit" else "待审"
+    date = item.get("date") or (item.get("month", "") if period else "")
+    month = f"[{item['month']}] " if period and item.get("month") else ""
+    units = item.get("signed_units")
+    amount = f"本笔 {amount_text(units)} {item.get('commodity', '')}" if units is not None else ""
+    return _wrap([
+        f"{'>' if index == selected else ' '} {index + 1}. {label} {month}{date}  {amount}".rstrip(),
+        f"  {_review_location(item.get('source'))}",
+        f"  账户：{item['account']}" if item.get("account") else "  账户：不适用（配置或范围问题）",
+        f"  原因：{_review_reason(item)}",
+        f"  原因码：{item.get('reason_code', '未提供')}", "",
+    ], columns)
+
+
+def _review_layout(items: list[dict], selected: int, columns: int, period: bool
+                   ) -> tuple[list[str], list[tuple[int, int]]]:
+    lines, spans = [], []
+    for index, item in enumerate(items):
+        start = len(lines)
+        lines.extend(_review_card(item, index, selected, columns, period))
+        spans.append((start, len(lines)))
+    return lines, spans
+
+
+def _review_page_target(browser: ReportBrowser, page: int, columns: int, forward: bool) -> int:
+    items = browser.items()
+    if not items:
+        return 0
+    selected = min(browser.selected, len(items) - 1)
+    _, spans = _review_layout(items, selected, columns, browser.period)
+    target = spans[selected][0] + (page if forward else -page)
+    if forward:
+        return next((index for index, (start, _) in enumerate(spans) if start >= target), len(items) - 1)
+    return next((index for index in reversed(range(len(spans))) if spans[index][0] <= target), 0)
 
 
 def _review_root(path: Path) -> Path:
@@ -388,8 +449,9 @@ class ReportBrowser:
     def reviews(self) -> list[dict]:
         items = self.outcome.get("review_items", []) if self.outcome else []
         query = self.query.casefold()
-        return [item for item in items if not query or query in json.dumps(
-            item, ensure_ascii=False, sort_keys=True).casefold()]
+        return [item for item in items if not query or query in (json.dumps(
+            item, ensure_ascii=False, sort_keys=True) + "\n" + "\n".join(
+                _review_card(item, 0, -1, 100000, self.period))).casefold()]
 
     def has_transactions(self) -> bool:
         return bool(not self.period and self.outcome and self.outcome["status"] == "CERTIFIED_SCOPED" and
@@ -466,6 +528,7 @@ HELP = [
     "a：已签发后切换交易来源列表；可按类别、资金用途、责任 ID、摘要或账户筛选。",
     "↑↓ 或 j/k：滚动文本；在待审列表选择项目。PgUp/PgDn 或空格翻页，g/G 到首尾。",
     "Enter：打开所选待审／交易详情；交易显示逐腿原币、分类、用途、责任及原始账本内容。",
+    "待审项分行显示：日期与本笔金额、文件名与行号、账户、原因。Enter 查看完整路径；详情可用 ↑↓／PgUp／PgDn 滚动。",
     "e：填写选中的分类／H 资产用途，写理由、核对预览，明确输入 y 并回车才保存。",
     "f：本月出现 EXTERNAL_SCOPE_PENDING 时，核对截至月末已发生的漏记责任／在途付款，填写依据并明确输入 y 才保存。",
     "月末核对只声明截止日及以前的事实，不保证未来没有负债；其他待审仍须处理。存在漏记责任／在途付款时请取消。",
@@ -492,8 +555,9 @@ def _draw_browser(stdscr, browser: ReportBrowser):
             _put(stdscr, 1, "窗口过小；放大终端，q 退出")
         stdscr.refresh()
         return
+    config_label = "/".join(browser.config.parts[-3:])
     _put(stdscr, 1, f"{browser.period_label()}；p 选择范围，c 返回月报" if browser.period else
-         f"配置：{browser.config}")
+         f"配置：{config_label}（? 查看完整路径）")
     page = height - 4
     total_reviews = len(browser.outcome.get("review_items", [])) if browser.outcome else 0
     items = browser.items()
@@ -509,6 +573,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         subtitle += f"；筛选：{browser.query}"
     listing = browser.outcome is not None and browser.view in {"reviews", "transactions"} and not (
         browser.error or browser.detail or browser.help)
+    selected_span = (0, 0)
     if browser.help:
         lines = [*HELP, f"当前配置完整路径：{browser.config}"]
         if browser.project is not None:
@@ -532,8 +597,14 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         else:
             lines = [("区间待审详情；按 m 转到该月审阅" if browser.period else
                       "待审详情（当前审计快照；分类／H 用途可按 e 填写）"),
-                 f"原因：{item.get('reason_code', '')} {item.get('detail', '')}",
-                 f"位置：{item.get('source') or '未提供'}", "",
+                 _review_location(item.get('source')),
+                 f"日期：{item.get('date') or item.get('month') or '不适用'}",
+                 f"本笔金额：{amount_text(item['signed_units'])} {item.get('commodity', '')}"
+                 if item.get('signed_units') is not None else "本笔金额：不适用",
+                 f"原因：{_review_reason(item)}",
+                 f"账户：{item.get('account') or '不适用'}",
+                 f"完整路径：{item.get('source') or '未提供'}",
+                 f"原因码：{item.get('reason_code', '')}", "", "原始审计资料（精确数值）：",
                  *json.dumps(item, ensure_ascii=False, indent=2, sort_keys=True).splitlines()]
             subtitle = "待审详情；Esc 返回列表" + ("，m 转到该月" if browser.period else "")
     elif listing:
@@ -544,23 +615,25 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         if (browser.outcome or {}).get("review_queue", {}).get("preflight_only"):
             subtitle += "；仅当前预检阻断层，其余尚未检查"
         browser.selected = max(0, min(browser.selected, max(0, len(items) - 1)))
-        browser.offset = min(browser.offset, browser.selected)
-        browser.offset = max(browser.offset, browser.selected - page + 1)
-        browser.offset = max(0, min(browser.offset, max(0, len(items) - page)))
         lines = []
-        for index, item in enumerate(items):
-            if browser.view == "transactions":
-                amounts = " / ".join(f"{part['signed_units']} {part['commodity']}" for part in item["postings"][:2])
+        if browser.view == "transactions":
+            browser.offset = min(browser.offset, browser.selected)
+            browser.offset = max(browser.offset, browser.selected - page + 1)
+            browser.offset = max(0, min(browser.offset, max(0, len(items) - page)))
+            selected_span = (browser.selected, browser.selected + 1)
+            for index, item in enumerate(items):
+                amounts = " / ".join(f"{amount_text(part['signed_units'])} {part['commodity']}" for part in item["postings"][:2])
                 lines.append(f"{'>' if index == browser.selected else ' '} {index + 1}. {item['date']} "
                              f"{item.get('payee') or ''} {item['narration']} | {amounts} [{item['source']}]")
-                continue
-            label = "程序实现缺口" if item.get("reason_kind") == "implementation_limit" else "待审"
-            month = f"{item['month']} " if browser.period else ""
-            lines.append(f"{'>' if index == browser.selected else ' '} {index + 1}. {label} "
-                         f"{month}"
-                         f"{item.get('date', '')} {item.get('account', '')} "
-                         f"{item.get('signed_units', '')} {item.get('commodity', '')} "
-                         f"{item.get('reason_code', '')}：{item.get('detail', '')} [{item.get('source', '')}]")
+        else:
+            lines, spans = _review_layout(items, browser.selected, width - 1, browser.period)
+            if items:
+                start, end = selected_span = spans[browser.selected]
+                if start < browser.offset or end - start > page:
+                    browser.offset = start
+                elif end > browser.offset + page:
+                    browser.offset = end - page
+                browser.offset = max(0, min(browser.offset, max(0, len(lines) - page)))
         if not lines:
             lines = (["没有匹配交易；筛选不改变上方交易总数和预算数字。"] if browser.view == "transactions" else
                      ["没有匹配待审项；筛选不改变上方待审总数与认证状态。"])
@@ -575,10 +648,14 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         lines = _wrap(lines, width - 1)
         browser.offset = max(0, min(browser.offset, max(0, len(lines) - page)))
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
-        selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
+        selected = listing and selected_span[0] <= row - 3 + browser.offset < selected_span[1] and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
     footer = ("w 工资周期 p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
               "w 工资周期 p 区间 m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
+    if listing and browser.view == "reviews":
+        footer = "↑↓ 选项 Enter 详情 r 重算 / 筛选 ? 更多按键 q 退出"
+    elif browser.detail:
+        footer = "↑↓ 滚动 PgUp/PgDn 翻页 Esc 返回 ? 帮助 q 退出"
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -1046,6 +1123,9 @@ def _report_browser(stdscr, browser: ReportBrowser):
                 delta = page
             attribute = "selected" if listing else "offset"
             value = getattr(browser, attribute) + delta
+            if listing and browser.view == "reviews" and key in (curses.KEY_PPAGE, curses.KEY_NPAGE, " "):
+                value = _review_page_target(browser, page, stdscr.getmaxyx()[1] - 1,
+                                            key != curses.KEY_PPAGE)
             if key in (curses.KEY_HOME, "g"):
                 value = 0
             elif key in (curses.KEY_END, "G"):
