@@ -149,6 +149,7 @@ class ReportBrowser:
         self.index = self.configs.index(initial_config.resolve()) if initial_config is not None else 0
         self.period = False
         self.period_range: tuple[str, str] | None = None
+        self.salary_cycle: tuple[str, str, str | None, str | None] | None = None
         self.query = ""
         self.view = "report"
         self.help = False
@@ -177,9 +178,15 @@ class ReportBrowser:
             if self.period:
                 from .period_report import audit_period, render_text
                 self.period_inputs = self.period_configs()
-                outcome = (audit_period(self.period_inputs, *self.period_range) if self.period_range is not None else
-                           audit_period(self.period_inputs))
-                renderer = render_text
+                if self.salary_cycle is not None:
+                    from .salary_cycle import audit_salary_cycle, render_text as salary_text
+                    outcome = audit_salary_cycle(self.period_inputs[0], *self.salary_cycle,
+                        expected_identity=self.project.identity if self.project is not None else None)
+                    renderer = salary_text
+                else:
+                    outcome = (audit_period(self.period_inputs, *self.period_range) if self.period_range is not None else
+                               audit_period(self.period_inputs))
+                    renderer = render_text
             else:
                 outcome = self.loader(self.config)
                 renderer = self.renderer
@@ -319,10 +326,23 @@ class ReportBrowser:
             bounds = (_month(since), _month(through))
             require(bounds[0] <= bounds[1], "PERIOD_RANGE_INVALID", "起始月份不能晚于结束月份")
         self.period_range, self.period, self.view = bounds, True, "report"
+        self.salary_cycle = None
+        self.filter("")
+        self.clear()
+
+    def select_salary_cycle(self, payday: str, next_payday: str,
+                            budget: str | None = None, category: str | None = None):
+        from .salary_cycle import cycle_bounds
+        cycle_bounds(payday, next_payday, budget)
+        self.salary_cycle = (payday, next_payday, budget, category)
+        self.period, self.view = True, "report"
         self.filter("")
         self.clear()
 
     def period_configs(self) -> list[Path]:
+        if self.salary_cycle is not None:
+            from .salary_cycle import select_config
+            return [select_config([path for _, path in self.month_choices()], *self.salary_cycle[:2])]
         if self.period_range is None:
             return list(self.configs)
         from .period_report import _months
@@ -337,6 +357,8 @@ class ReportBrowser:
         return [path for _, path in rows]
 
     def period_label(self) -> str:
+        if self.salary_cycle is not None:
+            return f"工资周期 {self.salary_cycle[0]} 至下次工资日 {self.salary_cycle[1]}（不含）"
         return (f"区间 {self.period_range[0]} 至 {self.period_range[1]}" if self.period_range is not None else
                 f"区间使用全部 {len(self.configs)} 份配置")
 
@@ -410,7 +432,7 @@ class ReportBrowser:
             self.offset = 0
 
     def title(self) -> str:
-        scope = "区间 " if self.period else ""
+        scope = ("工资周期 " if self.salary_cycle is not None else "区间 ") if self.period else ""
         if self.error:
             state = "计算失败（无可用月报）"
         elif self.outcome:
@@ -432,6 +454,7 @@ HELP = [
     "n：准备下一月填写表；用编辑器填好后，再按 n 选择载入。未确认的目标／账户继续列待审，不自动沿用月末声明。",
     "下一月保存后自动加入当前配置清单，可用 [／] 返回前月；重启时仍须提供已保存配置路径。",
     "p：输入起始与结束月份，查看所选连续区间；起始填 all 恢复全部已载入月份。Esc 取消，不改变当前查询。",
+    "w：输入本次／下次真实工资日及可选周期额度；含本次工资日，不含下次工资日。只统计周期消费及额度差，不套用自然月目标或签发实际可花。",
     "查询区间不改变 cutover；各月余额仍按原历史重放，所需的历史归属及责任资料须齐全。",
     "c：切换当前月报与上次选择的区间；未选择时使用全部已载入最新配置。范围仅在本次 TUI 会话保留。",
     "区间重新审计每个月：只累计流量，目标差逐月比较，余额与可花取期末，任何月待审均不显示区间数字。",
@@ -554,8 +577,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         selected = listing and row - 3 + browser.offset == browser.selected and bool(items)
         _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
-    footer = ("p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
-              "p 区间 m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
+    footer = ("w 工资周期 p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
+              "w 工资周期 p 区间 m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
@@ -732,7 +755,8 @@ def _export_report(stdscr, browser: ReportBrowser):
             return
         format = format.strip().casefold()
         require(format in FORMATS, "TUI_EXPORT_FORMAT_INVALID", "导出格式须为 text、json 或 csv")
-        label = (("period-" + "-to-".join(browser.period_range) if browser.period_range else "period")
+        label = (("salary-" + "-to-".join(browser.salary_cycle[:2]) if browser.salary_cycle is not None else
+                  "period-" + "-to-".join(browser.period_range) if browser.period_range else "period")
                  if browser.period else (browser.outcome or {}).get("month", "month"))
         suggested = Path.cwd() / f"budget-{label}-{datetime.now():%Y%m%d-%H%M%S}{FORMATS[format]}"
         destination = _read_field(stdscr, "保存到新文件", context,
@@ -920,6 +944,32 @@ def _select_period(stdscr, browser: ReportBrowser):
         _message(stdscr, "未切换查询范围", [str(exc), "请核对起止月份后再次按 p；当前结果不代表新范围。"])
 
 
+def _select_salary_cycle(stdscr, browser: ReportBrowser):
+    if browser.help:
+        return
+    try:
+        from .project import _metadata
+        from ..tools.v6_next_month import _next
+        month, _ = _metadata(browser.config)
+        previous = browser.salary_cycle or (month + "-01", _next(month) + "-01", None, None)
+        context = ["本周期包含本次工资到账日，排除下次工资到账日；当天所有交易均归下一周期。",
+                   "请输入真实日期，不按账户名称或固定几号猜工资。",
+                   "周期额度单独填写，不复制、累加或按天折算自然月目标；留空只统计消费。",
+                   "只签发消费及额度差，不表示实际可花现金；Esc 取消。"]
+        values = []
+        for prompt, initial in zip(("本次工资日 YYYY-MM-DD：", "下次工资日 YYYY-MM-DD：",
+                                    "本周期消费额度（可留空）：", "消费类别（留空沿用消费上限类别）："), previous):
+            value = _read_field(stdscr, "工资周期消费统计", context, prompt, initial or "")
+            if value is None:
+                return
+            values.append(value.strip())
+        browser.select_salary_cycle(values[0], values[1], values[2] or None, values[3] or None)
+        _draw_browser(stdscr, browser)
+        browser.refresh()
+    except (BudgetError, OSError, UnicodeError) as exc:
+        _message(stdscr, "未切换工资周期", [str(exc), "请核对真实工资日、额度及周期末月份配置。"])
+
+
 def _report_browser(stdscr, browser: ReportBrowser):
     try:
         curses.curs_set(0)
@@ -954,6 +1004,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             reload()
         elif key == "p":
             _select_period(stdscr, browser)
+        elif key == "w":
+            _select_salary_cycle(stdscr, browser)
         elif key == "m":
             if browser.period:
                 if browser.open_review_month():
