@@ -79,6 +79,17 @@ def check(executable: Path, *, onedir: bool = False) -> None:
                           "--cycle-budget", "200")
         assert salary["status"] == "CERTIFIED_SCOPED" and salary["through"] == "2026-09-30", salary
         assert salary["report"]["cycle_budget"]["remaining"] == "190", salary
+        # Forgotten historical targets must not be replaced with a made-up zero.
+        unknown_sheet = (directory / "setup.yaml").read_text(encoding="utf-8")
+        unassessed_sheet = unknown_sheet.replace("日常开销: '200'", "日常开销: not_assessed")
+        assert unknown_sheet != unassessed_sheet
+        (directory / "unassessed-setup.yaml").write_text(unassessed_sheet, encoding="utf-8")
+        historical_config = document("init", "--apply", "unassessed-setup.yaml", "--output", "unassessed")["config"]
+        historical = document("--config", historical_config)
+        assert historical["status"] == "CERTIFIED_SCOPED", historical
+        assert historical["report"]["actual_spendable"]["actual_spendable"] == "190", historical
+        assert historical["report"]["max_spendable"]["status"] == "NOT_ASSESSED", historical
+        assert historical["report"]["max_spendable"]["max_spendable"] is None, historical
         assert "190 CNY" in run()[0]
         run("report", "--format", "csv", "--output", "report.csv")
         assert (directory / "report.csv").read_bytes().startswith(b"\xef\xbb\xbf")

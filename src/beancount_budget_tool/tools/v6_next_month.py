@@ -146,7 +146,7 @@ def create_next_month(config: Path, output: Path, *, expected_inputs: dict[Path,
             f"原 cutover 仍为 {doc['cutover']}，不会把账户余额重置或新增一笔期初资金。\n\n"
             "1. 核对 expense_targets（直接费用目标）、expense_subtree_targets（含子类别的总上限）"
             "和 allocation_targets（用途划拨目标），再把 targets_confirmed 改为 true。"
-            "金额填带引号的非负数字；用途目标可填 not_assessed，不能把缺目标当作零。"
+            "金额填带引号的非负数字；消费及用途目标都可填 not_assessed 表示本月明确不考核，不能把缺目标当作零。"
             "优先提取新月已写的模板／目标；缺失处参考上月作提议，来源月份见 preparation.yaml。\n"
             "2. account_changes 只列新账户、新币种或原来未确定的支付范围。"
             "semantics 选 H（真实库存）或 K（累计申赎）；每个币种选 payable 或 excluded，K 必须 excluded；reason 写判断依据。"
@@ -262,8 +262,8 @@ def compile_next_month(worksheet: Path, output: Path | None = None, *, include_t
                     pending((field, name), "填写非负十进制目标" + ("，或 not_assessed" if allow_not_assessed else ""))
             return result
 
-        direct = amounts("expense_targets", category_ids)
-        subtree = amounts("expense_subtree_targets", category_ids)
+        direct = amounts("expense_targets", category_ids, True)
+        subtree = amounts("expense_subtree_targets", category_ids, True)
         allocations = amounts("allocation_targets", owner_ids, True)
         for owner in set(owner_ids.values()) - set(allocations):
             pending(("allocation_targets",), f"用途 {owner} 缺少本月目标或 not_assessed")
@@ -271,7 +271,7 @@ def compile_next_month(worksheet: Path, output: Path | None = None, *, include_t
         purpose_doc = deepcopy(load_yaml(paths["purpose_plans"]))
         cap = expense_doc.get("spendable_cap_category_id")
         if cap and cap not in subtree:
-            pending(("expense_subtree_targets",), "最多能花的上限类别须有明确子树消费目标")
+            pending(("expense_subtree_targets",), "最多能花的上限类别须有明确子树消费目标，或填 not_assessed 表示本月不考核")
         expanded = load_expense_targets(paths["expense_plans"], month, doc["report_currency"], categories)
         for field, declared, selected in (("expense_targets", expanded["targets"], direct),
                                            ("expense_subtree_targets", expanded["subtree_targets"], subtree)):

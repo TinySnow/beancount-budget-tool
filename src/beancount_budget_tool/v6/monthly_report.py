@@ -83,6 +83,11 @@ def summarize_max_spendable(actual: dict, expense: dict) -> dict:
                 "max_spendable": None, "reason_codes": ["SPENDABLE_CAP_NOT_CONFIGURED"]}
     category = next((row for row in expense["categories"] if row["id"] == category_id), None)
     require(category is not None, "MONTH_REPORT_MISMATCH", "最多能花的上限类别不在消费报表中")
+    if category["subtree_remaining_status"] == "NOT_ASSESSED":
+        return {"status": "NOT_ASSESSED", "category_id": category_id,
+                "category_name": category["name"], "max_spendable": None,
+                "reason_codes": ["SPENDABLE_CAP_NOT_ASSESSED"],
+                "note": "本月明确不考核消费上限，不计算最多能花；用途现金可支付另行审计。"}
     if category["subtree_target_kind"] != "explicit":
         return {"status": "NEEDS_REVIEW", "category_id": category_id,
                 "max_spendable": None, "reason_codes": ["SPENDABLE_CAP_TARGET_MISSING"]}
@@ -373,7 +378,8 @@ def render_text(report: dict) -> str:
         headline = f"最多能花：待审（{', '.join(capped['reason_codes'])}）"
     elif actual["status"] == "CERTIFIED":
         headline = (f"用途现金可支付：{amount(actual['actual_spendable'])} {currency}；"
-                    "未配置消费目标上限，不签发『最多能花』")
+                    + ("本月消费上限不考核，不计算『最多能花』" if capped["status"] == "NOT_ASSESSED" else
+                       "未配置消费目标上限，不签发『最多能花』"))
     else:
         headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
@@ -407,6 +413,15 @@ def render_text(report: dict) -> str:
                 for row in actual["purpose_available"]), ""]
     shown = 0
     for row in expense["categories"]:
+        if row.get("subtree_remaining_status") == "NOT_ASSESSED":
+            lines.append(f"  {row['name']}（含子类）：不考核消费上限，实际 {amount(row['subtree_spent'])} {currency}；不计算目标差额")
+            shown += 1
+            if row["direct_target"] is None:
+                continue
+        elif row.get("direct_remaining_status") == "NOT_ASSESSED" and row["subtree_target_kind"] != "explicit":
+            lines.append(f"  {row['name']}：直接费用目标不考核，实际 {amount(row['direct_spent'])} {currency}；不计算直接目标差额")
+            shown += 1
+            continue
         if row["subtree_target_kind"] != "explicit" and row["direct_target"] is None:
             continue
         subtree = row["subtree_target_kind"] == "explicit"

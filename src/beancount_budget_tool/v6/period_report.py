@@ -248,7 +248,8 @@ def render_text(outcome: dict) -> str:
                   for key in EXPENSE_METRICS[:3]]
         values = [_fmt(exact_text(value)) for value in totals] + [
             _fmt(row["actual_spendable"]["actual_spendable"]),
-            _fmt(row["max_spendable"]["max_spendable"]) if row["max_spendable"]["max_spendable"] is not None else "未配置"]
+            _fmt(row["max_spendable"]["max_spendable"]) if row["max_spendable"]["max_spendable"] is not None else
+            "不考核" if row["max_spendable"]["status"] == "NOT_ASSESSED" else "未配置"]
         lines.append(f"{row['month']} | " + " | ".join(values))
     totals = report["expense_totals"]
     lines.append(f"区间消费：原支出 {_fmt(totals['direct_gross_spent'])}，退款 {_fmt(totals['direct_refunded'])}，净额 {_fmt(totals['direct_spent'])} {currency}")
@@ -268,6 +269,8 @@ def render_text(outcome: dict) -> str:
         for row in month["expense_targets"]["categories"]:
             if row["subtree_target"] is not None:
                 lines.append(f"  {month['month']} {row['name']}：目标 {_fmt(row['subtree_target'])}，消费 {_fmt(row['subtree_spent'])}，差额 {_fmt(row['subtree_remaining'])} {currency}")
+            elif row["subtree_remaining_status"] == "NOT_ASSESSED":
+                lines.append(f"  {month['month']} {row['name']}：不考核目标，消费 {_fmt(row['subtree_spent'])} {currency}；差额不计算")
         for row in month["purpose_progress"]["owners"]:
             target = _fmt(row["target_q"]) if row["target_q"] is not None else "不考核"
             remaining = _fmt(row["remaining_q_minus_g"]) if row["remaining_q_minus_g"] is not None else "不考核"
@@ -328,8 +331,11 @@ def csv_rows(outcome: dict) -> list[dict]:
                 status=month[metric]["status"], source=config)
         for row in month["expense_targets"]["categories"]:
             for metric in (*EXPENSE_METRICS, "direct_target", "direct_remaining", "subtree_target", "subtree_remaining"):
+                unassessed = (metric in {"direct_target", "direct_remaining"} and row["direct_remaining_status"] == "NOT_ASSESSED" or
+                              metric in {"subtree_target", "subtree_remaining"} and row["subtree_remaining_status"] == "NOT_ASSESSED")
                 add("month", label, "expenses", metric, row[metric], id=row["id"], name=row["name"],
-                    commodity=currency, source=config, status=("NOT_DECLARED" if row[metric] is None else "CERTIFIED_SCOPED"))
+                    commodity=currency, source=config, status=("NOT_ASSESSED" if unassessed else
+                        "NOT_DECLARED" if row[metric] is None else "CERTIFIED_SCOPED"))
         for row in month["purpose_progress"]["owners"]:
             for metric in ("target_q", "actual_g", "remaining_q_minus_g"):
                 add("month", label, "allocations", metric, row[metric], id=row["owner_id"],

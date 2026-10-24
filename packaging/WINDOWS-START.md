@@ -82,6 +82,15 @@ TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明
 .\beancount-budget-tool.exe --config .\budget-2023-07\compiled\month.yaml --format tui
 ```
 
+如果年代久远，记不清当时的消费上限，在 `setup.yaml` 的目标中明确填 `not_assessed`，不要猜金额或填 0：
+
+```yaml
+expense_targets:
+  生活开销: not_assessed
+```
+
+类别名用你原表里的名字。`null` 表示尚待决定，仍会待审；`not_assessed` 表示本月不考核该消费目标，实际消费及资金用途照常审核。该月不计算消费目标差和受它限制的「最多能花」，但不会仅因此阻挡完整月报。划拨目标 `allocation_targets` 同样可填 `not_assessed`。下一月可继续这样填，或改回明确金额；工资周期额度仍单独输入。此功能需要更新 exe，旧包不支持消费目标的 `not_assessed`。
+
 未确认的地方会列入待审，并显示文件与行号；不必为了出数字随意填 `true`。
 程序只读账本，生成的配置／报告放在你指定的新目录。账本、include 文件和已有 YAML 仍需保留。
 
