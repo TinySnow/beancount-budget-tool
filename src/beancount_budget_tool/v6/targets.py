@@ -24,6 +24,7 @@ from .settlement_budget import audit_settlement_budget_values
 MONTH = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])\Z")
 DECIMAL = re.compile(r"(?:0|[1-9]\d*)(?:\.\d+)?\Z")
 CURRENCY = re.compile(r"[A-Z][A-Z0-9_]*\Z")
+NOT_ASSESSED = "not_assessed"
 
 
 def _month(value: object) -> str:
@@ -43,7 +44,7 @@ def _fields(value: object, allowed: set[str], source: str) -> dict:
 
 
 def _target_layer(value: object, ids: set[str], path: Path,
-                  keys: tuple[str, ...]) -> dict[str, dict[str, Fraction]]:
+                  keys: tuple[str, ...]) -> dict[str, dict[str, Fraction | str]]:
     row = _fields(value, {"expense_targets", "expense_subtree_targets"}, yaml_path_location(path, keys))
     parsed = {}
     for field in ("expense_targets", "expense_subtree_targets"):
@@ -54,10 +55,10 @@ def _target_layer(value: object, ids: set[str], path: Path,
         for ident, raw in targets.items():
             require(type(ident) is str and ident in ids, "PLAN_CATEGORY_UNKNOWN",
                     "计划引用未注册消费类别", yaml_path_location(path, (*keys, field, str(ident))))
-            require(type(raw) is str and bool(DECIMAL.fullmatch(raw)),
-                    "PLAN_AMOUNT_INVALID", "目标须是非负十进制字符串",
+            require(type(raw) is str and (raw == NOT_ASSESSED or bool(DECIMAL.fullmatch(raw))),
+                    "PLAN_AMOUNT_INVALID", "目标须是非负十进制字符串或 not_assessed",
                     yaml_path_location(path, (*keys, field, ident)))
-            result[ident] = Fraction(raw)
+            result[ident] = raw if raw == NOT_ASSESSED else Fraction(raw)
         parsed[field] = result
     return parsed
 
@@ -84,7 +85,7 @@ def load_expense_targets(path: Path, month: str, report_currency: str,
         require(type(cap_id) is str and cap_id in ids, "PLAN_CATEGORY_UNKNOWN",
                 "最多能花的消费目标上限须引用已注册类别", yaml_key_location(path, "spendable_cap_category_id"))
     defaults = _target_layer(document.get("defaults", {}), ids, path, ("defaults",))
-    def parse_layers(field: str) -> dict[str, dict[str, dict[str, Fraction]]]:
+    def parse_layers(field: str) -> dict[str, dict[str, dict[str, Fraction | str]]]:
         values = document.get(field, {})
         require(type(values) is dict, "PLAN_INVALID", f"{field} 必须是月份映射", yaml_key_location(path, field))
         result = {}
@@ -109,8 +110,10 @@ def load_expense_targets(path: Path, month: str, report_currency: str,
     return {"month": month, "report_currency": report_currency,
             "plan_sha256": sha256(path.read_bytes()).hexdigest(),
             "spendable_cap_category_id": cap_id,
-            "targets": {ident: exact_text(value) for ident, value in targets["expense_targets"].items()},
-            "subtree_targets": {ident: exact_text(value) for ident, value in targets["expense_subtree_targets"].items()}}
+            "targets": {ident: exact_text(value) if isinstance(value, Fraction) else value
+                        for ident, value in targets["expense_targets"].items()},
+            "subtree_targets": {ident: exact_text(value) if isinstance(value, Fraction) else value
+                                for ident, value in targets["expense_subtree_targets"].items()}}
 
 
 def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
@@ -140,8 +143,10 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
     category_doc = load_yaml(classifications)
     expanded = load_expense_targets(plans, month, report_currency,
                                     category_doc["categories"])
-    targets = {key: Fraction(value) for key, value in expanded["targets"].items()}
-    subtree_targets = {key: Fraction(value) for key, value in expanded["subtree_targets"].items()}
+    targets = {key: Fraction(value) for key, value in expanded["targets"].items() if value != NOT_ASSESSED}
+    subtree_targets = {key: Fraction(value) for key, value in expanded["subtree_targets"].items() if value != NOT_ASSESSED}
+    direct_unassessed = {key for key, value in expanded["targets"].items() if value == NOT_ASSESSED}
+    subtree_unassessed = {key for key, value in expanded["subtree_targets"].items() if value == NOT_ASSESSED}
     expense = spending["metrics"]["net_expense"]
     rows = expense["categories"]
     parents = {row["id"]: row["parent"] for row in rows}
@@ -152,13 +157,13 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
     def pool_ancestor(ident: str) -> str | None:
         current = ident
         while current is not None:
-            if current in subtree_targets:
+            if current in expanded["subtree_targets"]:
                 return current
             current = parents[current]
         return None
 
     missing = {row["id"] for row in rows
-               if row["active_direct"] and row["id"] not in targets and
+               if row["active_direct"] and row["id"] not in expanded["targets"] and
                pool_ancestor(row["id"]) is None}
     # An unclassified expense may belong to any category. Its target comparison
     # cannot be certified merely because the visible classified rows have plans.
@@ -172,47 +177,57 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
                 descendants[ident].update(subtree(child))
         return descendants[ident]
 
-    effective_targets: dict[str, Fraction] = {}
-    def effective_target(ident: str) -> Fraction:
+    effective_targets: dict[str, Fraction | None] = {}
+    def effective_target(ident: str) -> Fraction | None:
         if ident not in effective_targets:
-            effective_targets[ident] = (subtree_targets[ident] if ident in subtree_targets else
-                                        targets.get(ident, Fraction(0)) +
-                                        sum((effective_target(child) for child in children[ident]), Fraction(0)))
+            if ident in subtree_targets:
+                effective_targets[ident] = subtree_targets[ident]
+            elif (ident in subtree_unassessed or ident in direct_unassessed or
+                  ident not in targets and pool_ancestor(ident) in subtree_unassessed):
+                effective_targets[ident] = None
+            else:
+                child_values = [effective_target(child) for child in children[ident]]
+                effective_targets[ident] = (None if any(value is None for value in child_values) else
+                    targets.get(ident, Fraction(0)) + sum(child_values, Fraction(0)))
         return effective_targets[ident]
 
     details = []
     for row in rows:
         ident = row["id"]
         direct_target = targets.get(ident)
+        direct_not_assessed = (ident in direct_unassessed or
+                               ident not in targets and pool_ancestor(ident) in subtree_unassessed)
         direct_missing = ident in missing or unknown_category
-        direct_applicable = direct_target is not None or ident in missing
+        direct_applicable = direct_target is not None or ident in missing or direct_not_assessed
         direct_ok = direct_applicable and direct_target is not None and not direct_missing and row["direct_status"] == "CERTIFIED"
         members = subtree(ident)
         subtree_missing = bool(members & missing) or unknown_category
-        subtree_applicable = (ident in subtree_targets or
-                              any(member in targets or member in missing or
-                                  member in subtree_targets for member in members))
-        subtree_ok = subtree_applicable and not subtree_missing and row["subtree_status"] == "CERTIFIED"
+        subtree_applicable = (pool_ancestor(ident) in subtree_unassessed or
+                              any(member in expanded["targets"] or member in missing or
+                                  member in expanded["subtree_targets"] for member in members))
         # An explicit subtree cap covers its own direct expense and every
         # descendant, without adding independent child caps a second time.
         subtree_target = effective_target(ident)
+        subtree_not_assessed = subtree_applicable and subtree_target is None
+        subtree_ok = (subtree_applicable and not subtree_not_assessed and not subtree_missing and
+                      row["subtree_status"] == "CERTIFIED")
         details.append({"id": ident, "name": row["name"], "parent": row["parent"],
                         "active_direct": row["active_direct"],
                         "direct_target": exact_text(direct_target) if direct_target is not None else None,
                         "direct_spent": row["direct"],
                         "direct_gross_spent": row["direct_gross_spent"],
                         "direct_refunded": row["direct_refunded"],
-                        "direct_remaining_status": "CERTIFIED" if direct_ok else
+                        "direct_remaining_status": "NOT_ASSESSED" if direct_not_assessed else "CERTIFIED" if direct_ok else
                                                    "NEEDS_REVIEW" if direct_applicable or unknown_category else "NOT_APPLICABLE",
                         "direct_remaining": exact_text(direct_target - Fraction(row["direct"])) if direct_ok else None,
-                        "subtree_target": exact_text(subtree_target) if subtree_applicable and
+                        "subtree_target": exact_text(subtree_target) if subtree_target is not None and subtree_applicable and
                                           (ident in subtree_targets or not subtree_missing) else None,
-                        "subtree_target_kind": ("explicit" if ident in subtree_targets else
+                        "subtree_target_kind": ("not_assessed" if subtree_not_assessed else "explicit" if ident in subtree_targets else
                                                 "derived" if subtree_applicable else None),
                         "subtree_spent": row["subtree"],
                         "subtree_gross_spent": row["subtree_gross_spent"],
                         "subtree_refunded": row["subtree_refunded"],
-                        "subtree_remaining_status": "CERTIFIED" if subtree_ok else
+                        "subtree_remaining_status": "NOT_ASSESSED" if subtree_not_assessed and not subtree_missing else "CERTIFIED" if subtree_ok else
                                                     "NEEDS_REVIEW" if subtree_applicable or unknown_category else "NOT_APPLICABLE",
                         "subtree_remaining": exact_text(subtree_target - Fraction(row["subtree"])) if subtree_ok else None})
     reasons = list(expense["reason_codes"])
@@ -222,7 +237,7 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
     names = {row["id"]: row["name"] for row in rows}
     review_items.extend(review_item(
         "PLAN_MISSING", yaml_path_location(plans, ("months", month)), target_id=ident,
-        detail=f"本月消费类别「{names[ident]}」缺少目标；填写该类别目标或覆盖它的父类别子树目标。")
+        detail=f"本月消费类别「{names[ident]}」缺少目标；填写该类别目标或覆盖它的父类别子树目标，历史目标无法确认时可明确写 not_assessed。")
         for ident in sorted(missing))
     evidence = ({"_transaction_evidence": spending["_transaction_evidence"]} if include_evidence else {})
     return {**evidence, "mode": "v6_monthly_expense_target_report", "month": month,

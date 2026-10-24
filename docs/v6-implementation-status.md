@@ -1,6 +1,6 @@
 # v6 实施状态
 
-截至 2026-10-24，v6 是**可运行的开发预览**。计算规则以[用户需求](REQUIREMENTS.md)和[冻结架构](budget-v6-review.md)为准；操作从[QUICKSTART](../QUICKSTART.md)开始。本页只记录当前能力和验收边界。
+截至 2026-10-25，v6 是**可运行的开发预览**。计算规则以[用户需求](REQUIREMENTS.md)和[冻结架构](budget-v6-review.md)为准；操作从[QUICKSTART](../QUICKSTART.md)开始。本页只记录当前能力和验收边界。
 
 ## 已可运行
 
@@ -21,6 +21,8 @@
 主要入口：`beancount-budget-tool --config ...`、`beancount-budget-audit`、`beancount-budget-review-month`。配置和示例见[月报说明](v6-monthly-report.md)及[公开标签示例](../examples/v6/labeling.bean)。
 
 ## 已验证的范围
+
+2026-10-25 补齐历史自然月消费目标明确不考核：首月 expense_targets、计划侧文件的直接／子树目标，以及下一月填写表均可填 not_assessed；null 仍待决定，0 仍是真实零额度。保留消费、退款、用途余额及已审现金，目标与差额为 null／NOT_ASSESSED，不把不考核计作零，也不按现金冒报预算「最多能花」。父级数值总上限和子级明确额度保持独立，包含不考核子项的派生目标不拼成完整上限；缺分类、缺价等实际证据仍阻断月报。下一月可继承明确选择或改回金额；工资周期显式额度保持独立。18 项新虚拟测试及全量 678 项测试通过（含 CP1252 默认文本编码模拟），覆盖初始化、金额／null／不考核区别、模板切换、父子混合、连续月份、目标恢复、TUI、区间／CSV 和工资周期。真实 9 月原候选只读回归仍为已审、实际可花 −21.29、最多能花 −339.58 CNY；临时计划副本模拟不考核后仍已审，实际消费 2339.58、现金 −21.29 保持，目标差及最多能花不出数；未修改私人原计划或账本。本机目录版已通过无消费目标的完整月报场景及全部独立运行检查（含不可用临时目录启动），Windows 实际包由推送后的 CI 构建与检查。
 
 2026-10-24 为单文件 exe 在普通 VS Code PowerShell 中报 Could not create temporary directory、管理员终端可用且更换 TMP／TEMP 后仍失败的反馈，新增 Windows 目录包 beancount-budget-tool-windows-x64-folder。exe 与 _internal 必须一起保留；目录启动不经过单文件临时解压，命令和配置沿用。单文件包继续提供，未通过提权要求或修改系统目录权限规避问题。相同打包规格的本机目录构建已通过中文空格独立目录、移除外部 Python 路径、不可用 TMP／TEMP／TMPDIR 的启动及全部可执行文件流程检查，另有 5 项 launcher 测试通过。Windows CI 会构建和检查两种包；本机验证不能代替使用者的普通 VS Code 终端复测，具体失败根因仍未确定。
 
