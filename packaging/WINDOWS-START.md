@@ -1,8 +1,15 @@
 # Windows 试用（Windows 10／11，64 位 x64）
 
-这个文件夹里的 `beancount-budget-tool.exe` 可以单独运行，不用安装 Python。
+不用安装 Python。构建页面现在提供两种包：
+
+- **推荐 `beancount-budget-tool-windows-x64-folder`：目录版。** 解压后保留 `beancount-budget-tool.exe` 及旁边的 `_internal` 文件夹；启动不需要先在 Temp 中解压自身。不要只复制这个版本的 exe。
+- `beancount-budget-tool-windows-x64`：单文件版。只有这个版本的 exe 可以单独复制；每次启动要在系统临时目录解压运行文件。
+
 请先解压整个下载包，在解压后的文件夹里打开 PowerShell 或 Windows Terminal。
 这是终端程序；直接双击 exe 不会打开图形窗口。
+两种包的命令相同，原有账本及 v6 配置可以继续使用。
+
+如果单文件版在 VS Code 或普通 PowerShell 中报 `[PYI-...:ERROR] Could not create temporary directory!`，此时还未开始读取账本。先换目录版，在普通终端运行 `--version`；无需为了日常使用一直开启管理员终端。即便 PowerShell 可以新建文件夹，也不能据此确定打包器创建解压目录失败的具体原因。
 
 ## 1. 先试虚拟账本
 
@@ -65,7 +72,7 @@ TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明
 没有配置时，先生成首月填写表（下面路径换成你自己的）：
 
 ```powershell
-.\beancount-budget-tool.exe init --ledger "D:\账本\main.bean" --month 2023-07 --cutover 2023-07-01 --income-purpose 自由资金 --expense-purpose 生活费 --expense-category 生活费 --output .\budget-2023-07
+.\beancount-budget-tool.exe init --ledger "D:\账本\main.bean" --month 2023-07 --cutover 2023-07-01 --currency CNY --income-purpose 自由资金 --expense-purpose 生活费 --expense-category 生活开销 --output .\budget-2023-07
 ```
 
 用文本编辑器打开 `budget-2023-07\setup.yaml`，按同目录 `START_HERE.md` 填写账户、期初用途和目标。再运行：
@@ -78,7 +85,17 @@ TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明
 未确认的地方会列入待审，并显示文件与行号；不必为了出数字随意填 `true`。
 程序只读账本，生成的配置／报告放在你指定的新目录。账本、include 文件和已有 YAML 仍需保留。
 
-## 3. 旧命令怎样换成 exe
+## 3. 工资周期
+
+TUI 按 `w` 输入本次工资日、下次工资日及可选周期额度；包含本次工资日，排除下次工资日。也可运行：
+
+```powershell
+.\beancount-budget-tool.exe report --project "D:\账本\budget\budget-project.yaml" --payday 2023-07-08 --next-payday 2023-08-02 --cycle-budget 2000
+```
+
+日期、路径和额度换成自己的；本例统计到 8 月 1 日，8 月 2 日全部归下一周期。需要周期末所在月份的最新配置。只签发周期消费和额度差，额度剩余不等于实际可花现金。
+
+## 4. 旧命令怎样换成 exe
 
 | 原命令 | exe 写法 |
 |---|---|

@@ -9,13 +9,18 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 
-def check(executable: Path) -> None:
+def check(executable: Path, *, onedir: bool = False) -> None:
     source = Path(__file__).resolve().parents[1] / "examples" / "v6"
     with TemporaryDirectory(prefix="budget-exe-") as temporary:
         directory = (Path(temporary) / "独立运行 空格").resolve()
         directory.mkdir()
         binary = directory / executable.name
-        shutil.copy2(executable.resolve(), binary)
+        if onedir:
+            if not (executable.resolve().parent / "_internal").is_dir():
+                raise AssertionError("Folder bundle must include _internal beside the executable")
+            shutil.copytree(executable.resolve().parent, directory, dirs_exist_ok=True, symlinks=True)
+        else:
+            shutil.copy2(executable.resolve(), binary)
         environment = os.environ.copy()
         environment.pop("PYTHONHOME", None)
         environment.pop("PYTHONPATH", None)
@@ -24,10 +29,10 @@ def check(executable: Path) -> None:
         environment["PATH"] = (str(Path(os.environ["SystemRoot"]) / "System32")
                                if os.name == "nt" else "/usr/bin:/bin")
 
-        def run(*args, code=0):
+        def run(*args, code=0, env=None):
             print(f"Standalone check: {args[0] if args else 'default project'}", flush=True)
             result = subprocess.run([str(binary), *map(str, args)], cwd=directory,
-                                    env=environment, capture_output=True,
+                                    env=environment if env is None else env, capture_output=True,
                                     encoding="utf-8", timeout=90)
             if result.returncode != code:
                 raise AssertionError(f"{args}: exit {result.returncode}\n{result.stdout}\n{result.stderr}")
@@ -37,6 +42,15 @@ def check(executable: Path) -> None:
             return json.loads(run(*args, "--format", "json")[0])
 
         run("--version")
+        if onedir:
+            # A file cannot contain a new _MEI directory, even for an admin.
+            # Folder startup must not rely on the one-file extraction path.
+            unavailable = directory / "not-a-temporary-directory"
+            unavailable.write_text("not a directory", encoding="utf-8")
+            restricted = {**environment, "TMP": str(unavailable), "TEMP": str(unavailable),
+                          "TMPDIR": str(unavailable)}
+            run("--version", env=restricted)
+            print("Folder startup passed with unusable TEMP/TMP/TMPDIR.", flush=True)
         for command in ("monthly", "init", "review-month", "review", "review-refs",
                         "next-month", "report", "audit", "classification-proposals", "project"):
             run(command, "--help")
@@ -114,4 +128,6 @@ def check(executable: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
-    check(parser.parse_args().executable)
+    parser.add_argument("--onedir", action="store_true", help="Copy and test the entire folder bundle")
+    args = parser.parse_args()
+    check(args.executable, onedir=args.onedir)

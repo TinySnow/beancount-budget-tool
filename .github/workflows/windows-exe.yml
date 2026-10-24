@@ -25,6 +25,12 @@ jobs:
         run: python -m PyInstaller --clean --noconfirm packaging/windows.spec
       - name: Exercise the standalone executable outside the checkout
         run: python packaging/smoke_executable.py dist/beancount-budget-tool.exe
+      - name: Build folder console executable
+        env:
+          BUDGET_BUNDLE_MODE: onedir
+        run: python -m PyInstaller --noconfirm packaging/windows.spec
+      - name: Exercise folder bundle and unavailable extraction directories
+        run: python packaging/smoke_executable.py dist/beancount-budget-tool-portable/beancount-budget-tool.exe --onedir
       - name: Prepare download
         shell: pwsh
         run: |
@@ -37,9 +43,24 @@ jobs:
           Copy-Item examples/v6/first-month.bean dist/windows-x64/example/
           Copy-Item examples/v6/first-month-setup.yaml dist/windows-x64/example/
           git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64/BUILD-COMMIT.txt
+          New-Item -ItemType Directory -Path dist/windows-x64-folder
+          Copy-Item dist/beancount-budget-tool-portable/* dist/windows-x64-folder/ -Recurse
+          Copy-Item packaging/WINDOWS-START.md dist/windows-x64-folder/START-HERE.md
+          Copy-Item LICENSE dist/windows-x64-folder/
+          Copy-Item packaging/THIRD-PARTY-NOTICES.md dist/windows-x64-folder/
+          New-Item -ItemType Directory -Path dist/windows-x64-folder/example
+          Copy-Item examples/v6/first-month.bean dist/windows-x64-folder/example/
+          Copy-Item examples/v6/first-month-setup.yaml dist/windows-x64-folder/example/
+          git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64-folder/BUILD-COMMIT.txt
       - uses: actions/upload-artifact@v4
         with:
           name: beancount-budget-tool-windows-x64
           path: dist/windows-x64/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beancount-budget-tool-windows-x64-folder
+          path: dist/windows-x64-folder/
           if-no-files-found: error
           retention-days: 30
