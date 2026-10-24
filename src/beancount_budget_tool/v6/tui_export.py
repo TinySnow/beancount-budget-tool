@@ -14,7 +14,10 @@ FORMATS = {"text": ".txt", "json": ".json", "csv": ".csv"}
 def write_export(outcome: dict, config: Path, path: Path, format: str, *, period: bool) -> None:
     """Publish a fresh full result; exclusive create also rejects late collisions."""
     require(format in FORMATS, "TUI_EXPORT_FORMAT_INVALID", "导出格式须为 text、json 或 csv")
-    if format == "json":
+    if outcome.get("mode") == "v6_salary_cycle_spending" and format != "json":
+        from .salary_cycle import render_text as salary_text, render_csv as salary_csv
+        content = salary_csv(outcome) if format == "csv" else salary_text(outcome) + "\n"
+    elif format == "json":
         content = json.dumps(outcome, ensure_ascii=False, indent=2) + "\n"
     elif format == "csv":
         content = render_csv(outcome if period else _single_month_period(outcome, config))

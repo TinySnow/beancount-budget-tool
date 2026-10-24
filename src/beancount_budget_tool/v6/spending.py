@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from calendar import monthrange
+from collections import defaultdict
 from datetime import date
 from fractions import Fraction
 from pathlib import Path
@@ -36,6 +38,18 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
     except ValueError:
         require(False, "MONTH_INVALID", "月份须为有效 YYYY-MM", str(month))
     require(first >= cutover, "MONTH_INVALID", "报表月份不得早于 v6 cutover", month)
+    last = date(first.year, first.month, monthrange(first.year, first.month)[1])
+    return _audit_spending_window(root, cutover, first, last, classifications, report_currency,
+                                  benefit_groups, budget_values, month=month, include_evidence=include_evidence)
+
+
+def _audit_spending_window(root: Path, cutover: date, first: date, last: date,
+                            classifications: Path, report_currency: str,
+                            benefit_groups: Path | None = None,
+                            budget_values: list[dict] | None = None, *, month: str | None = None,
+                            include_evidence: bool = False) -> dict:
+    """Project booked flows inside inclusive dates, retaining earlier source context."""
+    require(cutover <= first <= last, "SPENDING_RANGE_INVALID", "费用区间须不早于 cutover，且起止有序")
     classification = audit_classification(root, cutover, classifications)
     valuation = audit_classification_valuation(root, cutover, classifications,
                                               report_currency)
@@ -47,9 +61,12 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
     fin = load_financial(root)
     facts = FactIndex(fin)
     locations = posting_sources(fin)
-    ref_dates = {_key(facts.for_posting(posting).as_dict()): entry.date.strftime("%Y-%m")
+    ref_dates = {_key(facts.for_posting(posting).as_dict()): entry.date
                  for entry in fin.entries if isinstance(entry, data.Transaction)
                  for posting in entry.postings}
+
+    def in_range(row):
+        return first <= ref_dates[_key(row["ref"])] <= last
     category_rows = load_yaml(classifications)["categories"]
     parents = {row["id"]: row["parent"] for row in category_rows}
     names = {row["id"]: row["name"] for row in category_rows}
@@ -61,20 +78,20 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
                             ("income_supplement", fin.options["name_income"])):
         role_claims = [row for row in classification["classifications"]
                        if row["account"].split(":", 1)[0] == root_name and
-                       ref_dates[_key(row["ref"])] == month]
+                       in_range(row)]
         role_missing = [row for row in missing_classification
                         if row["account"].split(":", 1)[0] == root_name and
-                        ref_dates[_key(row["ref"])] == month]
+                        in_range(row)]
         role_unvalued = [row for row in missing_value
                          if row["account"].split(":", 1)[0] == root_name and
-                         ref_dates[_key(row["ref"])] == month and
+                         in_range(row) and
                          (role != "net_expense" or _key(row["ref"]) not in replacement)]
         historical_unvalued_count = sum(
             row["account"].split(":", 1)[0] == root_name and
-            ref_dates[_key(row["ref"])] == month for row in missing_value)
+            in_range(row) for row in missing_value)
         role_benefits = [row for row in pending_benefit
                          if row["account"].split(":", 1)[0] == root_name and
-                         ref_dates[_key(row["ref"])] == month]
+                         in_range(row)]
         reasons = []
         if role_missing:
             reasons.append("CLASSIFICATION_PENDING")
@@ -93,8 +110,14 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
                     account=row["account"], commodity=row["commodity"],
                     signed_units=row["signed_units"], ref=row["ref"],
                     blocking_reason_code=code))
-        native = [row for row in valuation["native_totals"]
-                  if row["month"] == month and row["role"] == role]
+        native_amounts = defaultdict(Fraction)
+        for row in role_claims:
+            for part in row["slices"]:
+                key = (ref_dates[_key(row["ref"])].strftime("%Y-%m"), part["category_id"], row["commodity"])
+                native_amounts[key] += Fraction(part["signed_units"])
+        native = [{"month": m, "role": role, "category_id": category,
+                   "commodity": commodity, "signed_units": exact_text(amount)}
+                  for (m, category, commodity), amount in sorted(native_amounts.items())]
         direct = {ident: Fraction(0) for ident in parents}
         gross_paid = {ident: Fraction(0) for ident in parents}
         gross_returned = {ident: Fraction(0) for ident in parents}
@@ -109,7 +132,7 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
 
         for row in valuation["valued"]:
             if (row["account"].split(":", 1)[0] != root_name or
-                    ref_dates[_key(row["ref"])] != month):
+                    not in_range(row)):
                 continue
             for part in row["slices"]:
                 category = part["category_id"]
@@ -118,7 +141,7 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
                     add_value(category, value if role == "net_expense" else -value)
         if role == "net_expense":
             for row in replacement.values():
-                if ref_dates[_key(row["ref"])] != month:
+                if not in_range(row):
                     continue
                 for part in row["slices"]:
                     if part["category_id"] != "-":
@@ -187,12 +210,14 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
             result["report_total"] = exact_text(sum(direct.values(), Fraction(0)))
         metrics[role] = result
     evidence = ({"_transaction_evidence": {
-        "classifications": [row for row in classification["classifications"] if ref_dates[_key(row["ref"])] == month],
-        "valuations": [row for row in valuation["valued"] if ref_dates[_key(row["ref"])] == month],
-        "benefits": [row for row in benefits["proved"] if ref_dates[_key(row["ref"])] == month],
+        "classifications": [row for row in classification["classifications"] if in_range(row)],
+        "valuations": [row for row in valuation["valued"] if in_range(row)],
+        "benefits": [row for row in benefits["proved"] if in_range(row)],
     }} if include_evidence else {})
-    return {**evidence, "mode": "v6_monthly_budget_comparison_spending" if budget_values is not None
-                    else "v6_monthly_spending_report", "month": month,
+    return {**evidence, "mode": "v6_date_spending_report" if month is None else
+                    "v6_monthly_budget_comparison_spending" if budget_values is not None
+                    else "v6_monthly_spending_report", **({"month": month} if month is not None else
+                          {"from": first.isoformat(), "through": last.isoformat()}),
             "cutover": cutover.isoformat(), "ledger_snapshot": fin.digest,
             "metrics": metrics,
             "note": ("费用预算比较可采用已核实的还款人民币成本；历史计价审计仍独立，原币消费不改写"

@@ -24,7 +24,7 @@ from .valuation import audit_classification_valuation
 def audit_settlement_budget_values(root: Path, cutover: date, month: str,
                                    classifications: Path, report_currency: str,
                                    accounts: Path, ownership: Path,
-                                   obligations: Path, h_fx: Path) -> dict:
+                                   obligations: Path, h_fx: Path, *, through: date | None = None) -> dict:
     """Return only fully proved replacement values for missing expense quotes."""
     valuation = audit_classification_valuation(root, cutover, classifications, report_currency)
     expense_root = load_financial(root).options["name_expenses"]
@@ -33,7 +33,7 @@ def audit_settlement_budget_values(root: Path, cutover: date, month: str,
     fx = audit_h_fx(root, cutover, accounts, ownership, h_fx)
     if account_audit["report_currency"] != report_currency:
         return {"values": [], "reason_codes": ["REPORT_CURRENCY_MISMATCH"]}
-    last_day = date(int(month[:4]), int(month[5:]), monthrange(int(month[:4]), int(month[5:]))[1])
+    last_day = through or date(int(month[:4]), int(month[5:]), monthrange(int(month[:4]), int(month[5:]))[1])
     purchases = {}
     payments = {}
     for row in debt["events"]:

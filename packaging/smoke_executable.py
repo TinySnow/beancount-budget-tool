@@ -61,6 +61,10 @@ def check(executable: Path) -> None:
         project = document("project", "--config", config, "--output", "budget-project.yaml")
         assert project["status"] == "PROJECT_CREATED", project
         assert document("--month", "2026-09")["report"]["max_spendable"]["max_spendable"] == "190"
+        salary = document("report", "--payday", "2026-09-01", "--next-payday", "2026-10-01",
+                          "--cycle-budget", "200")
+        assert salary["status"] == "CERTIFIED_SCOPED" and salary["through"] == "2026-09-30", salary
+        assert salary["report"]["cycle_budget"]["remaining"] == "190", salary
         assert "190 CNY" in run()[0]
         run("report", "--format", "csv", "--output", "report.csv")
         assert (directory / "report.csv").read_bytes().startswith(b"\xef\xbb\xbf")

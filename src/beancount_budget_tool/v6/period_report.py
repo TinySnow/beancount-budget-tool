@@ -402,15 +402,33 @@ def main(argv=None) -> int:
     inputs.add_argument("--project", type=Path, help=f"项目入口；未指定输入时读取当前目录的 {DEFAULT_PROJECT}")
     parser.add_argument("--from", dest="since", help="起始月份 YYYY-MM；须与 --through 一起提供")
     parser.add_argument("--through", help="结束月份 YYYY-MM")
+    parser.add_argument("--payday", help="工资周期起点 YYYY-MM-DD（含当天）；配合 --next-payday")
+    parser.add_argument("--next-payday", help="下次工资到账日 YYYY-MM-DD（归下一周期，本次不包含）")
+    parser.add_argument("--cycle-budget", help="本工资周期的消费额度；省略时只统计消费，不套用月目标")
+    parser.add_argument("--cycle-category", help="周期额度对应的消费类别名称或 ID；默认使用消费上限类别")
     parser.add_argument("--format", choices=("text", "json", "csv"), default="text")
     parser.add_argument("--output", type=Path, help="保存到新文件；CSV 使用 UTF-8 BOM，便于 Windows 打开中文")
     args = parser.parse_args(argv)
+    salary = any(value is not None for value in (args.payday, args.next_payday, args.cycle_budget, args.cycle_category))
+    if salary and (not args.payday or not args.next_payday or args.since or args.through):
+        parser.error("工资周期须同时提供 --payday 和 --next-payday，不与自然月 --from／--through 混用")
     try:
         if args.output:
             require(not args.output.exists(), "PERIOD_OUTPUT_EXISTS", "输出文件已存在，请选择新文件", str(args.output))
-        outcome = (audit_period(args.config, args.since, args.through) if args.config else
-                   audit_project_period(args.project or Path.cwd() / DEFAULT_PROJECT, args.since, args.through))
-        content = (render_text(outcome) if args.format == "text" else render_csv(outcome)
+        text_renderer, csv_renderer = render_text, render_csv
+        if salary:
+            from .salary_cycle import audit_salary_cycle, select_config, render_text as salary_text, render_csv as salary_csv
+            project = load_project(args.project or Path.cwd() / DEFAULT_PROJECT) if not args.config else None
+            config = select_config(args.config or list(project.months.values()), args.payday, args.next_payday)
+            outcome = audit_salary_cycle(config, args.payday, args.next_payday, args.cycle_budget, args.cycle_category,
+                                         expected_identity=project.identity if project is not None else None)
+            require(project is None or project.path.read_bytes() == project.original,
+                    "INPUT_CHANGED", "工资周期查询期间项目入口发生变化")
+            text_renderer, csv_renderer = salary_text, salary_csv
+        else:
+            outcome = (audit_period(args.config, args.since, args.through) if args.config else
+                       audit_project_period(args.project or Path.cwd() / DEFAULT_PROJECT, args.since, args.through))
+        content = (text_renderer(outcome) if args.format == "text" else csv_renderer(outcome)
                    if args.format == "csv" else json.dumps(outcome, ensure_ascii=False, indent=2))
         if args.output:
             with args.output.open("x", encoding="utf-8-sig" if args.format == "csv" else "utf-8", newline="") as stream:
