@@ -95,6 +95,6 @@ python3 -m venv .venv
 
 Windows PowerShell 用 `py -3.12 -m venv .venv` 建环境，再运行 `.\.venv\Scripts\python.exe -m pip install -e .`；首月迁移命令见 [QUICKSTART](QUICKSTART.md#4-旧账按月迁移与校对)。Windows TUI 所需的 `windows-curses` 会随项目安装。
 
-**Windows 免 Python 试用包：**打开 [Windows executable 构建](https://github.com/TinySnow/beancount-budget-tool/actions/workflows/windows-exe.yml)，选最新成功运行，在 Artifacts 下载 `beancount-budget-tool-windows-x64`，解压后按包内 `START-HERE.md` 操作。包含单文件 exe 和虚拟账本；[操作步骤](packaging/WINDOWS-START.md)也可在线查看。每次推送自动构建，下载保留 30 天；交互 TUI 的显示和按键仍需在本机终端试用。
+**Windows 免 Python 试用包：**打开 [Windows executable 构建](https://github.com/TinySnow/beancount-budget-tool/actions/workflows/windows-exe.yml)，选最新成功运行，在 Artifacts 下载推荐的 `beancount-budget-tool-windows-x64-folder`，完整解压并保留 exe 旁边的 `_internal` 文件夹。此目录版无需在启动时临时解压自身，可用于排查单文件版的 `Could not create temporary directory`。原 `beancount-budget-tool-windows-x64` 单文件包继续提供，两版命令相同。按包内 `START-HERE.md` 或[在线步骤](packaging/WINDOWS-START.md)操作。每次推送自动构建，下载保留 30 天；交互 TUI 的显示和按键仍需在本机终端试用。
 
 此环境只解决运行问题；旧 Beancount 2.3.6 审阅侧文件不能不经复核就改写为 3.2.3。当前真实账本副本的两版 booked 事实已由[跨版本审计](docs/v6-implementation-status.md)核对一致，但 v6 月报仍需按新 loader 重验侧文件来源。
