@@ -58,18 +58,12 @@ def _draw(stdscr, lines: list[str], offset: int) -> int:
     for row, content, style in (
             (0, header, curses.A_REVERSE | curses.A_BOLD),
             (height - 1, footer, curses.A_REVERSE)):
-        try:
-            stdscr.addstr(row, 0, _clip(content, width - 1), style)
-        except curses.error:
-            pass
+        _put(stdscr, row, content, style)
     for row in range(page):
         index = offset + row
         if index >= len(lines):
             break
-        try:
-            stdscr.addstr(row + 1, 0, _clip(lines[index], width - 1))
-        except curses.error:
-            pass
+        _put(stdscr, row + 1, lines[index])
     stdscr.refresh()
     return offset
 
@@ -163,8 +157,9 @@ def _review_card(item: dict, index: int, selected: int, columns: int, period: bo
     month = f"[{item['month']}] " if period and item.get("month") else ""
     units = item.get("signed_units")
     amount = f"本笔 {amount_text(units)} {item.get('commodity', '')}" if units is not None else ""
+    selection = "[选中] " if index == selected else ""
     return _wrap([
-        f"{'>' if index == selected else ' '} {index + 1}. {label} {month}{date}  {amount}".rstrip(),
+        f"{'>' if index == selected else ' '} {index + 1}. {selection}{label} {month}{date}  {amount}".rstrip(),
         f"  {_review_location(item.get('source'))}",
         f"  账户：{item['account']}" if item.get("account") else "  账户：不适用（配置或范围问题）",
         f"  原因：{_review_reason(item)}",
@@ -553,7 +548,10 @@ def _put(stdscr, row: int, text: str, style=0):
         if hasattr(stdscr, "move") and hasattr(stdscr, "clrtoeol"):
             stdscr.move(row, 0)
             stdscr.clrtoeol()
-        stdscr.addstr(row, 0, _clip(_clean(text), max(0, stdscr.getmaxyx()[1] - 1)), style)
+        # Native Windows curses can lose the tail of styled CJK text in VS
+        # Code's terminal. Keep content plain; selection has a textual marker.
+        stdscr.addstr(row, 0, _clip(_clean(text), max(0, stdscr.getmaxyx()[1] - 1)),
+                      0 if sys.platform == "win32" else style)
     except curses.error:
         pass
 
@@ -585,7 +583,6 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         subtitle += f"；筛选：{browser.query}"
     listing = browser.outcome is not None and browser.view in {"reviews", "transactions"} and not (
         browser.error or browser.detail or browser.help)
-    selected_span = (0, 0)
     if browser.help:
         lines = [*HELP, f"当前配置完整路径：{browser.config}"]
         if browser.project is not None:
@@ -632,15 +629,15 @@ def _draw_browser(stdscr, browser: ReportBrowser):
             browser.offset = min(browser.offset, browser.selected)
             browser.offset = max(browser.offset, browser.selected - page + 1)
             browser.offset = max(0, min(browser.offset, max(0, len(items) - page)))
-            selected_span = (browser.selected, browser.selected + 1)
             for index, item in enumerate(items):
                 amounts = " / ".join(f"{amount_text(part['signed_units'])} {part['commodity']}" for part in item["postings"][:2])
-                lines.append(f"{'>' if index == browser.selected else ' '} {index + 1}. {item['date']} "
+                selection = "[选中] " if index == browser.selected else ""
+                lines.append(f"{'>' if index == browser.selected else ' '} {index + 1}. {selection}{item['date']} "
                              f"{item.get('payee') or ''} {item['narration']} | {amounts} [{item['source']}]")
         else:
             lines, spans = _review_layout(items, browser.selected, width - 1, browser.period)
             if items:
-                start, end = selected_span = spans[browser.selected]
+                start, end = spans[browser.selected]
                 if start < browser.offset or end - start > page:
                     browser.offset = start
                 elif end > browser.offset + page:
@@ -660,8 +657,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         lines = _wrap(lines, width - 1)
         browser.offset = max(0, min(browser.offset, max(0, len(lines) - page)))
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
-        selected = listing and selected_span[0] <= row - 3 + browser.offset < selected_span[1] and bool(items)
-        _put(stdscr, row, line, curses.A_REVERSE if selected else 0)
+        _put(stdscr, row, line)
     footer = ("w 工资周期 p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
               "w 工资周期 p 区间 m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
     if listing and browser.view == "reviews":

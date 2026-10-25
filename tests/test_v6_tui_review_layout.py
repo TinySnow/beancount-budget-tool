@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from beancount_budget_tool.v6.monthly_report import render_workflow_text
 from beancount_budget_tool.v6.tui import (
-    ReportBrowser, _draw_browser, _put, _read_field, _report_browser, _review_layout,
+    ReportBrowser, _clip, _draw, _draw_browser, _put, _read_field, _report_browser, _review_layout,
     _review_location, _review_page_target, _review_reason, _width,
 )
 from test_v6_tui import FakeScreen, pending
@@ -40,6 +40,17 @@ class PhysicalScreen(FakeScreen):
             old = self.physical.get(row, "")
             self.physical[row] = old[:col] + value + old[col + len(value):]
         super().refresh()
+
+
+class StyledTailScreen(FakeScreen):
+    """Model the reported terminal: an attribute write loses its text tail."""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.styles = []
+
+    def addstr(self, row, col, value, style=0):
+        self.styles.append(style)
+        super().addstr(row, col, _clip(value, 20) if style else value, style)
 
 
 def inventory_item():
@@ -195,6 +206,49 @@ class ReviewLayoutTests(unittest.TestCase):
         with patch("beancount_budget_tool.v6.tui.curses.curs_set"):
             _read_field(screen, "填写", ["简短说明"], "输入：")
         self.assertNotIn("obsolete error tail", "\n".join(screen.physical.values()))
+
+    def test_windows_selection_keeps_complete_account_reason_and_code_after_moving(self):
+        first = inventory_item()
+        first["reason_code"] = "FUND_SOURCE_INSUFFICIENT"
+        first["detail"] = "已审用途库存不足以覆盖本次转出；核对金额及此前来源，不会自动挪用其他用途。"
+        second = {**first, "account": "Assets:Digital-电子钱包:支付宝:余额",
+                  "reason_code": "FUND_SOURCE_UNRESOLVED",
+                  "detail": "转入用途依赖尚未审定的转出资金；先处理转出分录，再重新计算。"}
+        browser = self.browser([first, second])
+        screen = StyledTailScreen(size=(30, 140))
+        with patch("beancount_budget_tool.v6.tui.sys.platform", "win32"):
+            for selected in (0, 1, 0):
+                browser.selected = selected
+                _draw_browser(screen, browser)
+                body = self.body(screen)
+                self.assertIn(f"> {selected + 1}. [选中]", body)
+                self.assertEqual(body.count("[选中]"), 1)
+                for item in (first, second):
+                    self.assertIn(item["account"], body)
+                    self.assertIn(item["detail"], body)
+                    self.assertIn(item["reason_code"], body)
+                self.assertIn("匹配 2 项", screen.rows[2][2])
+                self.assertIn("q 退出", screen.rows[-1][2])
+        self.assertTrue(all(style == 0 for style in screen.styles))
+
+    def test_windows_dialog_and_text_browser_use_the_same_plain_rendering(self):
+        screen = StyledTailScreen(size=(20, 80), keys=("\n",))
+        with patch("beancount_budget_tool.v6.tui.sys.platform", "win32"), patch(
+                "beancount_budget_tool.v6.tui.curses.curs_set"):
+            _read_field(screen, "完整的中文填写标题不能因高亮而截断", ["上下文"], "填写：")
+            self.assertIn("完整的中文填写标题不能因高亮而截断", screen.rows[0][2])
+            _draw(screen, ["v6 完整的中文报告标题不能因高亮而截断", "内容"], 0)
+            self.assertIn("完整的中文报告标题不能因高亮而截断", screen.rows[0][2])
+        self.assertTrue(all(style == 0 for style in screen.styles))
+
+    def test_review_selection_does_not_depend_on_attributes_on_other_platforms(self):
+        browser = self.browser()
+        screen = StyledTailScreen(size=(24, 100))
+        with patch("beancount_budget_tool.v6.tui.sys.platform", "darwin"):
+            _draw_browser(screen, browser)
+        self.assertIn(inventory_item()["account"], self.body(screen))
+        self.assertIn("H_NEGATIVE_INVENTORY", self.body(screen))
+        self.assertIn("> 1. [选中]", self.body(screen))
 
 
 if __name__ == "__main__":
