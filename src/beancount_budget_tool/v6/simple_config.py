@@ -24,6 +24,8 @@ from uuid import uuid4
 import yaml
 
 from ..errors import BudgetError, require
+from ..financial import financial_session
+from .facts import frozen_fact_indices
 from ..console import configure_output
 from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
 from .input_compiler import (
@@ -473,46 +475,48 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
 
 
 def audit_simple(config: Path, month: str | None = None, *, include_transactions=False):
-    from .monthly_report import audit_month_workflow
-    runtime = build_runtime(config, month)
-    try:
-        result = runtime.pending or audit_month_workflow(runtime.config, include_transactions=include_transactions)
-        runtime.check()
-        return runtime.public_sources(result)
-    except BudgetError as exc:
-        if exc.source and runtime.config and exc.source.startswith(str(runtime.config.parent)):
-            raise BudgetError(exc.code, exc.message, yaml_path_location(config, ())) from exc
-        raise
-    finally:
-        runtime.close()
+    with financial_session(), frozen_fact_indices():
+        from .monthly_report import audit_month_workflow
+        runtime = build_runtime(config, month)
+        try:
+            result = runtime.pending or audit_month_workflow(runtime.config, include_transactions=include_transactions)
+            runtime.check()
+            return runtime.public_sources(result)
+        except BudgetError as exc:
+            if exc.source and runtime.config and exc.source.startswith(str(runtime.config.parent)):
+                raise BudgetError(exc.code, exc.message, yaml_path_location(config, ())) from exc
+            raise
+        finally:
+            runtime.close()
 
 
 def audit_simple_period(config: Path, since=None, through=None):
-    from .period_report import _months, _combine_months, audit_period
-    require((since is None) == (through is None), "PERIOD_RANGE_INVALID", "起止月份须同时填写")
-    doc = load_yaml(config)
-    first, last = _month(since or doc["cutover"][:7]), _month(through or doc["month"])
-    require(first <= last, "PERIOD_RANGE_INVALID", "起始月份不能晚于结束月份")
-    months = _months(first, last)
-    runtimes = []
-    try:
-        for month in months:
-            runtimes.append(build_runtime(config, month))
-        if any(runtime.pending for runtime in runtimes):
-            rows = [{"month": runtime.month, "config": str(config),
-                     "status": "NEEDS_REVIEW" if runtime.pending else "NOT_RUN"} for runtime in runtimes]
-            reviews = [{**item, "month": runtime.month, "config": str(config)} for runtime in runtimes
-                       if runtime.pending for item in runtime.pending["review_items"]]
-            outcome = _combine_months(months, rows, [], reviews, set(), [])
-        else:
-            outcome = audit_period([runtime.config for runtime in runtimes], first, last)
-        for runtime in runtimes:
-            runtime.check()
-            outcome = runtime.public_sources(outcome)
-        return outcome
-    finally:
-        for runtime in runtimes:
-            runtime.close()
+    with financial_session(), frozen_fact_indices():
+        from .period_report import _months, _combine_months, audit_period
+        require((since is None) == (through is None), "PERIOD_RANGE_INVALID", "起止月份须同时填写")
+        doc = load_yaml(config)
+        first, last = _month(since or doc["cutover"][:7]), _month(through or doc["month"])
+        require(first <= last, "PERIOD_RANGE_INVALID", "起始月份不能晚于结束月份")
+        months = _months(first, last)
+        runtimes = []
+        try:
+            for month in months:
+                runtimes.append(build_runtime(config, month))
+            if any(runtime.pending for runtime in runtimes):
+                rows = [{"month": runtime.month, "config": str(config),
+                         "status": "NEEDS_REVIEW" if runtime.pending else "NOT_RUN"} for runtime in runtimes]
+                reviews = [{**item, "month": runtime.month, "config": str(config)} for runtime in runtimes
+                           if runtime.pending for item in runtime.pending["review_items"]]
+                outcome = _combine_months(months, rows, [], reviews, set(), [])
+            else:
+                outcome = audit_period([runtime.config for runtime in runtimes], first, last)
+            for runtime in runtimes:
+                runtime.check()
+                outcome = runtime.public_sources(outcome)
+            return outcome
+        finally:
+            for runtime in runtimes:
+                runtime.close()
 
 
 def create_files(output: Path, *, ledger: Path | None = None, month: str | None = None, old_config: Path | None = None):

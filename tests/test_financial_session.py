@@ -12,8 +12,10 @@ import yaml
 
 from beancount_budget_tool import financial
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.financial import booked_through, frozen_financial, load_financial, reference_financial, shared_audit
+from beancount_budget_tool.financial import booked_through, frozen_financial, financial_session, load_financial, reference_financial, shared_audit
 from beancount_budget_tool.v6.accounts import audit_accounts
+from beancount_budget_tool.v6.classification import audit_classification
+from beancount_budget_tool.v6.obligations import audit_simple_obligations
 from beancount_budget_tool.v6.facts import FactIndex, frozen_fact_indices, reference_fact_index
 from beancount_budget_tool.v6.opening import audit_opening
 from beancount_budget_tool.v6.ownership import audit_ownership
@@ -21,6 +23,87 @@ from beancount_budget_tool.v6.source import scan_v6_source
 
 
 class FrozenFinancialTests(unittest.TestCase):
+    def test_sequential_stages_share_input_and_index_until_the_report_returns(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text('2023-07-01 open Assets:Cash\n', encoding="utf-8")
+            with patch.object(financial, "_load_financial_uncached", wraps=financial._load_financial_uncached) as load:
+                with financial_session(), frozen_fact_indices():
+                    with frozen_financial(root) as first:
+                        index = FactIndex(first)
+                    with financial_session(), frozen_financial(root) as second:
+                        self.assertIs(first, second)
+                        self.assertIs(FactIndex(second), index)
+                    self.assertIs(load_financial(root), first)
+                    self.assertEqual(load.call_count, 1)
+                self.assertEqual(load.call_count, 2)  # One capture and one final source verification.
+                with financial_session(), frozen_financial(root) as fresh:
+                    self.assertIsNot(fresh, first)
+                self.assertEqual(load.call_count, 4)
+
+    def test_session_separates_roots_and_report_cutoffs(self):
+        with TemporaryDirectory() as folder:
+            root, other = (Path(folder) / name for name in ("main.bean", "other.bean"))
+            root.write_text('2023-07-01 open Assets:Cash\n2023-08-01 open Assets:Future\n', encoding="utf-8")
+            other.write_text('2023-07-01 open Assets:Other\n', encoding="utf-8")
+            with financial_session(), frozen_fact_indices():
+                with booked_through(date(2023, 7, 31)), frozen_financial(root) as july:
+                    self.assertEqual(len(july.entries), 1)
+                with booked_through(date(2023, 8, 31)), frozen_financial(root) as august:
+                    self.assertEqual(len(august.entries), 2)
+                    self.assertIsNot(july, august)
+                    self.assertIsNot(FactIndex(july), FactIndex(august))
+                with booked_through(date(2023, 7, 31)), frozen_financial(other) as separate:
+                    self.assertEqual(separate.root, other.resolve())
+                    self.assertNotEqual(separate.digest, july.digest)
+                with booked_through(date(2023, 7, 31)), frozen_financial(root) as repeated:
+                    self.assertIs(repeated, july)
+
+    def test_session_rejects_same_size_source_edit_after_an_earlier_stage(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text('2023-07-01 open Assets:Cash\n', encoding="utf-8")
+            original = root.stat()
+            with self.assertRaises(BudgetError) as caught:
+                with financial_session():
+                    with frozen_financial(root) as first:
+                        pass
+                    root.write_text('2023-07-01 open Assets:Bank\n', encoding="utf-8")
+                    os.utime(root, ns=(original.st_atime_ns, original.st_mtime_ns))
+                    with frozen_financial(root) as second:
+                        self.assertIs(second, first)
+            self.assertEqual(caught.exception.code, "INPUT_CHANGED")
+            self.assertEqual(caught.exception.source, str(root.resolve()))
+            with financial_session():
+                self.assertEqual(load_financial(root).entries[0].account, "Assets:Bank")
+
+    def test_session_final_verification_detects_new_glob_include_members(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            parts = Path(folder) / "parts"
+            parts.mkdir()
+            root.write_text('include "parts/*.bean"\n', encoding="utf-8")
+            (parts / "one.bean").write_text('2023-07-01 open Assets:Cash\n', encoding="utf-8")
+            with self.assertRaises(BudgetError) as caught:
+                with financial_session():
+                    first = load_financial(root)
+                    (parts / "two.bean").write_text('2023-07-01 open Income:Salary\n', encoding="utf-8")
+                    self.assertIs(load_financial(root), first)
+            self.assertEqual(caught.exception.code, "INPUT_CHANGED")
+            self.assertEqual(len(load_financial(root).entries), 2)
+
+    def test_failed_report_restores_context_and_keeps_the_original_diagnostic(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text('2023-07-01 open Assets:Cash\n', encoding="utf-8")
+            with self.assertRaises(BudgetError) as caught:
+                with financial_session():
+                    first = load_financial(root)
+                    raise BudgetError("EXAMPLE", "original diagnostic", "main.bean:1")
+            self.assertEqual((caught.exception.code, caught.exception.source), ("EXAMPLE", "main.bean:1"))
+            with financial_session():
+                self.assertIsNot(load_financial(root), first)
+
     def test_nested_same_scope_reuses_load_and_index_but_different_cutoff_does_not(self):
         with TemporaryDirectory() as folder:
             root = Path(folder) / "main.bean"
@@ -153,6 +236,54 @@ class SharedBaseAuditTests(unittest.TestCase):
             "owners": [{"id": "free", "name": "自由资金", "aliases": []}],
             "defaults": {"income_owner_id": "free", "expense_owner_id": "free"},
         }, allow_unicode=True), encoding="utf-8")
+
+    def test_classification_and_responsibility_replay_are_shared_without_mutable_results(self):
+        for module, audit in (("classification", audit_classification), ("obligations", audit_simple_obligations)):
+            with self.subTest(module=module), financial_session(), frozen_fact_indices():
+                with patch("beancount_budget_tool.v6." + module + ".FactIndex", wraps=FactIndex) as index:
+                    with frozen_financial(self.root):
+                        first = audit(self.root, self.cutover)
+                    expected = first["cutover"]
+                    first["cutover"] = "caller modification"
+                    with frozen_financial(self.root):
+                        second = audit(self.root, self.cutover)
+                    self.assertEqual(second["cutover"], expected)
+                    self.assertEqual(index.call_count, 1)
+
+    def test_shared_classification_rechecks_its_declaration_and_error_location(self):
+        declared = self.base / "categories.yaml"
+        document = {"schema": 6, "cutover": self.cutover.isoformat(), "loader_version": BEANCOUNT_VERSION,
+                    "categories": [{"id": "free", "name": "自由资金", "parent": None, "aliases": []}],
+                    "classifications": [], "defaults": {"income_category_id": "free", "expense_category_id": "free"}}
+        declared.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
+        with financial_session():
+            with frozen_financial(self.root):
+                first = audit_classification(self.root, self.cutover, declared)
+            self.assertEqual(first["review_state"], "complete")
+            declared.write_text("schema: 6\nschema: 6\n", encoding="utf-8")
+            with frozen_financial(self.root):
+                with self.assertRaises(BudgetError) as error:
+                    audit_classification(self.root, self.cutover, declared)
+            self.assertEqual(error.exception.code, "YAML_DUPLICATE_KEY")
+            self.assertEqual(error.exception.source, str(declared.resolve()) + ":2")
+
+    def test_sequential_stages_reuse_audits_but_recheck_changed_sidefiles(self):
+        with financial_session(), frozen_fact_indices():
+            with patch("beancount_budget_tool.v6.accounts.FactIndex", wraps=FactIndex) as indices:
+                with frozen_financial(self.root):
+                    first = audit_accounts(self.root, self.cutover, self.accounts)
+                first["accounts"].clear()
+                with frozen_financial(self.root):
+                    second = audit_accounts(self.root, self.cutover, self.accounts)
+                self.assertTrue(second["accounts"])
+                self.assertEqual(indices.call_count, 1)
+                document = yaml.safe_load(self.accounts.read_text(encoding="utf-8"))
+                document["accounts"][0]["payment_scope"]["CNY"] = "excluded"
+                self.accounts.write_text(yaml.safe_dump(document), encoding="utf-8")
+                with frozen_financial(self.root):
+                    changed = audit_accounts(self.root, self.cutover, self.accounts)
+                self.assertEqual(changed["accounts"][0]["payment_scope"]["CNY"], "excluded")
+                self.assertEqual(indices.call_count, 2)
 
     def test_base_dependencies_run_once_and_results_are_not_shared_mutable_objects(self):
         with frozen_financial(self.root), frozen_fact_indices(), patch(

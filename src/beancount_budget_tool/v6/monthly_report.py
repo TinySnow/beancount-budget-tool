@@ -13,7 +13,7 @@ import sys
 
 from ..errors import BudgetError, require
 from ..exact import exact_text, amount_text
-from ..financial import booked_through, frozen_financial, load_financial
+from ..financial import booked_through, frozen_financial, load_financial, financial_session
 from ..yamlstrict import load_yaml, yaml_key_location
 from .actual_snapshot import audit_actual_snapshot
 from .default_outflows import audit_default_outflows
@@ -228,20 +228,21 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
 
 def audit_month_workflow(config: Path, *, include_transactions: bool = False, month: str | None = None) -> dict:
     """Give a new month one entry point, without presenting partial audits as complete."""
-    document = load_yaml(config)
-    from .simple_config import is_simple, audit_simple
-    if is_simple(document):
-        return audit_simple(config, month, include_transactions=include_transactions)
-    require(month is None, "MONTH_REPORT_CONFIG_INVALID", "旧月报配置已固定月份；--month 用于两文件入口")
-    require(type(document) is dict, "MONTH_REPORT_CONFIG_INVALID",
-            "月报配置必须是映射", f"{config.resolve()}:1")
-    month = _config_month(document, config)
-    first_day = date.fromisoformat(f"{month}-01")
-    last_day = calendar.monthrange(first_day.year, first_day.month)[1]
-    as_of = date(first_day.year, first_day.month, last_day)
-    with booked_through(as_of):
-        return _audit_month_workflow_bounded(config, document, month, first_day, as_of,
-                                            include_transactions=include_transactions)
+    with financial_session(), frozen_fact_indices():
+        document = load_yaml(config)
+        from .simple_config import is_simple, audit_simple
+        if is_simple(document):
+            return audit_simple(config, month, include_transactions=include_transactions)
+        require(month is None, "MONTH_REPORT_CONFIG_INVALID", "旧月报配置已固定月份；--month 用于两文件入口")
+        require(type(document) is dict, "MONTH_REPORT_CONFIG_INVALID",
+                "月报配置必须是映射", f"{config.resolve()}:1")
+        month = _config_month(document, config)
+        first_day = date.fromisoformat(f"{month}-01")
+        last_day = calendar.monthrange(first_day.year, first_day.month)[1]
+        as_of = date(first_day.year, first_day.month, last_day)
+        with booked_through(as_of):
+            return _audit_month_workflow_bounded(config, document, month, first_day, as_of,
+                                                include_transactions=include_transactions)
 
 
 def _audit_month_workflow_bounded(config: Path, document: dict, month: str,

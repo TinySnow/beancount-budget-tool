@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 
 from ..errors import BudgetError, require
+from ..financial import financial_session
+from .facts import frozen_fact_indices
 from ..yamlstrict import load_yaml
 from .monthly_report import audit_month_workflow, render_workflow_text
 from .simple_config import build_runtime, save_snapshot
@@ -38,29 +40,30 @@ class SimpleReportBrowser(ReportBrowser):
         self.clear()
         self.range_runtimes = []
         try:
-            if self.period and self.saved_cycle is not None:
-                from .salary_plan import audit_configured_cycle
-                from .salary_cycle import render_text
-                self.configs, self.index = [self.user_config], 0
-                cutoff = self._saved_cutoff(self.saved_cycle)
-                self._accept_outcome(audit_configured_cycle(self.user_config, self.saved_cycle, cutoff.isoformat()), render_text)
-                return
-            self.runtime = build_runtime(self.user_config, self.selected_month)
-            if self.runtime.pending:
-                self.period = False
-                self._accept_outcome(self.runtime.pending, self.renderer)
-                return
-            self.configs, self.index = [self.runtime.config], 0
-            self.review_roots = [Path(self.runtime.temporary.name) / "reviews"]
-            super().refresh()
-            self.runtime.check()
-            for runtime in self.range_runtimes:
-                runtime.check()
-            if self.outcome:
-                outcome = self.runtime.public_sources(self.outcome)
+            with financial_session(), frozen_fact_indices():
+                if self.period and self.saved_cycle is not None:
+                    from .salary_plan import audit_configured_cycle
+                    from .salary_cycle import render_text
+                    self.configs, self.index = [self.user_config], 0
+                    cutoff = self._saved_cutoff(self.saved_cycle)
+                    self._accept_outcome(audit_configured_cycle(self.user_config, self.saved_cycle, cutoff.isoformat()), render_text)
+                    return
+                self.runtime = build_runtime(self.user_config, self.selected_month)
+                if self.runtime.pending:
+                    self.period = False
+                    self._accept_outcome(self.runtime.pending, self.renderer)
+                    return
+                self.configs, self.index = [self.runtime.config], 0
+                self.review_roots = [Path(self.runtime.temporary.name) / "reviews"]
+                super().refresh()
+                self.runtime.check()
                 for runtime in self.range_runtimes:
-                    outcome = runtime.public_sources(outcome)
-                self._accept_outcome(outcome, self._scope_renderer())
+                    runtime.check()
+                if self.outcome:
+                    outcome = self.runtime.public_sources(self.outcome)
+                    for runtime in self.range_runtimes:
+                        outcome = runtime.public_sources(outcome)
+                    self._accept_outcome(outcome, self._scope_renderer())
         except (BudgetError, OSError, UnicodeError) as exc:
             self.clear()
             self.error = exc if isinstance(exc, BudgetError) else BudgetError("SIMPLE_INPUT_ERROR", str(exc), str(self.user_config))

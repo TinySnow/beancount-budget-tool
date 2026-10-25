@@ -143,6 +143,8 @@ def _digest(sources: Mapping[Path, SourceFile], root: Path) -> str:
 _FROZEN_FINANCIAL: ContextVar[Optional[FinancialInput]] = ContextVar("frozen_financial", default=None)
 _FROZEN_THROUGH: ContextVar[Optional[date]] = ContextVar("frozen_through", default=None)
 _BOOKED_THROUGH: ContextVar[Optional[date]] = ContextVar("booked_through", default=None)
+_REPORT_INPUTS: ContextVar[Optional[Dict[Tuple[Path, Optional[date]], FinancialInput]]] = ContextVar(
+    "report_inputs", default=None)
 
 
 def _bounded(fin: FinancialInput) -> FinancialInput:
@@ -207,13 +209,46 @@ def _load_financial_uncached(root: Path) -> FinancialInput:
     return FinancialInput(root, tuple(order_entries(second_entries)), second_options, after, _digest(after, root), BEANCOUNT_VERSION)
 
 
+@contextmanager
+def financial_session():
+    """Share source inputs across the sequential stages of one report.
+
+    Each root/cutoff keeps its own input and base-audit results. Nested stages
+    join the current session; only its owner re-loads sources before returning.
+    Nothing survives a reload, and standalone audits keep their existing checks.
+    """
+    if _REPORT_INPUTS.get() is not None:
+        yield
+        return
+    inputs = {}
+    token = _REPORT_INPUTS.set(inputs)
+    try:
+        yield
+    finally:
+        _REPORT_INPUTS.reset(token)
+        for (root, _), fin in inputs.items():
+            after = _load_financial_uncached(root)
+            require(after.digest == fin.digest, "INPUT_CHANGED",
+                    "报表运行期间根账本或 include 来源发生变化", str(root))
+
+
+def _session_input(root: Path) -> FinancialInput:
+    inputs = _REPORT_INPUTS.get()
+    key = (root.resolve(), _BOOKED_THROUGH.get())
+    if inputs is None:
+        return _bounded(_load_financial_uncached(key[0]))
+    if key not in inputs:
+        inputs[key] = _bounded(_load_financial_uncached(key[0]))
+    return inputs[key]
+
+
 def load_financial(root: Path) -> FinancialInput:
-    """Load independently, unless one report has explicitly frozen this root."""
+    """Read this report's source input; standalone calls always load afresh."""
     resolved = root.resolve()
     frozen = _FROZEN_FINANCIAL.get()
     if frozen is not None and frozen.root == resolved:
         return frozen
-    return _bounded(_load_financial_uncached(resolved))
+    return _session_input(resolved)
 
 
 def shared_audit(audit):
@@ -266,7 +301,7 @@ def frozen_financial(root: Path):
     """Share one booked source within a report, then verify it did not change.
 
     Re-loading at exit detects edited source files, newly matched includes and
-    loader changes before any report can be returned to the caller.
+    loader changes. Within a report session its owner performs that final check.
     """
     frozen = _FROZEN_FINANCIAL.get()
     if (frozen is not None and frozen.root == root.resolve() and
@@ -275,7 +310,7 @@ def frozen_financial(root: Path):
         # different root or report cutoff must establish its own snapshot.
         yield frozen
         return
-    fin = _bounded(_load_financial_uncached(root))
+    fin = _session_input(root)
     token = _FROZEN_FINANCIAL.set(fin)
     through_token = _FROZEN_THROUGH.set(_BOOKED_THROUGH.get())
     try:
@@ -283,6 +318,7 @@ def frozen_financial(root: Path):
     finally:
         _FROZEN_THROUGH.reset(through_token)
         _FROZEN_FINANCIAL.reset(token)
-        after = _load_financial_uncached(root)
-        require(after.digest == fin.digest, "INPUT_CHANGED",
-                "报表运行期间根账本或 include 来源发生变化", str(root))
+        if _REPORT_INPUTS.get() is None:
+            after = _load_financial_uncached(root)
+            require(after.digest == fin.digest, "INPUT_CHANGED",
+                    "报表运行期间根账本或 include 来源发生变化", str(root))

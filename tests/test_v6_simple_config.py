@@ -14,6 +14,7 @@ from unittest.mock import patch
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
+from beancount_budget_tool import financial
 from beancount_budget_tool.tools.v6_init import compile_setup, _SetupDumper
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, create_files, save_snapshot
@@ -86,6 +87,72 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         result = audit_simple(self.config)
         self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
         self.assertIn("额外储蓄", result["report"]["owner_names"].values())
+
+    def test_terminal_refresh_shares_the_complete_run_but_reload_starts_fresh(self):
+        self.migrate()
+        browser = SimpleReportBrowser(self.config)
+        self.addCleanup(browser.close)
+        with patch.object(financial, "_load_financial_uncached", wraps=financial._load_financial_uncached) as load:
+            browser.refresh()
+            self.assertIsNone(browser.error)
+            self.assertEqual(load.call_count, 2)
+            browser.refresh()
+            self.assertIsNone(browser.error)
+            self.assertEqual(load.call_count, 4)
+
+    def test_terminal_final_source_failure_clears_the_previously_displayed_report(self):
+        from beancount_budget_tool.v6.review_queue import audit_review_queue
+        self.migrate()
+        browser = SimpleReportBrowser(self.config)
+        self.addCleanup(browser.close)
+        browser.refresh()
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        def change_after_review(*args, **kwargs):
+            result = audit_review_queue(*args, **kwargs)
+            self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
+                '\n2026-09-21 * "new expense"\n'
+                '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")
+            return result
+        with patch("beancount_budget_tool.v6.monthly_report.audit_review_queue", side_effect=change_after_review):
+            browser.refresh()
+        self.assertEqual(browser.error.code, "INPUT_CHANGED")
+        self.assertIsNone(browser.outcome)
+        self.assertEqual(browser.lines, [])
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "189")
+
+    def test_entire_simple_report_shares_one_capture_and_final_verification(self):
+        self.migrate()
+        with patch.object(financial, "_load_financial_uncached", wraps=financial._load_financial_uncached) as load:
+            first = audit_simple(self.config, include_transactions=True)
+        self.assertEqual(first["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(load.call_count, 2)
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
+            '\n2026-09-21 * "new expense"\n'
+            '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")
+        second = audit_simple(self.config, include_transactions=True)
+        self.assertEqual(second["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(second["report"]["max_spendable"]["max_spendable"], "189")
+        self.assertNotEqual(first["report"]["ledger_snapshot"], second["report"]["ledger_snapshot"])
+
+    def test_edit_between_preflight_and_report_cannot_publish_a_mixed_month(self):
+        from beancount_budget_tool.v6.review_queue import audit_review_queue
+        self.migrate()
+        def change_after_review(*args, **kwargs):
+            result = audit_review_queue(*args, **kwargs)
+            self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
+                '\n2026-09-21 * "new expense"\n'
+                '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")
+            return result
+        with patch("beancount_budget_tool.v6.monthly_report.audit_review_queue", side_effect=change_after_review):
+            with self.assertRaises(BudgetError) as error:
+                audit_simple(self.config)
+        self.assertEqual(error.exception.code, "INPUT_CHANGED")
+        self.assertEqual(error.exception.source, str(self.ledger.resolve()))
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(result["report"]["max_spendable"]["max_spendable"], "189")
 
     def test_rereading_two_inputs_changes_target_without_manual_compilation(self):
         self.migrate()

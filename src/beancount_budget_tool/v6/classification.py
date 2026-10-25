@@ -18,7 +18,7 @@ from beancount.core import data
 
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .facts import FactIndex, future_posting_refs
 from .inline_amounts import parse_inline_amounts
@@ -94,6 +94,7 @@ def _units(value: object, source: str) -> Fraction:
     return Fraction(value)
 
 
+@shared_audit
 def audit_classification(root: Path, cutover: date, declarations: Path | None = None) -> dict:
     """Validate complete per-posting classification or report exact gaps.
 

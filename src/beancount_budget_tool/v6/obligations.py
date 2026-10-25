@@ -20,7 +20,7 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
-from ..financial import load_financial, reference_financial
+from ..financial import load_financial, reference_financial, shared_audit
 from ..refs import _lot
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .classification import _key
@@ -35,6 +35,7 @@ from .source import scan_v6_source
 ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 
 
+@shared_audit
 def audit_simple_obligations(root: Path, cutover: date,
                              declarations: Path | None = None,
                              as_of: date | None = None) -> dict:
