@@ -120,6 +120,12 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
         for event in debt["events"]:
             if event["date"][:7] != month or event["status"] != "CERTIFIED":
                 continue
+            if event["kind"] == "payable_receipt":
+                refs = event["asset_refs"]
+                if all(_key(ref) in claimed_h and all(part["role"] == "hold"
+                       for part in claimed[_key(ref)]["slices"]) for ref in refs):
+                    add("liability_payable_receipt", event, refs, {})
+                continue
             if event["kind"] == "consumer_purchase":
                 # Only the observed cash share changes H holdings. The card
                 # share remains a debt, not another asset payment or G.

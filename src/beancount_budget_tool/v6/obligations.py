@@ -27,9 +27,10 @@ from .classification import _key
 from .facts import FactIndex, reference_fact_index
 from .obligation_opening import compile_obligation_opening, opening_source, paired_price_value
 from .ownership import _owners
-from .native_flows import native_card_purchase
+from .native_flows import native_card_purchase, native_payable_receipt
+from .inline_amounts import parse_inline_amounts
 from .provenance import valid_digest
-from .source import scan_v6_source
+from .source import _source, scan_v6_source
 
 
 ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
@@ -69,6 +70,7 @@ def audit_simple_obligations(root: Path, cutover: date,
     opening = defaultdict(Fraction)
     historical_sources = {}
     candidates = {}
+    payable_receipts = {}
     order = []
     for entry in fin.entries:
         if not isinstance(entry, data.Transaction):
@@ -107,6 +109,10 @@ def audit_simple_obligations(root: Path, cutover: date,
                       fin.raw_price(posting)[0] == fin.raw_price(counterpart)[0] == "none" and
                       other_root == asset_root):
                     shape = "asset_outflow" if amount > 0 else "asset_inflow"
+            receipt = native_payable_receipt(fin, entry)
+            if receipt is not None and receipt.liability is posting:
+                shape = "income_payable"
+                payable_receipts[key] = receipt
             candidate = {"liability_ref": ref, "counterpart_ref":
                          facts.for_posting(counterpart).as_dict() if shape and counterpart is not None else None,
                          "account": posting.account, "commodity": posting.units.currency,
@@ -117,6 +123,15 @@ def audit_simple_obligations(root: Path, cutover: date,
                     counterpart_refs=[facts.for_posting(p).as_dict() for p in entry.postings if p is not posting],
                     expense_refs=[facts.for_posting(p).as_dict() for p in group.expenses],
                     asset_refs=[facts.for_posting(p).as_dict() for p in group.assets])
+            if receipt is not None and receipt.liability is posting:
+                candidate.update(counterpart_refs=[facts.for_posting(p).as_dict()
+                                                   for p in entry.postings if p is not posting],
+                                 asset_refs=[facts.for_posting(receipt.cash).as_dict()],
+                                 income_refs=[facts.for_posting(p).as_dict() for p in receipt.incomes],
+                                 cash_received=exact_text(receipt.received),
+                                 income_received=exact_text(receipt.income),
+                                 payable_received=exact_text(receipt.payable),
+                                 proof="native_income_payable_v1")
             candidates[key] = candidate
             order.append(key)
 
@@ -130,6 +145,7 @@ def audit_simple_obligations(root: Path, cutover: date,
 
     review_sha = None
     opening_rows, owners = [], set()
+    owner_names = {}
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "events"}
@@ -146,7 +162,8 @@ def audit_simple_obligations(root: Path, cutover: date,
         ):
             require_yaml(valid, "OBLIGATION_DECLARATION_INVALID", "责任侧文件版本或原审快照格式不匹配",
                          declarations, (field,))
-        owners = set(_owners(document["owners"], source=declarations).values())
+        owner_names = _owners(document["owners"], source=declarations)
+        owners = set(owner_names.values())
         opening_rows = document.get("opening", [])
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         for row_index, row in enumerate(document["events"]):
@@ -190,14 +207,15 @@ def audit_simple_obligations(root: Path, cutover: date,
             kind = row["kind"]
             allowed = {"consumer_purchase": {"consumer_purchase"},
                        "asset_outflow": {"payment", "advance_outflow"},
-                       "asset_inflow": {"advance_reimbursement"}}
+                       "asset_inflow": {"advance_reimbursement"},
+                       "income_payable": {"payable_receipt"}}
             check_event(type(kind) is str and kind in allowed[candidate["shape"]] and
                     type(row["reason"]) is str and bool(row["reason"].strip()),
                     "OBLIGATION_CLAIM_INVALID", "责任 ID、类型或理由无效", location)
             ident = row.get("clearing_id") if kind.startswith("advance_") else row.get("obligation_id")
             check_event(type(ident) is str and bool(ID.fullmatch(ident)),
                     "OBLIGATION_CLAIM_INVALID", "责任或清算 ID 非法", location)
-            if kind == "consumer_purchase":
+            if kind in ("consumer_purchase", "payable_receipt"):
                 check_event("obligation_id" in row and "clearing_id" not in row,
                         "OBLIGATION_CLAIM_INVALID", "消费须使用责任 ID", location)
                 check_event("owner_id" in row and type(row["owner_id"]) is str and
@@ -226,6 +244,28 @@ def audit_simple_obligations(root: Path, cutover: date,
         kind = claim["kind"] if claim else None
         ident = (claim.get("clearing_id") if kind.startswith("advance_") else claim["obligation_id"]) if claim else None
         coord = (candidate["account"], candidate["commodity"], candidate["lot"])
+        derived = False
+        if claim is None and candidate["shape"] == "income_payable":
+            receipt = payable_receipts[key]
+            raw = (receipt.cash.meta or {}).get("fund")
+            if raw is not None:
+                parts = parse_inline_amounts(raw, receipt.received,
+                                             _source(receipt.cash.meta or {}),
+                                             known_names=set(owner_names), code="OWNERSHIP_UNITS_MISMATCH")
+                if len(parts) == 1 and parts[0][0] in owner_names:
+                    ident = "payable_" + sha256(key.encode()).hexdigest()
+                    kind, derived = "payable_receipt", True
+                    claim = {"kind": kind, "obligation_id": ident, "owner_id": owner_names[parts[0][0]],
+                             "reason": "同笔原币精确等式：到账＝已记收入＋应付款；责任沿唯一显式资产用途"}
+        if claim is None and candidate["shape"] == "asset_outflow" and coord not in pending_coordinates:
+            active = [(name, item) for name, item in balances.items()
+                      if item["account"] == coord and item["remaining"] > 0]
+            if (len(active) == 1 and active[0][1].get("origin") == "payable_receipt" and
+                    Fraction(candidate["signed_units"]) <= active[0][1]["remaining"] and
+                    not any(item["account"] == coord and item["remaining"] for item in advances.values())):
+                ident, kind, derived = active[0][0], "payment", True
+                claim = {"kind": kind, "obligation_id": ident,
+                         "reason": "支付同账户同币种唯一未结的已记应付款；金额不超过剩余责任"}
         opening_required = coord in pending_coordinates and (
             kind == "payment" and ident not in balances or
             kind == "advance_reimbursement" and ident not in advances)
@@ -235,14 +275,15 @@ def audit_simple_obligations(root: Path, cutover: date,
         elif opening_required:
             state, codes = "NEEDS_REVIEW", ["OBLIGATION_OPENING_REQUIRED"]
         elif claim is not None:
-            location = claim_locations[key]
+            location = claim_locations.get(key)
             amount = Fraction(candidate["signed_units"])
-            if kind == "consumer_purchase":
+            if kind in ("consumer_purchase", "payable_receipt"):
                 check_event(ident not in balances, "DUPLICATE_OBLIGATION_CLAIM",
                         "稳定责任 ID 重复用于新消费", location)
                 balances[ident] = {"account": coord, "owner_id": claim["owner_id"],
                                    "remaining": -amount, "purchase_ref": candidate["liability_ref"],
-                                   "purchase_date": candidate["date"]}
+                                   "purchase_date": candidate["date"],
+                                   **({"origin": "payable_receipt"} if kind == "payable_receipt" else {})}
             elif kind == "payment":
                 check_event(ident in balances, "OBLIGATION_SETTLEMENT_UNKNOWN",
                         "还款未指向本审计中较早发生的消费责任", location)
@@ -272,7 +313,8 @@ def audit_simple_obligations(root: Path, cutover: date,
                        "obligation_id": claim.get("obligation_id") if claim else None,
                        "clearing_id": claim.get("clearing_id") if claim else None,
                        "owner_id": (claim.get("owner_id") if claim else None),
-                       "review_reason": claim["reason"] if claim else None})
+                       "review_reason": claim["reason"] if claim else None,
+                       **({"claim_origin": "booked_equation"} if derived else {})})
 
     remaining = [{"obligation_id": ident, "account": item["account"][0],
                   "commodity": item["account"][1], "lot": item["account"][2],

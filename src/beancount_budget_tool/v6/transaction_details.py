@@ -14,7 +14,7 @@ from .facts import FactIndex
 ORIGINS = {"inline": "行内标签", "external": "审阅决定", "default": "默认规则", "inferred": "默认或已审库存继承"}
 FLOW_NAMES = {"expenses_paid": "消费实付", "expense_refunds": "消费退款", "debt_payments": "还债",
               "advances_paid": "单位代垫", "advance_reimbursements": "报销收回"}
-DEBT_NAMES = {"consumer_purchase": "刷卡消费", "payment": "还款", "advance_outflow": "单位代垫",
+DEBT_NAMES = {"payable_receipt": "收入与应付款混合到账", "consumer_purchase": "刷卡消费", "payment": "还款", "advance_outflow": "单位代垫",
               "advance_reimbursement": "单位报销"}
 VALUE_NAMES = {"native_report_currency": "原币即报告货币", "source_price_@": "原分录单价", "source_price_@@": "原分录总价"}
 
@@ -176,6 +176,10 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
         label = event["obligation_id"] or event["clearing_id"]
         owner = event["responsibility_owner_name"] or "单位代垫清算，不作本人消费责任"
         lines.append(f"责任事件：{DEBT_NAMES.get(event['kind'], event['kind'])}，ID {label}，责任用途：{owner}")
+        if event.get("proof") == "native_income_payable_v1":
+            lines.append(f"  到账核对：{amount_text(event['cash_received'])}＝收入 "
+                         f"{amount_text(event['income_received'])}＋应付款 {amount_text(event['payable_received'])} "
+                         f"{event['commodity']}；应付款不计个人收入或消费。")
     for event in record["purpose_events"]:
         protocol = event.get("protocol", {})
         if event["kind"] == "k_event" and protocol.get("shape") == "book_redemption_income":

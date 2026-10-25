@@ -133,3 +133,37 @@ def native_asset_flow(fin, entry, modes: dict | None = None) -> NativeFlow | Non
           any(exact(p.units.number) * total > 0 for p in remaining)):
         return None
     return NativeFlow(kind, assets, remaining, total)
+
+
+@dataclass(frozen=True)
+class NativePayableReceipt:
+    cash: data.Posting
+    liability: data.Posting
+    incomes: tuple
+    received: Fraction
+    income: Fraction
+    payable: Fraction
+
+
+def native_payable_receipt(fin, entry, modes: dict | None = None) -> NativePayableReceipt | None:
+    """Prove cash = income + new payable, without treating the payable as income."""
+    if not isinstance(entry, data.Transaction):
+        return None
+    grouped = {kind: tuple(p for p in entry.postings
+                          if p.account.split(":", 1)[0] == fin.options["name_" + kind])
+               for kind in ("assets", "liabilities", "income")}
+    cash, liabilities, incomes = (grouped[kind] for kind in ("assets", "liabilities", "income"))
+    if (len(cash) != 1 or len(liabilities) != 1 or not incomes or
+            len(entry.postings) != 2 + len(incomes) or
+            modes is not None and modes.get(cash[0].account) != "H"):
+        return None
+    asset, liability = cash[0], liabilities[0]
+    if any(p.cost is not None or p.price is not None or fin.raw_price(p)[0] != "none" or
+           p.units.currency != asset.units.currency for p in entry.postings):
+        return None
+    received, payable = exact(asset.units.number), -exact(liability.units.number)
+    income = -sum((exact(p.units.number) for p in incomes), Fraction(0))
+    if (received <= 0 or payable <= 0 or income <= 0 or
+            any(exact(p.units.number) > 0 for p in incomes) or received != income + payable):
+        return None
+    return NativePayableReceipt(asset, liability, incomes, received, income, payable)

@@ -23,7 +23,7 @@ from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
 from .classification import _key, audit_classification
 from .provenance import valid_digest
 from .facts import FactIndex, future_transaction_refs, reference_fact_index
-from .native_flows import native_asset_flow, native_book_redemption
+from .native_flows import native_asset_flow, native_book_redemption, native_payable_receipt
 
 
 def costed_sale_candidate(entry: data.Transaction, income: data.Posting,
@@ -146,6 +146,16 @@ def audit_economic_benefits(root: Path, cutover: date,
                             "basis": "joint_native_totals_no_pairwise_allocation"}
                     proved.append({**record, "proof": "same_transaction_native_asset_group",
                                    "evidence_group": native_proof})
+                    continue
+                receipt = native_payable_receipt(fin, entry)
+                if receipt is not None and any(p is posting for p in receipt.incomes):
+                    proved.append({**record, "proof": "native_income_payable_v1",
+                                   "evidence_refs": [facts.for_posting(p).as_dict() for p in entry.postings
+                                                     if p is not posting],
+                                   "cash_receipt_native": exact_text(receipt.received),
+                                   "income_total_native": exact_text(receipt.income),
+                                   "payable_native": exact_text(receipt.payable),
+                                   "equation": "cash_receipt = income_total + payable"})
                     continue
                 redemption = native_book_redemption(fin, entry)
                 if redemption is not None and redemption.income is posting:

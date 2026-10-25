@@ -25,7 +25,7 @@ from .classification import _key
 from .facts import FactIndex, GeneratedPostingRef, future_posting_refs
 from .inline_amounts import parse_inline_amounts
 from .initialization import initial_pad_postings
-from .native_flows import native_asset_flow, native_card_purchase
+from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt
 from .opening import audit_opening
 from .provenance import valid_digest
 from .source import _source, scan_v6_source
@@ -323,7 +323,8 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     pending_reasons[key] = "PAD_RECONCILIATION_REVIEW"
             native = native_asset_flow(fin, entry, semantics) if len(entry.postings) > 2 else None
             card_purchase = native_card_purchase(fin, entry, semantics)
-            if native is not None or card_purchase is not None or len(h_legs) == 1 and len(entry.postings) == 2:
+            receipt = native_payable_receipt(fin, entry, semantics)
+            if receipt is not None or native is not None or card_purchase is not None or len(h_legs) == 1 and len(entry.postings) == 2:
                 # Defaults select each asset's owner, not an allocation of
                 # payments to individual expense/income counterparts.
                 for key in missing_keys:
@@ -332,6 +333,12 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                         inferred(key, [(defaults["income_owner_id"], signed)], "默认收入用途")
                     elif fin.options["name_expenses"] in roots:
                         inferred(key, [(defaults["expense_owner_id"], signed)], "默认支出用途")
+                    elif (len(entry.postings) == 2 and signed < 0 and
+                          fin.options["name_liabilities"] in roots and all(
+                              p.cost is None and p.price is None and fin.raw_price(p)[0] == "none" and
+                              p.units.currency == leg_keys[key].units.currency for p in entry.postings) and
+                          sum((exact(p.units.number) for p in entry.postings), Fraction(0)) == 0):
+                        inferred(key, [(defaults["expense_owner_id"], signed)], "负债付款使用默认支出用途；责任另审")
             elif (len(entry.postings) == len(h_legs) == 2 and
                   all(p.account.split(":", 1)[0] == assets for p in h_legs)):
                 positive = [p for p in h_legs if exact(p.units.number) > 0]
