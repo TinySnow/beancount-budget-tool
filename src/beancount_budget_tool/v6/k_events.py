@@ -23,6 +23,7 @@ from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_transaction_refs
 from .inline_amounts import parse_inline_amounts
+from .native_flows import native_book_redemption
 from .ownership import _owners, audit_ownership
 from .provenance import validate_event_declaration
 from .source import scan_v6_source
@@ -37,6 +38,25 @@ def _number(value: object, path: Path, keys: tuple) -> Fraction:
         "K_EVENT_UNITS_INVALID", "K 事件切片须使用精确数字字符串",
         path, keys)
     return Fraction(value)
+
+
+def _redemption_claim(candidate: dict, raw_fund: str, cash_claim: dict,
+                       names: dict[str, str], source: str) -> dict | None:
+    parts = parse_inline_amounts(raw_fund, Fraction(candidate["signed_k_units"]), source,
+                                 known_names=set(names), code="K_EVENT_UNITS_MISMATCH")
+    for name, units in parts:
+        require(name == "-" or name in names, "OWNER_UNKNOWN", f"行内 fund 用途未登记：{name}", source)
+    k_owners = {"-" if name == "-" else names[name] for name, units in parts}
+    cash_owners = {part["owner_id"] for part in cash_claim["slices"]}
+    if len(k_owners) != 1 or k_owners != cash_owners:
+        return None  # A source/destination remap needs a separate gain/loss policy.
+    owner = next(iter(k_owners))
+    return {"reason": "同用途 K 赎回：实收现金＝账面本金＋Income 损益，损益不计正式划拨",
+            "net_allocations": {}, "slices": [{
+                "id": "redemption_" + sha256(_key(candidate["k_ref"]).encode()).hexdigest()[:24],
+                "k_owner_id": owner, "cash_owner_id": owner,
+                "signed_k_units": candidate["signed_k_units"],
+                "signed_cash_units": candidate["signed_cash_units"], "boundary_role": "preserve"}]}
 
 
 def audit_k_events(root: Path, cutover: date, accounts: Path,
@@ -60,6 +80,11 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
     cash_claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
     future_pairs = {}
     for entry, refs in future_transaction_refs(fin, cutover):
+        redemption = native_book_redemption(fin, entry, account_audit["declared_semantics"])
+        if redemption is not None:
+            future_pairs[_key(refs[entry.postings.index(redemption.book)])] = (
+                refs[entry.postings.index(redemption.cash)])
+            continue
         if len(entry.postings) != 2:
             continue
         modes_future = [account_audit["declared_semantics"].get(p.account) for p in entry.postings]
@@ -85,7 +110,11 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
             amount = exact(posting.units.number)
             reason = None
             cash = None
-            if len(entry.postings) != 2 or len(k_postings) != 1:
+            redemption = native_book_redemption(fin, entry, modes)
+            if (redemption is not None and redemption.book is posting and
+                    posting.units.currency == report_currency):
+                cash = redemption.cash
+            elif len(entry.postings) != 2 or len(k_postings) != 1:
                 reason = "K_EVENT_SHAPE_UNSUPPORTED"
             else:
                 cash = next(p for p in entry.postings if p is not posting)
@@ -110,8 +139,17 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
                          "cash_ref": facts.for_posting(cash).as_dict() if cash is not None and
                                      reason is None else None,
                          "cash_account": cash.account if cash is not None and reason is None else None,
-                         "shape": "simple_cash" if reason is None else "unsupported",
+                         "shape": ("book_redemption_income" if redemption is not None and reason is None else
+                                   "simple_cash" if reason is None else "unsupported"),
                          "reason_code": reason}
+            if candidate["shape"] == "book_redemption_income":
+                candidate.update({"income_ref": facts.for_posting(redemption.income).as_dict(),
+                                  "signed_income_units": exact_text(-redemption.gain),
+                                  "signed_cash_units": exact_text(redemption.receipt),
+                                  "principal_book_value": exact_text(redemption.principal),
+                                  "income_value": exact_text(redemption.gain),
+                                  "equation": "cash_receipt = book_principal + income",
+                                  "protocol": "same_purpose_book_redemption_v1"})
             candidates[key] = candidate
             raw_fund = (posting.meta or {}).get("fund")
             if raw_fund is not None:
@@ -282,12 +320,20 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
     for key in order:
         candidate = candidates[key]
         claim = claims.get(key)
+        purpose_unsupported = False
+        if claim is None and key in inline_funds and candidate["shape"] == "book_redemption_income":
+            cash_claim = cash_claims.get(_key(candidate["cash_ref"]))
+            if cash_claim is not None:
+                claim = _redemption_claim(candidate, inline_funds[key], cash_claim, names, source_locations[key])
+                purpose_unsupported = claim is None
         if claim is None and key in inline_funds and candidate["shape"] == "simple_cash":
             cash_claim = cash_claims.get(_key(candidate["cash_ref"]))
             if cash_claim is not None:
                 claim = inline_claim(key, cash_claim)
-        if candidate["shape"] != "simple_cash":
+        if candidate["shape"] not in ("simple_cash", "book_redemption_income"):
             state, codes = "UNSUPPORTED", ["K_EVENT_SHAPE_UNSUPPORTED"]
+        elif purpose_unsupported:
+            state, codes = "UNSUPPORTED", ["K_REDEMPTION_PURPOSE_UNSUPPORTED"]
         elif claim is None:
             state, codes = "NEEDS_REVIEW", ["K_CASH_OWNER_PENDING" if key in inline_funds
                                                else "K_EVENT_PENDING"]
@@ -325,4 +371,4 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
             "pending_events": sum(row["status"] == "NEEDS_REVIEW" for row in events),
             "unsupported_events": sum(row["status"] == "UNSUPPORTED" for row in events),
             "events": events,
-            "note": "仅认证当次 K 申赎与真实现金对手；K 账面累计不代表基金份额、市值或用途库存"}
+            "note": "认证当次 K 申赎与现金对手；三腿损益赎回仅支持本金与实收现金同一用途。K 账面累计不代表基金份额、市值或用途库存"}

@@ -169,6 +169,13 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
         label = event["obligation_id"] or event["clearing_id"]
         owner = event["responsibility_owner_name"] or "单位代垫清算，不作本人消费责任"
         lines.append(f"责任事件：{DEBT_NAMES.get(event['kind'], event['kind'])}，ID {label}，责任用途：{owner}")
+    for event in record["purpose_events"]:
+        protocol = event.get("protocol", {})
+        if event["kind"] == "k_event" and protocol.get("shape") == "book_redemption_income":
+            currency = protocol["commodity"]
+            lines.append(f"赎回核对：实收 {amount_text(protocol['signed_cash_units'])} {currency}＝账面本金 "
+                         f"{amount_text(protocol['principal_book_value'])} {currency}＋损益 "
+                         f"{amount_text(protocol['income_value'])} {currency}")
     allocations = record["net_allocations"]
     lines.append("本笔正式净划拨 G：" + ("，".join(
         f"{owner_names[ident]} {amount_text(value)} {record['report_currency']}" for ident, value in allocations.items()) if allocations else "0（按已审用途事件）"))

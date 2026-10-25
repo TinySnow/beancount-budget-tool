@@ -7,10 +7,15 @@ import unittest
 
 import yaml
 
+from beancount_budget_tool.errors import BudgetError
+from beancount_budget_tool.financial import booked_through
 from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
 from beancount_budget_tool.tools.v6_propose_benefit_groups import propose
+from beancount_budget_tool.v6.k_events import audit_k_events
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.review_diagnostics import review_item
+from beancount_budget_tool.v6.spending import audit_monthly_spending
+from beancount_budget_tool.v6.transaction_details import render_transaction
 
 
 HEADER = (
@@ -60,6 +65,113 @@ class NativeFlowTests(unittest.TestCase):
         self.assertTrue(all(row["actual_g"] == "0" for row in report["purpose_progress"]["owners"]))
         self.assertTrue(all(row["net_allocations"] == {} for row in report["transactions"]["rows"]))
         return report
+
+    def redemption(self, receipt="105", income="-5", k_purpose="生活费", cash_purpose="生活费", extra=""):
+        return ('2026-08-01 open Income:Gain\n'
+                '2026-09-02 * "subscribe"\n'
+                '  Assets:Cash -100 CNY\n    fund: "生活费"\n'
+                '  Assets:Book 100 CNY\n    fund: "生活费"\n'
+                '2026-09-03 * "redeem"\n'
+                f'  Assets:Cash {receipt} CNY\n' +
+                (f'    fund: "{cash_purpose}"\n' if cash_purpose else '') +
+                f'  Assets:Book -100 CNY\n    fund: "{k_purpose}"\n'
+                f'  Income:Gain {income} CNY\n    budget: "投资"\n' + extra)
+
+    def income_total(self):
+        document = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        spending = audit_monthly_spending(self.ledger, date(2026, 9, 1), "2026-09",
+                                          self.config.parent / document["classifications"], "CNY")
+        return spending["metrics"]["income_supplement"]["report_total"]
+
+    def test_book_redemption_gain_certifies_without_recounting_principal_or_allocations(self):
+        report = self.report(self.redemption())
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "155")
+        self.assertEqual(report["k_book_purposes"]["rows"][0]["booked_end"], "0")
+        transaction = next(row for row in report["transactions"]["rows"] if row["narration"] == "redeem")
+        protocol = transaction["purpose_events"][0]["protocol"]
+        self.assertEqual(protocol["shape"], "book_redemption_income")
+        self.assertEqual((protocol["principal_book_value"], protocol["signed_cash_units"], protocol["income_value"]),
+                         ("100", "105", "5"))
+        income = next(row for row in transaction["postings"] if row["account"] == "Income:Gain")
+        self.assertEqual(income["benefit_source"]["income_report_value"], "5")
+        self.assertEqual(income["benefit_source"]["principal_book_value"], "100")
+        self.assertEqual(self.income_total(), "5")
+        self.assertIn("赎回核对：实收 105 CNY＝账面本金 100 CNY＋损益 5 CNY", "\n".join(
+            render_transaction(transaction, report["owner_names"])))
+
+    def test_book_redemption_loss_reduces_real_cash_and_purpose_without_new_expense(self):
+        report = self.report(self.redemption("92.47", "7.53"))
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "14247/100")
+        self.assertEqual(report["default_outflows"]["totals"][0]["net_outflow"], "0")
+        transaction = next(row for row in report["transactions"]["rows"] if row["narration"] == "redeem")
+        protocol = transaction["purpose_events"][0]["protocol"]
+        self.assertEqual(protocol["income_value"], "-753/100")
+        self.assertEqual(protocol["slices"][0]["signed_k_units"], "-100")
+        self.assertEqual(protocol["slices"][0]["signed_cash_units"], "9247/100")
+        self.assertEqual(self.income_total(), "-753/100")
+
+    def test_book_redemption_zero_income_still_preserves_the_purpose(self):
+        report = self.report(self.redemption("100", "0"))
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "150")
+
+    def test_book_redemption_requires_the_cash_owner_instead_of_defaulting_principal_to_income(self):
+        self.configure(self.redemption(cash_purpose=None))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "NEEDS_REVIEW")
+        self.assertIsNone(outcome["report"])
+        self.assertIn("K_CASH_OWNER_PENDING", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_book_redemption_with_purpose_change_or_mixed_purposes_remains_an_implementation_limit(self):
+        for k_purpose, cash_purpose in (("生活费", "储蓄"), ("生活费50,储蓄50", "生活费55,储蓄50")):
+            with self.subTest(k=k_purpose, cash=cash_purpose), TemporaryDirectory() as folder:
+                original, self.base = self.base, Path(folder)
+                try:
+                    self.configure(self.redemption(k_purpose=k_purpose, cash_purpose=cash_purpose))
+                    outcome = audit_month_workflow(self.config)
+                    self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+                    self.assertIsNone(outcome["report"])
+                    item = next(row for row in outcome["review_items"]
+                                if row["reason_code"] == "K_REDEMPTION_PURPOSE_UNSUPPORTED")
+                    self.assertTrue(item["source"].startswith(str(self.ledger.resolve())))
+                finally:
+                    self.base = original
+
+    def test_book_redemption_with_a_separate_fee_is_not_silently_net_combined(self):
+        self.configure(self.redemption("104", "-5", extra='  Expenses:Food 1 CNY\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_future_book_redemption_does_not_change_the_previous_month(self):
+        self.configure(self.redemption().replace('2026-09-03', '2026-10-03'))
+        before = audit_month_workflow(self.config)
+        self.assertEqual(before["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(before["report"]["actual_spendable"]["actual_spendable"], "50")
+        self.assertEqual(before["report"]["k_book_purposes"]["rows"][0]["booked_end"], "100")
+        document = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        with booked_through(date(2026, 10, 31)):
+            after = audit_k_events(self.ledger, date(2026, 9, 1), self.config.parent / document["accounts"],
+                                   self.config.parent / document["ownership"])
+        self.assertEqual(after["certified_events"], 2)
+        self.assertEqual(after["events"][-1]["income_value"], "5")
+
+    def test_loader_tolerance_cannot_prove_an_inexact_book_redemption(self):
+        self.configure('option "inferred_tolerance_default" "CNY:1"\n' + self.redemption("105", "-5.01"))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_voluntary_k_subscription_reports_the_actual_source_purpose_shortage(self):
+        self.configure('2026-09-02 * "subscribe"\n'
+                       '  Assets:Cash -100 CNY\n    fund: "储蓄"\n'
+                       '  Assets:Book 100 CNY\n    fund: "储蓄"\n')
+        with self.assertRaises(BudgetError) as caught:
+            audit_month_workflow(self.config)
+        self.assertEqual(caught.exception.code, "H_OWNER_NEGATIVE")
+        self.assertIn("资金用途：储蓄", caught.exception.message)
+        self.assertIn("划拨前余额：0 CNY", caught.exception.message)
+        self.assertIn("本次净划出：100 CNY", caught.exception.message)
+        self.assertEqual(caught.exception.source, f"{self.ledger.resolve()}:16")
 
     def test_two_expense_accounts_one_default_payer_certify(self):
         report = self.report('2026-09-02 * "food and travel"\n'

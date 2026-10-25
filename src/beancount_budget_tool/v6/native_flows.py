@@ -23,6 +23,45 @@ class NativeCardPurchase:
     expenses: tuple
 
 
+@dataclass(frozen=True)
+class NativeBookRedemption:
+    book: data.Posting
+    cash: data.Posting
+    income: data.Posting
+    principal: Fraction
+    receipt: Fraction
+    gain: Fraction
+
+
+def native_book_redemption(fin, entry, modes: dict | None = None) -> NativeBookRedemption | None:
+    """Prove cash receipt = book-flow principal + signed income, without lots.
+
+    This is an exact three-posting equation, not a claim about fund shares,
+    cost lots or market value. K event consumers additionally require reviewed
+    K/H semantics; the benefit projection only uses the booked source equation.
+    """
+    if not isinstance(entry, data.Transaction) or len(entry.postings) != 3:
+        return None
+    assets = [p for p in entry.postings if p.account.split(":", 1)[0] == fin.options["name_assets"]]
+    incomes = [p for p in entry.postings if p.account.split(":", 1)[0] == fin.options["name_income"]]
+    if len(assets) != 2 or len(incomes) != 1:
+        return None
+    outgoing = [p for p in assets if exact(p.units.number) < 0]
+    incoming = [p for p in assets if exact(p.units.number) > 0]
+    if len(outgoing) != 1 or len(incoming) != 1:
+        return None
+    book, cash, income = outgoing[0], incoming[0], incomes[0]
+    if modes is not None and (modes.get(book.account) != "K" or modes.get(cash.account) != "H"):
+        return None
+    if any(p.cost is not None or p.price is not None or fin.raw_price(p)[0] != "none" or
+           p.units.currency != cash.units.currency for p in entry.postings):
+        return None
+    principal, receipt, gain = -exact(book.units.number), exact(cash.units.number), -exact(income.units.number)
+    if receipt != principal + gain:
+        return None
+    return NativeBookRedemption(book, cash, income, principal, receipt, gain)
+
+
 def native_card_purchase(fin, entry, modes: dict | None = None) -> NativeCardPurchase | None:
     """Prove expenses = cash paid + one new card debt in native units.
 

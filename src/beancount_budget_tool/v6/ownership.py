@@ -394,7 +394,10 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 after = {owner: before.get(owner, Fraction(0)) + amount
                          for owner, amount in deltas.items()}
                 after.update({owner: amount for owner, amount in before.items() if owner not in after})
-                if len(entry.postings) == len(h_legs) == 2:
+                # K subscriptions also spend real H cash voluntarily; report
+                # their source deficit here rather than a raw holdings ref.
+                if len(entry.postings) == 2 and all(
+                        p.account.split(":", 1)[0] == assets for p in entry.postings):
                     outgoing = next((posting for key, posting in leg_keys.items()
                                      if coordinates[key] == coordinate and posting.units.number < 0),
                                     next(posting for key, posting in leg_keys.items()

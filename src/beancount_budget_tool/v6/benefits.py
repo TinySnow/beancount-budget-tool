@@ -22,7 +22,7 @@ from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
 from .classification import _key, audit_classification
 from .provenance import valid_digest
 from .facts import FactIndex, future_transaction_refs, reference_fact_index
-from .native_flows import native_asset_flow
+from .native_flows import native_asset_flow, native_book_redemption
 
 
 def costed_sale_candidate(entry: data.Transaction, income: data.Posting,
@@ -118,6 +118,17 @@ def audit_economic_benefits(root: Path, cutover: date,
                             "basis": "joint_native_totals_no_pairwise_allocation"}
                     proved.append({**record, "proof": "same_transaction_native_asset_group",
                                    "evidence_group": native_proof})
+                    continue
+                redemption = native_book_redemption(fin, entry)
+                if redemption is not None and redemption.income is posting:
+                    proved.append({**record, "proof": "same_transaction_book_redemption_equation",
+                                   "cash_evidence_ref": facts.for_posting(redemption.cash).as_dict(),
+                                   "book_evidence_ref": facts.for_posting(redemption.book).as_dict(),
+                                   "principal_book_value": exact_text(redemption.principal),
+                                   "income_report_value": exact_text(redemption.gain),
+                                   "cash_receipt_report_value": exact_text(redemption.receipt),
+                                   "principal_basis": "book_flow_not_cost_or_market_value",
+                                   "equation": "cash_receipt = book_principal + income"})
                     continue
                 candidate = costed_sale_candidate(entry, posting, fin, facts, posting.units.currency)
                 pending.append({**record, "reason_code": ("BENEFIT_GROUP_REQUIRED" if candidate is not None else
