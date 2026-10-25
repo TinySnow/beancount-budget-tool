@@ -95,11 +95,12 @@ class InvestmentConfigLocationTests(unittest.TestCase):
         self.assertEqual(pool["remainder_book_cost"], "59")
         self.assertEqual(before, {path: path.read_bytes() for path in self.base.iterdir()})
 
-    def test_supported_costed_sale_still_requires_review_without_automatic_approval(self):
+    def test_exact_costed_sale_proves_the_source_without_a_redundant_manual_equation_review(self):
         pending = audit_economic_benefits(self.root, self.cutover, self.classes)
-        self.assertEqual(pending["review_state"], "pending")
-        self.assertEqual(pending["proved_benefits"], 0)
-        self.assertEqual(pending["pending_benefits"][0]["reason_code"], "BENEFIT_GROUP_REQUIRED")
+        self.assertEqual(pending["review_state"], "complete")
+        self.assertEqual(pending["proved_benefits"], 1)
+        self.assertEqual(pending["pending_benefits"], [])
+        self.assertEqual(pending["proved"][0]["proof"], "exact_costed_sale_group_v1")
         proposed = propose(self.root, self.cutover, self.classes, "CNY")
         self.assertEqual(proposed["proposed_groups"], 1)
         self.assertEqual(proposed["unsupported_complex_benefits"], 0)

@@ -155,6 +155,13 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
         if posting["tracking"]:
             lines.append("  专题：" + "，".join(posting["tracking"]))
         value = posting["historical_valuation"]
+        benefit = posting.get("benefit_source")
+        if benefit and benefit["proof"] in {"exact_costed_sale_group_v1", "approved_costed_sale_equation"}:
+            currency = posting["commodity"]
+            lines.append(f"  卖出核对：到账 {amount_text(benefit['cash_receipt_report_value'])} {currency}＝成本本金合计 "
+                         f"{amount_text(benefit['principal_report_value'])} {currency}＋损益 "
+                         f"{amount_text(benefit['income_report_value'])} {currency}－费用合计 "
+                         f"{amount_text(benefit['fee_report_value'])} {currency}")
         settlement = posting["settlement_comparison"]
         if value:
             lines.append(f"  原分录计价：{amount_text(value['historical_report_value'])} {value['report_currency']}（{VALUE_NAMES.get(value['proof'], value['proof'])}）")

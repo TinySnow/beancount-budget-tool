@@ -1,9 +1,10 @@
-"""Conservative source audit for refunds and supplemental income.
+"""Conservative source audit for refunds and signed supplemental income.
 
 Two-posting transactions can prove a unique bookkeeping counterpart. Native
 one-direction asset flows with only expenses or only incomes can instead
 prove a joint source group, without inventing pairwise evidence allocations.
 Asset semantics and personal liability remain separate reviews. Other
+Costed sales prove their complete lot/fee equation, including losses. Other
 complex events require explicit evidence, never matching dates or totals.
 """
 
@@ -27,36 +28,47 @@ from .native_flows import native_asset_flow, native_book_redemption
 
 def costed_sale_candidate(entry: data.Transaction, income: data.Posting,
                           fin, facts: FactIndex, report_currency: str) -> dict | None:
-    """Describe one exact booked cost/receipt/income equation, if unique."""
+    """Describe the complete cost-lot/receipt/income/fee group, if unique."""
     asset_root = fin.options["name_assets"]
     expense_root = fin.options["name_expenses"]
     income_root = fin.options["name_income"]
-    if (income.account.split(":", 1)[0] != income_root or
-            income.units.currency != report_currency or exact(income.units.number) >= 0 or
-            len(entry.postings) not in (3, 4)):
+    if (not any(p is income for p in entry.postings) or
+            income.account.split(":", 1)[0] != income_root or
+            income.units.currency != report_currency or income.cost is not None or
+            income.price is not None or fin.raw_price(income)[0] != "none"):
         return None
     cash = [p for p in entry.postings if p.account.split(":", 1)[0] == asset_root
             and p.units.currency == report_currency and exact(p.units.number) > 0
-            and p.cost is None]
+            and p.cost is None and p.price is None and fin.raw_price(p)[0] == "none"]
     sold = [p for p in entry.postings if p.account.split(":", 1)[0] == asset_root
             and exact(p.units.number) < 0 and p.cost is not None
-            and p.cost.currency == report_currency]
+            and p.cost.currency == report_currency and p.cost.number is not None
+            and exact(p.cost.number) > 0
+            and (p.price is None or p.price.currency == report_currency)]
     fees = [p for p in entry.postings if p.account.split(":", 1)[0] == expense_root
-            and p.units.currency == report_currency and exact(p.units.number) > 0]
-    if (len(cash) != 1 or len(sold) != 1 or len(fees) > 1 or
-            len(entry.postings) != 3 + len(fees)):
+            and p.units.currency == report_currency and exact(p.units.number) >= 0
+            and p.cost is None and p.price is None and fin.raw_price(p)[0] == "none"]
+    if (len(cash) != 1 or not sold or
+            len(entry.postings) != len(sold) + len(fees) + 2):
         return None
-    principal = -exact(sold[0].units.number) * exact(sold[0].cost.number)
+    principal = sum((-exact(p.units.number) * exact(p.cost.number) for p in sold), Fraction(0))
     receipt = exact(cash[0].units.number)
     gain = -exact(income.units.number)
     fee = sum((exact(p.units.number) for p in fees), Fraction(0))
-    if principal <= 0 or gain <= 0 or receipt != principal + gain - fee:
+    if principal <= 0 or receipt != principal + gain - fee:
         return None
+    inventory = ({"inventory_ref": facts.for_posting(sold[0]).as_dict()} if len(sold) == 1 else {
+        "inventory_refs": [facts.for_posting(p).as_dict() for p in sold],
+        "inventory_components": [
+            {"ref": facts.for_posting(p).as_dict(), "signed_units": exact_text(exact(p.units.number)),
+             "unit_cost": exact_text(exact(p.cost.number)), "cost_currency": p.cost.currency,
+             "principal_report_value": exact_text(-exact(p.units.number) * exact(p.cost.number))}
+            for p in sold]})
     return {"status": "proposed", "kind": "costed_sale_income",
             "date": entry.date.isoformat(), "narration": entry.narration,
             "income_ref": facts.for_posting(income).as_dict(),
             "cash_ref": facts.for_posting(cash[0]).as_dict(),
-            "inventory_ref": facts.for_posting(sold[0]).as_dict(),
+            **inventory,
             "fee_refs": [facts.for_posting(p).as_dict() for p in fees],
             "principal_report_value": exact_text(principal),
             "income_report_value": exact_text(gain),
@@ -65,10 +77,22 @@ def costed_sale_candidate(entry: data.Transaction, income: data.Posting,
             "equation": "cash_receipt = principal_at_booked_cost + income - fee"}
 
 
+def _costed_proof(record: dict, candidate: dict, reason: str | None = None) -> dict:
+    inventory = ({"inventory_evidence_ref": candidate["inventory_ref"]} if "inventory_ref" in candidate else {
+        "inventory_evidence_refs": candidate["inventory_refs"],
+        "inventory_components": candidate["inventory_components"]})
+    return {**record, **inventory, "cash_evidence_ref": candidate["cash_ref"],
+            "fee_evidence_refs": candidate["fee_refs"],
+            **{key: candidate[key] for key in ("principal_report_value", "income_report_value",
+                                              "fee_report_value", "cash_receipt_report_value")},
+            "proof": "exact_costed_sale_group_v1" if reason is None else "approved_costed_sale_equation",
+            **({"review_reason": reason} if reason is not None else {})}
+
+
 def audit_economic_benefits(root: Path, cutover: date,
                             classifications: Path | None = None,
                             approved_groups: Path | None = None) -> dict:
-    """Find uniquely sourced negative expenses and income receipts.
+    """Find uniquely sourced refunds, income receipts and costed-sale losses.
 
     This does not certify net expense or cash arrival: asset semantics,
     liability ownership, valuation and classification remain separate.
@@ -82,13 +106,17 @@ def audit_economic_benefits(root: Path, cutover: date,
     proved = []
     pending = []
     complex_context = {}
+    complex_records = {}
     for entry in fin.entries:
         if not isinstance(entry, data.Transaction) or entry.date < cutover:
             continue
         native, native_checked, native_proof = None, False, None
         for posting in entry.postings:
             kind = posting.account.split(":", 1)[0]
-            if kind not in (expense_root, income_root) or exact(posting.units.number) >= 0:
+            costed_income = kind == income_root and any(
+                p.account.split(":", 1)[0] == fin.options["name_assets"] and
+                p.cost is not None and exact(p.units.number) < 0 for p in entry.postings)
+            if kind not in (expense_root, income_root) or (exact(posting.units.number) >= 0 and not costed_income):
                 continue
             ref = facts.for_posting(posting).as_dict()
             source = f"{(posting.meta or {}).get('filename', '?')}:{(posting.meta or {}).get('lineno', '?')}"
@@ -131,9 +159,12 @@ def audit_economic_benefits(root: Path, cutover: date,
                                    "equation": "cash_receipt = book_principal + income"})
                     continue
                 candidate = costed_sale_candidate(entry, posting, fin, facts, posting.units.currency)
-                pending.append({**record, "reason_code": ("BENEFIT_GROUP_REQUIRED" if candidate is not None else
-                                                          "BENEFIT_GROUP_SHAPE_UNSUPPORTED")})
                 complex_context[_key(ref)] = (entry, posting)
+                complex_records[_key(ref)] = record
+                if candidate is not None:
+                    proved.append(_costed_proof(record, candidate))
+                else:
+                    pending.append({**record, "reason_code": "BENEFIT_GROUP_SHAPE_UNSUPPORTED"})
                 continue
             counterpart = entry.postings[1] if entry.postings[0] is posting else entry.postings[0]
             counterpart_kind = counterpart.account.split(":", 1)[0]
@@ -149,8 +180,7 @@ def audit_economic_benefits(root: Path, cutover: date,
                          for entry, refs in future_transaction_refs(fin, cutover)
                          if len(entry.postings) > 2
                          for posting, ref in zip(entry.postings, refs)
-                         if posting.account.split(":", 1)[0] == income_root
-                         and exact(posting.units.number) < 0}
+                         if posting.account.split(":", 1)[0] == income_root}
         reference_fin = reference_financial(fin)
         reference_facts = reference_fact_index(fin) if future_groups else facts
         document = load_yaml(approved_groups)
@@ -204,16 +234,8 @@ def audit_economic_benefits(root: Path, cutover: date,
             require(candidate is not None and candidate["income_ref"] == row["income_ref"],
                     "BENEFIT_GROUP_UNPROVED", "证券成本、到账、收益与费用未构成唯一守恒组", location)
             approved.add(key)
-            source = next(item for item in pending if _key(item["ref"]) == key)
-            proved.append({k: v for k, v in source.items() if k != "reason_code"} |
-                          {"cash_evidence_ref": candidate["cash_ref"],
-                           "inventory_evidence_ref": candidate["inventory_ref"],
-                           "fee_evidence_refs": candidate["fee_refs"],
-                           "principal_report_value": candidate["principal_report_value"],
-                           "income_report_value": candidate["income_report_value"],
-                           "fee_report_value": candidate["fee_report_value"],
-                           "cash_receipt_report_value": candidate["cash_receipt_report_value"],
-                           "proof": "approved_costed_sale_equation", "review_reason": row["reason"]})
+            proved = [item for item in proved if _key(item["ref"]) != key]
+            proved.append(_costed_proof(complex_records[key], candidate, row["reason"]))
         pending = [item for item in pending if _key(item["ref"]) not in approved]
     return {"mode": "v6_economic_benefit_audit_only",
             "ledger_snapshot": fin.digest, "cutover": cutover.isoformat(),
