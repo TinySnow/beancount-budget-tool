@@ -585,7 +585,7 @@ class ProjectTests(unittest.TestCase):
             if calls == 2:
                 raise PermissionError("virtual post-save read failure")
             return audit_month_workflow(config)
-        with patch("beancount_budget_tool.tools.v6_review_decisions.audit_month_workflow", side_effect=fail_post_save):
+        with patch("beancount_budget_tool.v6.review.audit_month_workflow", side_effect=fail_post_save):
             code, output, errors = self.invoke(launch, ["review", "--project", str(self.path), "--apply", str(sheet), "--format", "json"])
         self.assertEqual((code, errors), (2, ""))
         result = json.loads(output)
@@ -597,7 +597,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_project_cli_closes_selected_month_and_retains_later_months(self):
         self.project()
-        with patch("beancount_budget_tool.tools.v6_next_month.audit_month_workflow", side_effect=PermissionError("virtual failed read")):
+        with patch("beancount_budget_tool.v6.month_actions.audit_month_workflow", side_effect=PermissionError("virtual failed read")):
             code, output, errors = self.invoke(launch, ["next-month", "--project", str(self.path), "--month", "2026-09",
                 "--confirm-completeness", "--reason", "公开虚构九月完整", "--output", str(self.base / "closed"), "--format", "json"])
         self.assertEqual((code, errors), (2, ""))

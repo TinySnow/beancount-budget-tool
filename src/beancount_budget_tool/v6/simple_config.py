@@ -26,7 +26,9 @@ import yaml
 from ..errors import BudgetError, require
 from ..console import configure_output
 from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
-from ..tools.v6_init import create_setup, compile_setup, _SetupDumper, _ledger_reference
+from .input_compiler import (
+    create_setup, compile_setup, SetupDumper, relative_reference,
+)
 from .targets import _month
 
 
@@ -40,7 +42,7 @@ def is_simple(document: object) -> bool:
 
 def _write(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.dump(value, Dumper=_SetupDumper, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    path.write_text(yaml.dump(value, Dumper=SetupDumper, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
 def _setup_keys(path: Path, source: str) -> tuple:
@@ -575,7 +577,7 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
                 elif not old_config:
                     account["opening"] = opening
             accounts[row["account"]] = account
-        public = {"schema": 1, "ledger": _ledger_reference(ledger.resolve(), output), "budgets": "budgets.yml",
+        public = {"schema": 1, "ledger": relative_reference(ledger.resolve(), output), "budgets": "budgets.yml",
                   "cutover": cutover, "month": month, "report_currency": currency, "defaults": names, "accounts": accounts}
         if old_config:
             if "defaults" not in state["classifications"]:

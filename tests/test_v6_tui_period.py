@@ -160,7 +160,7 @@ class IntervalBrowserTests(unittest.TestCase):
         browser = self.browser()
         screen = FakeScreen(keys=("c", "r", "\n", "e", "m", "q"), size=(20, 160))
         with patch("beancount_budget_tool.v6.tui.curses.curs_set"), \
-             patch("beancount_budget_tool.v6.tui_review.prepare_review") as prepare:
+             patch("beancount_budget_tool.v6.review.prepare_review") as prepare:
             _report_browser(screen, browser)
         prepare.assert_not_called()
         self.assertFalse(browser.period)

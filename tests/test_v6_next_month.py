@@ -2,6 +2,7 @@
 
 from contextlib import redirect_stdout
 from io import StringIO
+from fractions import Fraction
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -9,6 +10,8 @@ import unittest
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
+from beancount_budget_tool.financial import month_bounds
+from beancount_budget_tool.v6.month_actions import _decimal, next_month
 from beancount_budget_tool.tools.v6_init import _SetupDumper, compile_setup
 from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month, confirm_month, main
 from beancount_budget_tool.tools.v6_review_decisions import create_review, apply_review
@@ -57,6 +60,29 @@ class NextMonthTests(unittest.TestCase):
             row["reason"] = "virtual account reviewed"
         self.save(self.worksheet, document)
         return document
+
+    def test_target_copy_preserves_exact_decimal_or_rejects_without_rounding(self):
+        for raw, expected in ((None, None), ("not_assessed", "not_assessed"), ("0", "0"),
+                              ("2069", "2069"), ("1/8", "0.125"), ("4648.00", "4648"),
+                              (Fraction(1, 10**24), "0." + "0" * 23 + "1")):
+            with self.subTest(raw=raw):
+                self.assertEqual(_decimal(raw), expected)
+        for raw in ("-1", "-1/8", "1/3"):
+            with self.subTest(raw=raw), self.assertRaises(BudgetError) as error:
+                _decimal(raw)
+            self.assertEqual(error.exception.code, "PLAN_AMOUNT_INVALID")
+
+    def test_shared_month_bounds_preserves_cutoffs_and_invalid_month_errors(self):
+        first, last = month_bounds("2024-02")
+        self.assertEqual((first.isoformat(), last.isoformat()), ("2024-02-01", "2024-02-29"))
+        self.assertEqual(next_month("2023-12"), "2024-01")
+        for raw in ("2023-2", "2023-13", "2023-07-01"):
+            with self.subTest(raw=raw), self.assertRaises(BudgetError) as error:
+                month_bounds(raw)
+            self.assertEqual(error.exception.code, "MONTH_INVALID")
+        with self.assertRaises(BudgetError) as error:
+            next_month("9999-12")
+        self.assertEqual(error.exception.code, "TIME_INVALID")
 
     def test_draft_does_not_approve_goals_or_month_end(self):
         result = self.create()

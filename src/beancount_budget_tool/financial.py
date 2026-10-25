@@ -4,6 +4,7 @@ This module does not infer accounting facts from source text. It only retains
 the lexical evidence that Beancount's booked AST may normalize away.
 """
 
+from calendar import monthrange
 from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -24,6 +25,16 @@ from .exact import Fraction, exact
 
 PRICE = re.compile(r"(?<!@)@@?\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([A-Za-z][A-Za-z0-9_]*)")
 RESERVED_PUSHMETA = re.compile(r"^\s*pushmeta\s+(?:budget|fund|tracking|budget-order)\s*:", re.IGNORECASE)
+
+
+def month_bounds(value: str) -> tuple[date, date]:
+    """Validate a calendar month and return its inclusive ledger cutoff bounds."""
+    try:
+        first = date.fromisoformat(value + "-01")
+        require(first.strftime("%Y-%m") == value, "MONTH_INVALID", "月份须为 YYYY-MM")
+    except ValueError as exc:
+        raise BudgetError("MONTH_INVALID", "月份须为有效的 YYYY-MM") from exc
+    return first, date(first.year, first.month, monthrange(first.year, first.month)[1])
 
 
 @dataclass(frozen=True)

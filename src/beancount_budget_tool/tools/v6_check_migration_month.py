@@ -10,7 +10,6 @@ transfer events, plans, or a monthly report.
 from __future__ import annotations
 
 import argparse
-from calendar import monthrange
 from dataclasses import asdict
 from datetime import date
 from difflib import SequenceMatcher
@@ -22,22 +21,13 @@ import sys
 from beancount.core import data
 
 from beancount_budget_tool.errors import BudgetError, require
-from beancount_budget_tool.financial import load_financial
+from beancount_budget_tool.financial import load_financial, month_bounds as _month
 from beancount_budget_tool.v6.source import collect_v6_source_issues, scan_v6_source
 
 from .v6_make_review_copy import _financial_facts
 
 
 TRANSACTION = re.compile(r"^\d{4}-\d{2}-\d{2}\s+[*!?]\s")
-
-
-def _month(value: str) -> tuple[date, date]:
-    try:
-        first = date.fromisoformat(value + "-01")
-        require(first.strftime("%Y-%m") == value, "MONTH_INVALID", "月份须为 YYYY-MM")
-    except ValueError as exc:
-        raise BudgetError("MONTH_INVALID", "月份须为有效的 YYYY-MM") from exc
-    return first, date(first.year, first.month, monthrange(first.year, first.month)[1])
 
 
 def _source_layout(fin) -> set[str]:

@@ -13,7 +13,7 @@ from beancount_budget_tool.tools.v6_init import _SetupDumper, compile_setup
 from beancount_budget_tool.tools.v6_next_month import compile_next_month
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.tui import ReportBrowser, _next_month, _report_browser
-from beancount_budget_tool.v6.tui_next_month import load_next_month, month_workspace, prepare_next_month
+from beancount_budget_tool.v6.month_actions import load_next_month, month_workspace, prepare_next_month
 from test_v6_tui import FakeScreen
 
 
@@ -97,7 +97,7 @@ class NextMonthTuiTests(unittest.TestCase):
         worksheet = self.draft(workspace / "2026-10")
         self.fill(worksheet)
         with patch.object(browser, "loader", wraps=browser.loader) as load, \
-             patch("beancount_budget_tool.tools.v6_next_month.audit_month_workflow", wraps=audit_month_workflow) as audit:
+             patch("beancount_budget_tool.v6.month_actions.audit_month_workflow", wraps=audit_month_workflow) as audit:
             title, _ = self.operate(browser, ["2", str(worksheet)])
         self.assertEqual(title, "下一月已载入")
         self.assertEqual(load.call_count, 0)
@@ -185,7 +185,7 @@ class NextMonthTuiTests(unittest.TestCase):
             worksheet = self.draft(self.base / f"error-{index}")
             self.fill(worksheet, complete=True)
             browser = self.browser()
-            with patch("beancount_budget_tool.tools.v6_next_month.audit_month_workflow", side_effect=error):
+            with patch("beancount_budget_tool.v6.month_actions.audit_month_workflow", side_effect=error):
                 title, lines = self.operate(browser, ["2", str(worksheet)])
             self.assertEqual(title, "下一月已载入")
             self.assertTrue(browser.config.is_file())
@@ -216,7 +216,7 @@ class NextMonthTuiTests(unittest.TestCase):
             self.config.write_bytes(original + b"\n# changed at compile boundary\n")
             return compile_next_month(*args, **kwargs)
         try:
-            with patch("beancount_budget_tool.v6.tui_next_month.compile_next_month", side_effect=race), \
+            with patch("beancount_budget_tool.v6.month_actions.compile_next_month", side_effect=race), \
                  self.assertRaises(BudgetError) as caught:
                 load_next_month(self.config, [self.config], worksheet)
             self.assertEqual(caught.exception.code, "INPUT_CHANGED")
@@ -234,7 +234,7 @@ class NextMonthTuiTests(unittest.TestCase):
             self.config.write_bytes(original + b"\n# changed after audit\n")
             return result
         try:
-            with patch("beancount_budget_tool.tools.v6_next_month.audit_month_workflow", side_effect=changed_after_audit):
+            with patch("beancount_budget_tool.v6.month_actions.audit_month_workflow", side_effect=changed_after_audit):
                 title, _ = self.operate(browser, ["2", str(worksheet)])
             self.assertEqual(title, "下一月已载入")
             self.assertEqual(browser.error.code, "INPUT_CHANGED")

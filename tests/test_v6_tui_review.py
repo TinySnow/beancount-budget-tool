@@ -13,7 +13,7 @@ from beancount_budget_tool.tools.v6_init import _SetupDumper, create_setup, comp
 from beancount_budget_tool.tools.v6_review_decisions import apply_review
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.tui import ReportBrowser, _draw_browser, _read_field, _report_browser
-from beancount_budget_tool.v6.tui_review import prepare_review, save_review, validate_decision
+from beancount_budget_tool.v6.review import prepare_review, save_review, validate_decision
 from test_v6_tui import FakeScreen
 
 
@@ -265,7 +265,7 @@ class InteractiveReviewTests(unittest.TestCase):
         def publish_then_fail(worksheet):
             apply_review(worksheet)
             raise OSError("next report input was temporarily unavailable")
-        with patch("beancount_budget_tool.v6.tui_review.apply_review", side_effect=publish_then_fail):
+        with patch("beancount_budget_tool.v6.review.apply_review", side_effect=publish_then_fail):
             result = save_review(prepared, "生活开销", "核对过", self.base / "io-error", approved=True)
         self.assertEqual(result["status"], "DECISIONS_SAVED")
         self.assertTrue(Path(result["config"]).is_file())

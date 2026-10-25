@@ -14,7 +14,7 @@ from beancount_budget_tool.tools.v6_init import _SetupDumper, compile_setup
 from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.tui import ReportBrowser, _confirm_month_end, _report_browser
-from beancount_budget_tool.v6.tui_month_end import prepare_month_end, save_month_end
+from beancount_budget_tool.v6.month_actions import prepare_month_end, save_month_end
 from test_v6_tui import FakeScreen
 
 
@@ -139,7 +139,7 @@ class MonthEndTests(unittest.TestCase):
             parsed = _config(path)
             path.write_bytes(original + b"\n# changed while preparing\n")
             return parsed
-        with patch("beancount_budget_tool.v6.tui_month_end._config", side_effect=changed_config):
+        with patch("beancount_budget_tool.v6.month_actions.read_month_config", side_effect=changed_config):
             with self.assertRaises(BudgetError) as caught:
                 prepare_month_end(self.config, "2026-09")
         self.assertEqual(caught.exception.code, "INPUT_CHANGED")
@@ -148,7 +148,7 @@ class MonthEndTests(unittest.TestCase):
         def before_publish(*args, **kwargs):
             self.config.write_bytes(original + b"\n# changed before backend capture\n")
             return confirm_month(*args, **kwargs)
-        with patch("beancount_budget_tool.v6.tui_month_end.confirm_month", side_effect=before_publish):
+        with patch("beancount_budget_tool.v6.month_actions.confirm_month", side_effect=before_publish):
             with self.assertRaises(BudgetError) as caught:
                 save_month_end(prepared, "旧依据", self.base / "raced", approved=True)
         self.assertEqual(caught.exception.code, "INPUT_CHANGED")
@@ -170,7 +170,7 @@ class MonthEndTests(unittest.TestCase):
         browser = self.browser()
         prepared = prepare_month_end(self.config, "2026-09")
         output = self.base / "published"
-        with patch("beancount_budget_tool.tools.v6_next_month.audit_month_workflow", side_effect=OSError("temporary IO failure")):
+        with patch("beancount_budget_tool.v6.month_actions.audit_month_workflow", side_effect=OSError("temporary IO failure")):
             result = save_month_end(prepared, "已核对虚拟九月", output, approved=True)
         self.assertEqual(result["report_error"]["code"], "NEXT_MONTH_IO_ERROR")
         self.assertIsNone(result["workflow"])
@@ -191,7 +191,7 @@ class MonthEndTests(unittest.TestCase):
         def publish_then_fail(*args, **kwargs):
             confirm_month(*args, **kwargs)
             raise OSError("after publication")
-        with patch("beancount_budget_tool.v6.tui_month_end.confirm_month", side_effect=publish_then_fail):
+        with patch("beancount_budget_tool.v6.month_actions.confirm_month", side_effect=publish_then_fail):
             result = save_month_end(prepared, "虚拟账单核对", self.base / "late-error", approved=True)
         self.assertEqual(result["status"], "COMPLETENESS_SAVED")
         self.assertTrue(Path(result["config"]).is_file())
@@ -201,7 +201,7 @@ class MonthEndTests(unittest.TestCase):
         browser = self.browser([self.config, self.base / "another-month.yaml"])
         self.assertIsNone(browser.outcome["report"])
         with patch.object(browser, "loader", wraps=browser.loader) as load, \
-             patch("beancount_budget_tool.tools.v6_next_month.audit_month_workflow", wraps=audit_month_workflow) as audit:
+             patch("beancount_budget_tool.v6.month_actions.audit_month_workflow", wraps=audit_month_workflow) as audit:
             screen = self.run_keys(browser, ["f", "\n", "\n", "核过虚拟九月账单", "\n", "y", "\n", "\n", "a", "q"])
         self.assertEqual(load.call_count, 1)  # Initial browser load, no duplicate load after saving.
         self.assertEqual(audit.call_count, 1)
@@ -246,7 +246,7 @@ class MonthEndTests(unittest.TestCase):
     def test_already_reviewed_and_interval_views_do_not_create_declarations(self):
         self.write(self.config, self.full_config)
         browser = self.browser()
-        with patch("beancount_budget_tool.v6.tui_month_end.prepare_month_end") as prepare, \
+        with patch("beancount_budget_tool.v6.month_actions.prepare_month_end") as prepare, \
              patch("beancount_budget_tool.v6.tui._message"):
             _confirm_month_end(FakeScreen(), browser)
             browser.toggle_period()

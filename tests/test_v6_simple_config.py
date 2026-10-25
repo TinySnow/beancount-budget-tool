@@ -4,6 +4,9 @@ from copy import deepcopy
 from pathlib import Path
 from contextlib import redirect_stdout
 from io import StringIO
+import json
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -16,7 +19,7 @@ from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, create_files, save_snapshot
 from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
 from beancount_budget_tool.v6.monthly_report import main as monthly_main
-from beancount_budget_tool.v6.tui_review import prepare_review, save_review
+from beancount_budget_tool.v6.review import prepare_review, save_review
 from beancount_budget_tool.v6.tui import _next_month, _draw_browser, _report_browser, _edit_review, _confirm_month_end
 from beancount_budget_tool.v6.tui_export import write_export
 from test_v6_tui import FakeScreen
@@ -44,6 +47,21 @@ class SimpleConfigTests(unittest.TestCase):
         self.config = Path(result["config"])
         self.budgets = Path(result["budgets"])
         return result
+
+    def test_daily_review_completes_without_importing_migration_commands(self):
+        self.migrate()
+        script = """
+import json, sys
+from pathlib import Path
+from beancount_budget_tool.v6.simple_config import audit_simple
+from beancount_budget_tool.v6 import review, month_actions
+result = audit_simple(Path(sys.argv[1]), include_transactions=True)
+print(json.dumps({"status": result["status"], "commands": [name for name in sys.modules
+                  if name.startswith("beancount_budget_tool.tools.")]}))
+"""
+        result = subprocess.run([sys.executable, "-c", script, str(self.config)],
+                                check=True, capture_output=True, encoding="utf-8", timeout=20)
+        self.assertEqual(json.loads(result.stdout), {"status": "CERTIFIED_SCOPED", "commands": []})
 
     def test_migration_preserves_complete_report_and_does_not_touch_originals(self):
         previous = audit_month_workflow(self.old)

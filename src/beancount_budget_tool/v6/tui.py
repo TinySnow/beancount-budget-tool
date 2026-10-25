@@ -776,7 +776,7 @@ def _message(stdscr, title: str, lines: list[str]):
 
 
 def _edit_review(stdscr, browser: ReportBrowser):
-    from .tui_review import prepare_review, save_review, validate_decision
+    from .review import prepare_review, save_review, validate_decision
     from ..exact import amount_text
 
     if browser.period or browser.view != "reviews" or browser.error or browser.help or not browser.reviews():
@@ -894,7 +894,7 @@ def _export_report(stdscr, browser: ReportBrowser):
 
 
 def _next_month(stdscr, browser: ReportBrowser):
-    from .tui_next_month import load_next_month, month_workspace, next_month_context, prepare_next_month
+    from .month_actions import load_next_month, month_workspace, next_month_context, prepare_next_month
 
     if browser.period or browser.error or browser.help or not browser.outcome:
         return
@@ -962,7 +962,7 @@ def _next_month(stdscr, browser: ReportBrowser):
 
 
 def _confirm_month_end(stdscr, browser: ReportBrowser):
-    from .tui_month_end import prepare_month_end, save_month_end
+    from .month_actions import prepare_month_end, save_month_end
 
     if browser.period or browser.error or browser.help or not browser.outcome:
         return
@@ -1083,9 +1083,9 @@ def _select_salary_cycle(stdscr, browser: ReportBrowser):
                 browser.refresh()
             return
         from .project import _metadata
-        from ..tools.v6_next_month import _next
+        from .month_actions import next_month
         month, _ = _metadata(browser.config)
-        previous = browser.salary_cycle or (month + "-01", _next(month) + "-01", None, None)
+        previous = browser.salary_cycle or (month + "-01", next_month(month) + "-01", None, None)
         context = ["本周期包含本次工资到账日，排除下次工资到账日；当天所有交易均归下一周期。",
                    "请输入真实日期，不按账户名称或固定几号猜工资。",
                    "周期额度单独填写，不复制、累加或按天折算自然月目标；留空只统计消费。",
