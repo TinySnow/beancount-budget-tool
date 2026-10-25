@@ -51,7 +51,7 @@ def check(executable: Path, *, onedir: bool = False) -> None:
                           "TMPDIR": str(unavailable)}
             run("--version", env=restricted)
             print("Folder startup passed with unusable TEMP/TMP/TMPDIR.", flush=True)
-        for command in ("monthly", "init", "review-month", "review", "review-refs",
+        for command in ("monthly", "configure", "init", "review-month", "review", "review-refs",
                         "next-month", "report", "audit", "classification-proposals", "project"):
             run(command, "--help")
         ledger = directory / "账本 2026.bean"
@@ -72,6 +72,13 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert outcome["status"] == "CERTIFIED_SCOPED", outcome
         assert outcome["report"]["max_spendable"]["max_spendable"] == "190", outcome
         assert outcome["review_items"] == [], outcome
+        simple = json.loads(run("configure", "--from-config", config, "--output", "two-files")[0])
+        direct = document("--config", simple["config"], "--month", "2026-09")
+        assert direct["status"] == "CERTIFIED_SCOPED", direct
+        assert direct["report"]["max_spendable"]["max_spendable"] == "190", direct
+        direct_salary = document("report", "--config", simple["config"], "--payday", "2026-09-01",
+                                 "--next-payday", "2026-10-01", "--cycle-budget", "200")
+        assert direct_salary["report"]["cycle_budget"]["remaining"] == "190", direct_salary
         project = document("project", "--config", config, "--output", "budget-project.yaml")
         assert project["status"] == "PROJECT_CREATED", project
         assert document("--month", "2026-09")["report"]["max_spendable"]["max_spendable"] == "190"

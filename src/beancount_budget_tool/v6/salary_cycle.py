@@ -43,6 +43,9 @@ def select_config(configs: list[Path], payday: str, next_payday: str) -> Path:
     """Use the latest supplied review for the cycle's final calendar month."""
     from .period_report import _config_month
     _, last = cycle_bounds(payday, next_payday)
+    from .simple_config import is_simple
+    if len(configs) == 1 and is_simple(load_yaml(configs[0])):
+        return configs[0]
     month = last.strftime("%Y-%m")
     matching = [path for path in configs if _config_month(load_yaml(path), path) == month]
     require(len(matching) == 1, "SALARY_CYCLE_CONFIG_REQUIRED",
@@ -54,6 +57,16 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
                        budget: str | None = None, category: str | None = None, *,
                        expected_identity: tuple | None = None) -> dict:
     first, last = cycle_bounds(payday, next_payday, budget)
+    from .simple_config import is_simple, build_runtime
+    if is_simple(load_yaml(config)):
+        runtime = build_runtime(config, last.strftime("%Y-%m"))
+        if runtime.pending:
+            return {"mode": "v6_salary_cycle_spending", "from": first.isoformat(), "through": last.isoformat(),
+                    "next_payday": next_payday, "status": "NEEDS_REVIEW", "report": None,
+                    "review_items": runtime.pending["review_items"]}
+        result = audit_salary_cycle(runtime.config, payday, next_payday, budget, category, expected_identity=expected_identity)
+        runtime.check()
+        return runtime.public_sources(result)
     from .period_report import _inputs
     config = config.resolve()
     rows, ordered, watched = _inputs([config], None, None)

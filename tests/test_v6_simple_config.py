@@ -1,0 +1,378 @@
+"""The editable surface is config.yml + budgets.yml, not compiled sidecars."""
+
+from copy import deepcopy
+from pathlib import Path
+from contextlib import redirect_stdout
+from io import StringIO
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+import yaml
+
+from beancount_budget_tool.errors import BudgetError
+from beancount_budget_tool.tools.v6_init import compile_setup, _SetupDumper
+from beancount_budget_tool.v6.monthly_report import audit_month_workflow
+from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, create_files, save_snapshot
+from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
+from beancount_budget_tool.v6.monthly_report import main as monthly_main
+from beancount_budget_tool.v6.tui_review import prepare_review, save_review
+from beancount_budget_tool.v6.tui import _next_month, _draw_browser, _report_browser, _edit_review, _confirm_month_end
+from beancount_budget_tool.v6.tui_export import write_export
+from test_v6_tui import FakeScreen
+
+
+class SimpleConfigTests(unittest.TestCase):
+    def setUp(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.base = Path(temp.name)
+        examples = Path(__file__).resolve().parents[1] / "examples/v6"
+        self.ledger = self.base / "main.bean"
+        self.ledger.write_bytes((examples / "first-month.bean").read_bytes())
+        setup = yaml.safe_load((examples / "first-month-setup.yaml").read_text(encoding="utf-8"))
+        setup["ledger"] = "main.bean"
+        self.write(self.base / "setup.yaml", setup)
+        self.old = Path(compile_setup(self.base / "setup.yaml")["config"])
+        self.original = {p: p.read_bytes() for p in self.old.parent.iterdir() if p.is_file()}
+
+    def write(self, path, value):
+        path.write_text(yaml.dump(value, Dumper=_SetupDumper, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    def migrate(self):
+        result = create_files(self.base / "simple", old_config=self.old)
+        self.config = Path(result["config"])
+        self.budgets = Path(result["budgets"])
+        return result
+
+    def test_migration_preserves_complete_report_and_does_not_touch_originals(self):
+        previous = audit_month_workflow(self.old)
+        self.migrate()
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
+        for key in ("actual_spendable", "max_spendable", "purpose_balances", "purpose_progress", "expense_targets"):
+            before, after = deepcopy(previous["report"][key]), deepcopy(result["report"][key])
+            # Plan file bytes differ after translating the public names.
+            for row in (before, after):
+                row.pop("plan_sha256", None)
+            self.assertEqual(before, after, key)
+        self.assertEqual({p: p.read_bytes() for p in self.original}, self.original)
+        self.assertEqual(sorted(p.name for p in self.config.parent.iterdir() if p.is_file()), ["budgets.yml", "config.yml"])
+
+    def test_inline_new_fund_is_registered_without_editing_an_owner_registry(self):
+        self.migrate()
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
+            '\n2026-09-20 * "extra savings"\n'
+            '  Assets:Cash -1 CNY\n    fund: "已收入资金"\n'
+            '  Assets:Cash 1 CNY\n    fund: "额外储蓄"\n', encoding="utf-8")
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
+        self.assertIn("额外储蓄", result["report"]["owner_names"].values())
+
+    def test_rereading_two_inputs_changes_target_without_manual_compilation(self):
+        self.migrate()
+        plans = yaml.safe_load(self.budgets.read_text(encoding="utf-8"))
+        plans["months"]["2026-09"]["expense_targets"]["日常开销"] = "50"
+        self.write(self.budgets, plans)
+        result = audit_simple(self.config)
+        self.assertEqual(result["report"]["max_spendable"]["max_spendable"], "40")
+
+    def test_next_month_does_not_inherit_completeness_confirmation(self):
+        self.migrate()
+        result = audit_simple(self.config, "2026-10")
+        self.assertEqual(result["status"], "NEEDS_REVIEW")
+        self.assertTrue(any(row["reason_code"] == "EXTERNAL_SCOPE_PENDING" for row in result["review_items"]), result["review_items"])
+
+    def test_new_template_lists_unknown_account_settings_in_the_editable_config(self):
+        result = create_files(self.base / "new", ledger=self.ledger, month="2026-09")
+        config = Path(result["config"])
+        result = audit_simple(config)
+        self.assertEqual(result["status"], "NEEDS_REVIEW")
+        self.assertTrue(result["review_items"])
+        self.assertTrue(all(item["source"].startswith(str(config)) for item in result["review_items"]))
+
+    def test_source_change_invalidates_a_prepared_runtime(self):
+        self.migrate()
+        runtime = build_runtime(self.config)
+        self.budgets.write_text(self.budgets.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
+        with self.assertRaises(BudgetError) as caught:
+            runtime.check()
+        self.assertEqual(caught.exception.code, "INPUT_CHANGED")
+
+    def test_second_migration_never_overwrites_existing_files(self):
+        self.migrate()
+        with self.assertRaises(BudgetError):
+            create_files(self.config.parent, old_config=self.old)
+
+    def test_public_monthly_entry_and_month_override_work_without_compile_command(self):
+        self.migrate()
+        with redirect_stdout(StringIO()) as output:
+            self.assertEqual(monthly_main(["--config", str(self.config), "--format", "json"]), 0)
+        self.assertIn('"CERTIFIED_SCOPED"', output.getvalue())
+        with redirect_stdout(StringIO()) as output:
+            self.assertEqual(monthly_main(["--config", str(self.config), "--month", "2026-10", "--format", "json"]), 0)
+        self.assertIn('"2026-10"', output.getvalue())
+        self.assertIn('"NEEDS_REVIEW"', output.getvalue())
+
+    def test_browser_refresh_keeps_user_config_as_entry_and_rereads_budget_changes(self):
+        self.migrate()
+        browser = SimpleReportBrowser(self.config)
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(browser.display_config, self.config)
+        plans = yaml.safe_load(self.budgets.read_text(encoding="utf-8"))
+        plans["months"]["2026-09"]["expense_targets"]["日常开销"] = "30"
+        self.write(self.budgets, plans)
+        browser.refresh()
+        self.assertEqual(browser.outcome["report"]["max_spendable"]["max_spendable"], "20")
+        screen = FakeScreen(size=(24, 100))
+        _draw_browser(screen, browser)
+        self.assertIn("config.yml", screen.rows[1][2])
+        self.assertNotIn(".budget-state", screen.rows[1][2])
+
+    def test_next_month_and_jump_do_not_create_more_public_configurations(self):
+        self.migrate()
+        browser = SimpleReportBrowser(self.config)
+        browser.refresh()
+        _next_month(FakeScreen(), browser)
+        self.assertEqual(browser.selected_month, "2026-10")
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.outcome["status"], "NEEDS_REVIEW")
+        browser.jump_month("2026-09")
+        browser.refresh()
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(sorted(p.name for p in self.config.parent.iterdir() if p.is_file()), ["budgets.yml", "config.yml"])
+
+    def test_simple_period_and_salary_cycle_use_current_public_inputs(self):
+        self.migrate()
+        plans = yaml.safe_load(self.budgets.read_text(encoding="utf-8"))
+        plans["months"]["2026-10"] = {"completeness_confirmed": True}
+        self.write(self.budgets, plans)
+        browser = SimpleReportBrowser(self.config)
+        browser.select_period("2026-09", "2026-10")
+        browser.refresh()
+        self.assertIsNone(browser.error, browser.error)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED", browser.outcome["review_items"])
+        browser.select_salary_cycle("2026-09-01", "2026-10-02", "100", "日常开销")
+        browser.refresh()
+        self.assertIsNone(browser.error, browser.error)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(browser.outcome["report"]["cycle_budget"]["remaining"], "90")
+
+    def test_saved_review_is_retained_after_refresh_and_public_target_edits(self):
+        self.migrate()
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace(
+            '2026-09-01 open Assets:Cash', '2026-09-01 open Assets:Bank\n2026-09-01 open Assets:Cash') +
+            '\n2026-09-20 * "mixed transfer"\n  Assets:Cash -1 CNY\n  Assets:Bank 1 CNY\n', encoding="utf-8")
+        doc = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        doc["accounts"]["Assets:Bank"] = {"semantics": "H", "payment_scope": {"CNY": "payable"}}
+        self.write(self.config, doc)
+        browser = SimpleReportBrowser(self.config)
+        browser.refresh()
+        item = next(item for item in browser.reviews() if item["reason_code"] == "FUND_MIXED_SOURCE")
+        prepared = prepare_review(browser.config, item)
+        saved = save_review(prepared, "已收入资金", "virtual explicit source choice", self.base / "approved", approved=True)
+        browser.show_saved_month(saved)
+        self.assertIsNone(browser.error, browser.error)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED", browser.outcome["review_items"])
+        plans = yaml.safe_load(self.budgets.read_text(encoding="utf-8"))
+        plans["months"]["2026-09"]["expense_targets"]["日常开销"] = "40"
+        self.write(self.budgets, plans)
+        browser.refresh()
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        restarted = SimpleReportBrowser(self.config)
+        restarted.refresh()
+        self.assertEqual(restarted.outcome["status"], "CERTIFIED_SCOPED")
+
+    def test_actual_edit_key_path_saves_internal_state_without_retargeting_user_entry(self):
+        self.migrate()
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace(
+            '2026-09-01 open Assets:Cash', '2026-09-01 open Assets:Bank\n2026-09-01 open Assets:Cash') +
+            '\n2026-09-20 * "mixed transfer"\n  Assets:Cash -1 CNY\n  Assets:Bank 1 CNY\n', encoding="utf-8")
+        doc = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        doc["accounts"]["Assets:Bank"] = {"semantics": "H", "payment_scope": {"CNY": "payable"}}
+        self.write(self.config, doc)
+        browser = SimpleReportBrowser(self.config)
+        browser.refresh()
+        browser.selected = next(index for index, item in enumerate(browser.reviews()) if item["reason_code"] == "FUND_MIXED_SOURCE")
+        with patch("beancount_budget_tool.v6.tui._read_field", side_effect=["已收入资金", "virtual choice", "y"]), patch("beancount_budget_tool.v6.tui._message"):
+            _edit_review(FakeScreen(size=(24, 100)), browser)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        restarted = SimpleReportBrowser(self.config)
+        restarted.refresh()
+        self.assertEqual(restarted.outcome["status"], "CERTIFIED_SCOPED")
+
+    def test_actual_month_end_key_retains_confirmations_for_both_months_after_restart(self):
+        self.migrate()
+        browser = SimpleReportBrowser(self.config, "2026-10")
+        browser.refresh()
+        self.assertEqual(browser.outcome["status"], "NEEDS_REVIEW")
+        with patch("beancount_budget_tool.v6.tui._read_field", side_effect=["virtual month fully checked", "y"]), patch("beancount_budget_tool.v6.tui._message"):
+            _confirm_month_end(FakeScreen(size=(30, 120)), browser)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+        for month in ("2026-09", "2026-10"):
+            restarted = SimpleReportBrowser(self.config, month)
+            restarted.refresh()
+            self.assertEqual(restarted.outcome["status"], "CERTIFIED_SCOPED", month)
+
+    def test_snapshot_is_self_contained_after_runtime_files_are_removed(self):
+        import shutil
+        self.migrate()
+        runtime = build_runtime(self.config)
+        save_snapshot(self.config, runtime.config)
+        shutil.rmtree(runtime.config.parent)
+        self.assertEqual(audit_simple(self.config)["status"], "CERTIFIED_SCOPED")
+
+    def test_invalid_public_configuration_erases_old_report_and_recovers(self):
+        self.migrate()
+        browser = SimpleReportBrowser(self.config)
+        browser.refresh()
+        before = self.budgets.read_bytes()
+        self.budgets.write_text('schema: 1\nschema: 1\n', encoding="utf-8")
+        browser.refresh()
+        self.assertIsNone(browser.outcome)
+        self.assertEqual(browser.lines, [])
+        self.assertEqual(browser.error.code, "YAML_DUPLICATE_KEY")
+        self.budgets.write_bytes(before)
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
+
+    def test_null_target_is_pending_at_budget_line_instead_of_becoming_zero(self):
+        self.migrate()
+        plans = yaml.safe_load(self.budgets.read_text(encoding="utf-8"))
+        plans["months"]["2026-09"]["expense_targets"]["日常开销"] = None
+        self.write(self.budgets, plans)
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "NEEDS_REVIEW")
+        self.assertIsNone(result["report"])
+        self.assertTrue(any(item["source"].startswith(str(self.budgets) + ":") for item in result["review_items"]))
+
+    def test_new_label_ids_are_stable_when_later_month_has_more_names(self):
+        self.migrate()
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
+            '\n2026-09-20 * "extra"\n  Assets:Cash -1 CNY\n    fund: "已收入资金"\n'
+            '  Assets:Cash 1 CNY\n    fund: "额外储蓄"\n'
+            '2026-10-20 * "another"\n  Assets:Cash -1 CNY\n    fund: "已收入资金"\n'
+            '  Assets:Cash 1 CNY\n    fund: "新用途"\n', encoding="utf-8")
+        september, october = build_runtime(self.config), build_runtime(self.config, "2026-10")
+        def ids(runtime):
+            return {row["name"]: row["id"] for row in yaml.safe_load((runtime.config.parent / "ownership.yaml").read_text(encoding="utf-8"))["owners"]}
+        self.assertEqual(ids(september)["额外储蓄"], ids(october)["额外储蓄"])
+
+    def test_explicit_false_revokes_imported_month_completeness(self):
+        self.migrate()
+        plans = yaml.safe_load(self.budgets.read_text(encoding="utf-8"))
+        plans["months"]["2026-09"]["completeness_confirmed"] = False
+        self.write(self.budgets, plans)
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "NEEDS_REVIEW")
+        self.assertTrue(any(item["reason_code"] == "EXTERNAL_SCOPE_PENDING" for item in result["review_items"]))
+
+    def test_unresolved_pre_cutover_ownership_is_not_invented_as_outside_budget(self):
+        self.ledger.write_text('option "operating_currency" "CNY"\n'
+            '2026-08-01 open Assets:Cash\n2026-08-01 open Equity:Opening\n'
+            '2026-08-30 * "opening"\n  Assets:Cash 100 CNY\n  Equity:Opening -100 CNY\n', encoding="utf-8")
+        result = create_files(self.base / "new", ledger=self.ledger, month="2026-09")
+        config = Path(result["config"])
+        doc = yaml.safe_load(config.read_text(encoding="utf-8"))
+        doc["accounts"]["Assets:Cash"]["semantics"] = "H"
+        doc["accounts"]["Assets:Cash"]["payment_scope"] = {"CNY": "payable"}
+        self.write(config, doc)
+        runtime = build_runtime(config)
+        opening = yaml.safe_load((runtime.config.parent / "opening.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(opening["h_holdings"], [])
+        self.assertEqual(audit_simple(config)["status"], "NEEDS_REVIEW")
+
+    def test_disabled_legacy_classification_defaults_stay_disabled(self):
+        path = self.old.parent / "classifications.yaml"
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc.pop("defaults")
+        self.write(path, doc)
+        self.migrate()
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "NEEDS_REVIEW")
+        self.assertTrue(any(item["reason_code"] == "CLASSIFICATION_UNREVIEWED" for item in result["review_items"]))
+
+    def test_missing_old_allocation_target_remains_pending_after_migration(self):
+        path = self.old.parent / "purpose_plans.yaml"
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc["months"]["2026-09"]["allocation_targets"].pop(next(iter(doc["months"]["2026-09"]["allocation_targets"])))
+        self.write(path, doc)
+        self.migrate()
+        self.assertEqual(audit_simple(self.config)["status"], "NEEDS_REVIEW")
+
+    def test_cli_period_and_salary_keep_two_file_entry(self):
+        from beancount_budget_tool.v6.period_report import main as period_main
+        self.migrate()
+        with redirect_stdout(StringIO()) as output:
+            self.assertEqual(period_main(["--config", str(self.config), "--from", "2026-09", "--through", "2026-09", "--format", "json"]), 0)
+        self.assertIn('"CERTIFIED_SCOPED"', output.getvalue())
+        with redirect_stdout(StringIO()) as output:
+            self.assertEqual(period_main(["--config", str(self.config), "--payday", "2026-09-01", "--next-payday", "2026-10-01", "--cycle-budget", "100", "--format", "json"]), 0)
+        self.assertIn('"90"', output.getvalue())
+
+    def test_current_directory_config_is_a_default_entry(self):
+        self.migrate()
+        with patch("beancount_budget_tool.v6.monthly_report.Path.cwd", return_value=self.config.parent), redirect_stdout(StringIO()) as output:
+            self.assertEqual(monthly_main(["--format", "json"]), 0)
+        self.assertIn('"CERTIFIED_SCOPED"', output.getvalue())
+
+    def test_public_example_runs_with_only_the_two_configuration_files(self):
+        source = Path(__file__).resolve().parents[1] / "examples/v6/simple"
+        target = self.base / "example"
+        target.mkdir()
+        for path in source.iterdir():
+            if path.is_file():
+                (target / path.name).write_bytes(path.read_bytes())
+        result = audit_month_workflow(target / "config.yml")
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
+        self.assertEqual(result["report"]["max_spendable"]["max_spendable"], "190")
+
+    def test_migration_keeps_missing_old_expense_goal_pending(self):
+        path = self.old.parent / "expense_plans.yaml"
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc["months"]["2026-09"] = {}
+        self.write(path, doc)
+        self.migrate()
+        self.assertEqual(audit_simple(self.config)["status"], "NEEDS_REVIEW")
+
+    def test_child_goals_preserve_derived_parent_without_inventing_a_cap(self):
+        path = self.old.parent / "expense_plans.yaml"
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        categories = yaml.safe_load((self.old.parent / "classifications.yaml").read_text(encoding="utf-8"))["categories"]
+        child = next(row["id"] for row in categories if row["name"] == "日常开销.餐饮")
+        doc.pop("spendable_cap_category_id")
+        doc["months"]["2026-09"] = {"expense_targets": {child: "40"}}
+        self.write(path, doc)
+        before = audit_month_workflow(self.old)
+        self.assertEqual(before["status"], "CERTIFIED_SCOPED")
+        self.migrate()
+        after = audit_simple(self.config)
+        self.assertEqual(after["status"], "CERTIFIED_SCOPED", after["review_items"])
+        self.assertEqual(after["report"]["max_spendable"]["status"], "NOT_CONFIGURED")
+        first = before["report"]["expense_targets"]["categories"]
+        second = after["report"]["expense_targets"]["categories"]
+        self.assertEqual(first, second)
+
+    def test_unquoted_decimal_goal_keeps_source_precision_without_float_rounding(self):
+        self.migrate()
+        text = self.budgets.read_text(encoding="utf-8")
+        self.assertIn("'200'", text)
+        self.budgets.write_text(text.replace("'200'", "200.000000000000000001", 1), encoding="utf-8")
+        runtime = build_runtime(self.config)
+        plan = yaml.safe_load((runtime.config.parent / "expense_plans.yaml").read_text(encoding="utf-8"))
+        self.assertIn("200.000000000000000001", plan["months"]["2026-09"]["expense_subtree_targets"].values())
+
+    def test_nonfinite_goal_is_reviewed_instead_of_becoming_spendable_money(self):
+        self.migrate()
+        text = self.budgets.read_text(encoding="utf-8")
+        self.budgets.write_text(text.replace("'200'", ".inf", 1), encoding="utf-8")
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "NEEDS_REVIEW")
+        self.assertIsNone(result["report"])
+
+
+if __name__ == "__main__":
+    unittest.main()

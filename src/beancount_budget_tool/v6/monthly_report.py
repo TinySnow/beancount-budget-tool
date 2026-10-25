@@ -215,9 +215,13 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
             "note": "各项独立认证；此报表不签发完整首页或证券市值。历史日末数字不代表今天余额。"}
 
 
-def audit_month_workflow(config: Path, *, include_transactions: bool = False) -> dict:
+def audit_month_workflow(config: Path, *, include_transactions: bool = False, month: str | None = None) -> dict:
     """Give a new month one entry point, without presenting partial audits as complete."""
     document = load_yaml(config)
+    from .simple_config import is_simple, audit_simple
+    if is_simple(document):
+        return audit_simple(config, month, include_transactions=include_transactions)
+    require(month is None, "MONTH_REPORT_CONFIG_INVALID", "旧月报配置已固定月份；--month 用于两文件入口")
     require(type(document) is dict, "MONTH_REPORT_CONFIG_INVALID",
             "月报配置必须是映射", f"{config.resolve()}:1")
     month = _config_month(document, config)
@@ -300,6 +304,10 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
 
 
 def render_workflow_text(outcome: dict) -> str:
+    if outcome.get("configuration_only"):
+        return "\n".join([f"v6 {outcome['month']} 配置待审：NEEDS_REVIEW",
+            *[f"{item['detail']} [{item['source']}]" for item in outcome["review_items"]],
+            "本轮只检查配置；修正后重算，程序会继续核对交易与月报。"])
     if outcome["stage"] == "source":
         text = render_review_queue(outcome["review_queue"])
         if outcome.get("status") == "IMPLEMENTATION_BLOCKED":
@@ -541,11 +549,11 @@ def render_text(report: dict) -> str:
 def main(argv=None) -> int:
     from ..console import configure_output
     configure_output()
-    parser = argparse.ArgumentParser(description="从已审侧文件生成 v6 月报")
+    parser = argparse.ArgumentParser(description="从 config.yml + budgets.yml 生成月报；兼容旧月报配置")
     source = parser.add_mutually_exclusive_group()
-    source.add_argument("--config", type=Path, help="schema 6 月报配置 YAML")
+    source.add_argument("--config", type=Path, help="config.yml 两文件入口，或兼容旧 schema 6 月报配置")
     source.add_argument("--project", type=Path, help="项目入口；省略输入时读取当前目录 budget-project.yaml")
-    parser.add_argument("--month", help="选择项目已登记月份 YYYY-MM；省略时使用项目默认月份")
+    parser.add_argument("--month", help="两文件入口或项目中选择 YYYY-MM；省略时使用配置默认月份")
     parser.add_argument("--format", choices=("text", "json", "tui"), default="text")
     parser.add_argument("--transactions", action="store_true", help="已签发时附逐笔来源详情；TUI 自动启用，可按 a 浏览")
     parser.add_argument("--tui-config", type=Path, action="append", default=[],
@@ -553,8 +561,20 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.tui_config and args.format != "tui":
         parser.error("--tui-config 仅用于 --format tui")
-    if args.month is not None and args.config:
-        parser.error("--month 只用于项目入口；--config 已经指定月份")
+    if not args.config and not args.project and (Path.cwd() / "config.yml").is_file():
+        args.config = Path.cwd() / "config.yml"
+    simple = False
+    if args.config and args.config.is_file():
+        try:
+            from .simple_config import is_simple
+            simple = is_simple(load_yaml(args.config))
+        except BudgetError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    if args.month is not None and args.config and not simple:
+        parser.error("--month 用于项目或两文件入口；旧 --config 已经指定月份")
+    if simple and args.tui_config:
+        parser.error("两文件入口用 m／--month 切换月份，不需要 --tui-config")
     from .project import DEFAULT_PROJECT, load_project
     project = None
     if not args.config:
@@ -575,7 +595,10 @@ def main(argv=None) -> int:
         from functools import partial
         from .tui import run_report_tui
         try:
-            if project:
+            if simple:
+                from .simple_tui import run_simple_tui
+                run_simple_tui(args.config, args.month)
+            elif project:
                 run_report_tui(list(project.months.values()), partial(audit_month_workflow, include_transactions=True),
                                render_workflow_text, project=project, initial_config=args.config)
             else:
@@ -587,7 +610,8 @@ def main(argv=None) -> int:
             return 2
         return 0
     try:
-        outcome = (audit_month_workflow(args.config.resolve(), include_transactions=True) if args.transactions
+        outcome = (audit_month_workflow(args.config.resolve(), month=args.month, include_transactions=args.transactions) if simple else
+                   audit_month_workflow(args.config.resolve(), include_transactions=True) if args.transactions
                    else audit_month_workflow(args.config.resolve()))
     except BudgetError as exc:
         print(json.dumps({"error": {"code": exc.code, "message": exc.message,

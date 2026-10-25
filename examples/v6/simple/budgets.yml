@@ -1,0 +1,11 @@
+schema: 1
+# 可放每月沿用的目标；也可在 months 下逐月覆盖。
+defaults:
+  expense_targets:
+    生活开销: '200'
+  allocation_targets:
+    生活费: '200'
+months:
+  '2026-09':
+    # 仅确认此虚拟示例该月账单齐全，不适用于真实账本。
+    completeness_confirmed: true

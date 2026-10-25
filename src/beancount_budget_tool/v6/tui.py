@@ -565,7 +565,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
             _put(stdscr, 1, "窗口过小；放大终端，q 退出")
         stdscr.refresh()
         return
-    config_label = "/".join(browser.config.parts[-3:])
+    display_config = getattr(browser, "display_config", browser.config)
+    config_label = "/".join(display_config.parts[-3:])
     _put(stdscr, 1, f"{browser.period_label()}；p 选择范围，c 返回月报" if browser.period else
          f"配置：{config_label}（? 查看完整路径）")
     page = height - 4
@@ -585,6 +586,19 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         browser.error or browser.detail or browser.help)
     if browser.help:
         lines = [*HELP, f"当前配置完整路径：{browser.config}"]
+        if hasattr(browser, "user_config"):
+            lines = ["两文件模式：只维护 config.yml、budgets.yml 和账本；内部审阅记录自动保存。",
+                     "m 跳到任意 cutover 后月份；n 直接进入下一月；r 重读两份配置与账本，不用手工编译。",
+                     "[ / ] 上一月／下一月；月份切换保留原 cutover，不重置资金余额。",
+                     "w 输入两次工资日及可选额度；p 选择区间；c 返回月报或上次查询。",
+                     "↑↓ 选项目；Enter 看完整来源和原因；Esc 返回；/ 筛选；q 退出。",
+                     "e 保存分类／资金用途决定；也可直接在账本写 budget／fund 后按 r。同一腿只认领一次。",
+                     "f 核对截至月末的账单完整性；确认后保存内部记录，不会自动沿用到下一月。",
+                     "x 导出；t 报告／待审；a 已审交易明细；? 关闭帮助。",
+                     "未写目标表示不考核；写 null 表示尚未决定，仍待审；0 是真实零目标。",
+                     f"用户配置：{browser.user_config}"]
+            if browser.runtime is not None:
+                lines.append(f"预算目标：{browser.runtime.budgets}")
         if browser.project is not None:
             lines += [f"项目入口：{browser.project.path}", *browser.project_messages()]
         if browser.period:
@@ -797,20 +811,29 @@ def _edit_review(stdscr, browser: ReportBrowser):
                    f"理由：{reason}", "保存后自动复审；其他待审不会被批准。",
                    f"新配置：{output / 'reviewed' / 'month.yaml'}",
                    "重启工具、导出报表或准备下一月时，使用上面的新配置。"]
+        if hasattr(browser, "user_config"):
+            preview = [*context[:5], "本次只批准这一项：",
+                       *[f"{name}：{amount_text(amount)} {row['commodity']}" for name, amount in parts],
+                       f"理由：{reason}", "审阅记录自动保存；以后仍使用同一份 config.yml。"]
         approved = _read_field(stdscr, "核对后明确批准", preview, "输入 y 并回车保存；其他输入或 Esc 取消：")
         if approved != "y":
             return
         browser.clear()
         _draw_browser(stdscr, browser)
         result = save_review(prepared, decision, reason, output, approved=True)
-        previous = browser.config
-        browser.configs[browser.index] = Path(result["config"]).resolve()
-        browser.remember_current_config(previous)
-        browser.saved.add(browser.index)
-        browser.filter("")
-        browser.refresh()
+        if hasattr(browser, "user_config"):
+            browser.show_saved_month(result)
+        else:
+            previous = browser.config
+            browser.configs[browser.index] = Path(result["config"]).resolve()
+            browser.remember_current_config(previous)
+            browser.saved.add(browser.index)
+            browser.filter("")
+            browser.refresh()
         lines = ["本项决定已保存；当前月份已切换到新配置并重新审计。",
                  f"以后请使用：{browser.config}", f"审阅记录：{output}"]
+        if hasattr(browser, "user_config"):
+            lines = ["本项决定已保存并重新审计；以后仍使用同一份配置。", f"用户入口：{browser.user_config}"]
         if browser.error:
             lines += ["决定已保存，但月报计算仍有错误：", str(browser.error)]
         else:
@@ -872,6 +895,11 @@ def _next_month(stdscr, browser: ReportBrowser):
     from .tui_next_month import load_next_month, month_workspace, next_month_context, prepare_next_month
 
     if browser.period or browser.error or browser.help or not browser.outcome:
+        return
+    if hasattr(browser, "advance_month"):
+        browser.advance_month()
+        _draw_browser(stdscr, browser)
+        browser.refresh()
         return
     try:
         month, _ = next_month_context(browser.config, browser.configs)
@@ -967,6 +995,8 @@ def _confirm_month_end(stdscr, browser: ReportBrowser):
             _message(stdscr, "尚未保存", ["请填写实际核对的依据；不能留空。"])
         preview = [*context, f"核对依据：{reason.strip()}", f"新配置：{output / 'month.yaml'}",
                    "保存后当前月份使用新配置；重启、导出或准备下一月时也使用此路径。"]
+        if hasattr(browser, "user_config"):
+            preview = [*context, f"核对依据：{reason.strip()}", "声明自动保存到本月的内部记录；以后仍使用同一份 config.yml。"]
         approved = _read_field(stdscr, "明确批准本月末声明", preview,
                                "输入 y 并回车保存；其他输入或 Esc 取消：")
         if approved != "y":
@@ -976,6 +1006,8 @@ def _confirm_month_end(stdscr, browser: ReportBrowser):
         result = save_month_end(prepared, reason, output, approved=True)
         browser.show_saved_month(result)
         lines = [f"本月末核对声明已保存：{browser.config}", "原账本与原配置未改写。"]
+        if hasattr(browser, "user_config"):
+            lines = ["本月末核对声明已自动保存；以后仍使用同一份配置。", f"用户入口：{browser.user_config}"]
         if browser.error:
             lines += ["新配置已保存，月报仍未通过：", str(browser.error)]
         else:

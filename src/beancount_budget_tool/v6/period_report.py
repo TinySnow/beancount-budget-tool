@@ -125,6 +125,9 @@ def _sum_rows(reports, section, list_key, keys, metrics):
 
 
 def audit_period(configs: list[Path], since: str | None = None, through: str | None = None) -> dict:
+    from .simple_config import is_simple, audit_simple_period
+    if len(configs) == 1 and is_simple(load_yaml(configs[0])):
+        return audit_simple_period(configs[0], since, through)
     rows, ordered, watched = _inputs(configs, since, through)
     months, reports, reviews, snapshots, warnings = [], [], [], set(), []
     for month in ordered:
@@ -415,6 +418,8 @@ def main(argv=None) -> int:
     parser.add_argument("--format", choices=("text", "json", "csv"), default="text")
     parser.add_argument("--output", type=Path, help="保存到新文件；CSV 使用 UTF-8 BOM，便于 Windows 打开中文")
     args = parser.parse_args(argv)
+    if not args.config and not args.project and (Path.cwd() / "config.yml").is_file():
+        args.config = [Path.cwd() / "config.yml"]
     salary = any(value is not None for value in (args.payday, args.next_payday, args.cycle_budget, args.cycle_category))
     if salary and (not args.payday or not args.next_payday or args.since or args.through):
         parser.error("工资周期须同时提供 --payday 和 --next-payday，不与自然月 --from／--through 混用")

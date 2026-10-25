@@ -9,9 +9,30 @@
 这是终端程序；直接双击 exe 不会打开图形窗口。
 两种包的命令相同，原有账本及 v6 配置可以继续使用。
 
+**日常推荐只维护 config.yml + budgets.yml。** 已有配置可复制迁移一次，原文件和已审记录保留：
+
+```powershell
+.\beancount-budget-tool.exe configure --from-config "D:\账本\budget\2023-07\compiled\month.yaml" --output "D:\账本\budget\simple"
+.\beancount-budget-tool.exe --config "D:\账本\budget\simple\config.yml" --month 2023-07 --format tui
+```
+
+以后改这两份配置或账本，按 `r` 重算；`m` 跳月、`n` 下一月，无需手工编译和新增月配置。请迁移当前实际使用的最新 `month.yaml`。详见 [两文件步骤](../QUICKSTART.md#两文件入口推荐)。下文保留原有兼容入口的示例。
+
 如果单文件版在 VS Code 或普通 PowerShell 中报 `[PYI-...:ERROR] Could not create temporary directory!`，此时还未开始读取账本。先换目录版，在普通终端运行 `--version`；无需为了日常使用一直开启管理员终端。即便 PowerShell 可以新建文件夹，也不能据此确定打包器创建解压目录失败的具体原因。
 
 ## 1. 先试虚拟账本
+
+推荐直接运行包内两文件例子，不需要 init 或编译：
+
+```powershell
+.\beancount-budget-tool.exe --version
+.\beancount-budget-tool.exe --config .\example\simple\config.yml --format tui
+```
+
+应看到最多能花 **190 CNY**。这只适用于包内虚拟账本。按 `q` 退出，按 `?` 查看两文件模式按键。
+
+<details>
+<summary>兼容旧版本的虚拟示例和项目入口</summary>
 
 依次复制运行这三行：
 
@@ -64,6 +85,8 @@ TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明
 ```
 
 打开新目录的 `START_HERE.md` 继续。准备填写表不会批准交易或月末资料；旧表引用的配置已被更新时，程序会要求从最新配置重新生成填写表。
+
+</details>
 
 ## 2. 使用真实账本
 

@@ -2,6 +2,60 @@
 
 > v6 仍在开发。来源检查和已审月报已有命令；新月份仍需核对期初、账户、用途和责任，不能导入后直接签发。
 
+## 两文件入口（推荐）
+
+以后只编辑 **`config.yml`（规则）和 `budgets.yml`（目标）**。导入账单后照常写 `fund`／`budget`，运行工具即可查看月报或待审清单，不用执行填写表编译。
+
+已在用旧 `compiled/month.yaml` 的 Windows 用户，换新 exe 后只迁移一次（原文件不改动，输出目录须不存在）：
+
+```powershell
+& $Exe configure --from-config "$BudgetDir\2023-07\compiled\month.yaml" --output "$BudgetDir\simple"
+& $Exe --config "$BudgetDir\simple\config.yml" --month 2023-07 --format tui
+```
+
+从 TUI 保存过审阅的，请把第一条的路径换成**当前正在使用的最新 `month.yaml`**。工具复制账户、期初、目标和审阅记录，保留原入口作为备份。
+
+首次使用，没有旧配置时：
+
+```powershell
+& $Exe configure --ledger $LedgerFile --month 2023-07 --output "$BudgetDir\simple"
+```
+
+打开新目录的 `config.yml`，将未知的账户属性填好：`semantics` 为 `H`（真实余额）或 `K`（累计申赎），`payment_scope` 每币种选 `payable`（能直接支付）或 `excluded`。cutover 之前有余额时才在账户的 `opening` 中填写用途拆分。月中的首次 pad 初始化自动归默认收入用途。生成配置时不会批准这些未知事项。
+
+日常用法：
+
+- 修改 `budgets.yml` 的中文名称和目标，或修改账本标签，回到 TUI 按 `r`。
+- `m` 直接跳月，`n` 直接进入下一月；不用再建每月配置，也不重置期初。
+- `fund` 中明确写出的新用途自动识别，例如「额外储蓄」，无需登记内部 ID。未写目标表示不考核；`null` 表示尚未决定，仍待审；`0` 是真实零目标。迁移会保留旧目标缺失的待审状态。
+- `e` 可保存分类／用途决定，`f` 可确认当前月末账单完整；程序自动保存审阅记录。下一月不会继承月末完整性声明。也可只编辑账本和这两份配置。
+- 工资周期仍按 `w` 查询；区间用 `p`，导出用 `x`，`?` 看两文件模式帮助。
+
+目标示例（同一父类别的 `expense_targets` 包含子类别）：
+
+```yaml
+schema: 1
+defaults:
+  expense_targets:
+    生活开销: not_assessed
+months:
+  '2023-07':
+    allocation_targets:
+      额外储蓄: not_assessed
+```
+
+**目标不会自动变成真实资金分配**，仍按账本 `fund` 计算实际划拨。未确定的混合资金来源、缺少价格或责任依据等继续列待审；计算规则保持原有校验。
+
+程序在 `.budget-state` 内维护生成输入和已审记录。无需编辑；备份／换机器时连同两份配置一起复制。原有复杂资金池、责任和来源认领会保留在内部记录中；两文件入口目前没有为所有复杂协议提供新的编辑表单，旧高级入口继续兼容。
+
+源码安装时，把上面的 `& $Exe` 换成 `python -m beancount_budget_tool`。在配置目录可直接运行工具；默认读取 `config.yml`。完整虚拟例子：
+
+```bash
+python -m beancount_budget_tool --config examples/v6/simple/config.yml --format tui
+```
+
+示例应显示最多能花 **190 CNY**。下文保留旧入口的安装、标签和兼容操作说明。
+
 ## 1. 安装并检查示例
 
 在仓库根目录运行：

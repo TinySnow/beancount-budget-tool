@@ -6,6 +6,18 @@
 
 ## 从哪里开始
 
+**日常推荐两文件入口：`config.yml` 放规则，`budgets.yml` 放目标。** 程序自动准备内部输入；改配置或账本后重算，明确的 `fund` 新用途自动识别，无需维护 ID 或手工编译。已有月报和审阅记录可复制迁移，原配置保留。[两文件操作步骤](QUICKSTART.md#两文件入口推荐)。
+
+```bash
+python -m beancount_budget_tool configure --from-config budget/2023-07/compiled/month.yaml --output budget/simple
+python -m beancount_budget_tool --config budget/simple/config.yml --month 2023-07 --format tui
+```
+
+TUI 用 `m` 跳月、`n` 下一月、`r` 重算；不用逐月生成配置。首次使用可将第一条改为 `configure --ledger main.bean --month 2023-07 --output budget/simple`，在新 `config.yml` 中确认账户属性。公开可运行示例见 [examples/v6/simple](examples/v6/simple/config.yml)。
+
+<details>
+<summary>旧配置、标签说明与高级入口</summary>
+
 | 你现在要做什么 | 读哪一页 |
 |---|---|
 | 了解导入流水后如何标工资、消费、转账，以及混合用途账户 | [QUICKSTART](QUICKSTART.md) |
@@ -77,6 +89,8 @@ beancount-budget-next-month --project budget-project.yaml --output august
 ```
 
 打开 `august/START_HERE.md` 填写下一月目标并保存；生成的命令会带上项目路径。月内审阅完成后，用 `beancount-budget-next-month --project budget-project.yaml --confirm-completeness --reason "已核对本月末全部账单及责任" --output closed-month` 确认当前默认月份，或加 `--month` 选择已登记月份。旧填写表不能覆盖更新后的月配置；资料未确认时继续待审。
+
+</details>
 
 ## 开发资料
 

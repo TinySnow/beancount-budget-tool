@@ -42,6 +42,7 @@ jobs:
           New-Item -ItemType Directory -Path dist/windows-x64/example
           Copy-Item examples/v6/first-month.bean dist/windows-x64/example/
           Copy-Item examples/v6/first-month-setup.yaml dist/windows-x64/example/
+          Copy-Item examples/v6/simple dist/windows-x64/example/simple -Recurse
           git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64/BUILD-COMMIT.txt
           New-Item -ItemType Directory -Path dist/windows-x64-folder
           Copy-Item dist/beancount-budget-tool-portable/* dist/windows-x64-folder/ -Recurse
@@ -51,6 +52,7 @@ jobs:
           New-Item -ItemType Directory -Path dist/windows-x64-folder/example
           Copy-Item examples/v6/first-month.bean dist/windows-x64-folder/example/
           Copy-Item examples/v6/first-month-setup.yaml dist/windows-x64-folder/example/
+          Copy-Item examples/v6/simple dist/windows-x64-folder/example/simple -Recurse
           git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64-folder/BUILD-COMMIT.txt
       - uses: actions/upload-artifact@v4
         with:
