@@ -1,4 +1,7 @@
-"""Console bundles; use BUDGET_BUNDLE_MODE=onedir for no temporary extraction."""
+"""Windows/macOS console bundles; historical filename retained for compatibility.
+
+Use BUDGET_BUNDLE_MODE=onedir for no temporary extraction.
+"""
 
 from pathlib import Path
 import os

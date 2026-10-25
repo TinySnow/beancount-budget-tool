@@ -7,7 +7,7 @@
 | [从零开始，逐月核对](../QUICKSTART.md) | 安装、迁移旧配置、修改账本、审核 7 月后继续 8 月、清理旧文件 |
 | [两份配置的字段参考](CONFIGURATION.md) | 查账户、期初、默认科目、目标和每月覆盖能怎样设置 |
 
-Windows 下载包也带有[启动说明](../packaging/WINDOWS-START.md)。可先运行[两文件虚拟例子](../examples/v6/simple/config.yml)，不必拿真实账本试配置。
+Windows 与 Mac 下载包分别带有[Windows 启动说明](../packaging/WINDOWS-START.md)和[Mac 启动说明](../packaging/MACOS-START.md)。可先运行[两文件虚拟例子](../examples/v6/simple/config.yml)，不必拿真实账本试配置。
 
 ## 开发与验收资料
 

@@ -11,7 +11,7 @@ Their source code and license information are available here:
 - Click: https://github.com/pallets/click
 - python-dateutil: https://github.com/dateutil/dateutil
 - six: https://github.com/benjaminp/six
-- windows-curses: https://github.com/zephyrproject-rtos/windows-curses
+- windows-curses (Windows builds only): https://github.com/zephyrproject-rtos/windows-curses
 - PyInstaller bootloader: https://github.com/pyinstaller/pyinstaller
 
 Project source, including the build specification:

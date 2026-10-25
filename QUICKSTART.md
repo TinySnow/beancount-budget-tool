@@ -14,14 +14,20 @@ $Config = Join-Path $LedgerDir "budget\simple\config.yml"
 & $Exe --version
 ```
 
-Mac 从源码使用：
+Mac 可下载 `beancount-budget-tool-macos-arm64`（Apple Silicon）或 `beancount-budget-tool-macos-x64`（Intel）。Artifact 的 zip 解压后，再解压其中的 tar.gz，完整保留程序与 `_internal`。在程序目录运行：
+
+```bash
+./beancount-budget-tool --config example/simple/config.yml --format tui
+```
+
+虚拟例子应显示最多能花 190 CNY。[Mac 启动说明](packaging/MACOS-START.md)有下载、解压及真实账本命令。也可从源码使用：
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 ```
 
-下文 `& $Exe` 在 Mac 换成 `.venv/bin/python -m beancount_budget_tool`，路径用自己的绝对路径。命令在项目目录执行；账本可以放在其他目录。
+下文 `& $Exe` 在 Mac 可执行版换成 `./beancount-budget-tool`，从源码运行则换成 `.venv/bin/python -m beancount_budget_tool`；路径用自己的绝对路径。命令分别在程序／项目目录执行，账本可以放在其他目录。
 
 ## 2. 创建两份配置，只做一次
 
@@ -108,6 +114,12 @@ months:
 - `IMPLEMENTATION_BLOCKED` 表示程序能力缺项，应反馈给开发者；不要改写正确账务来绕过。
 
 显示 `CERTIFIED_SCOPED` 就得到了当前范围的已审月报。它不保证数据截止日之后的现实余额。按 `x` 可导出报告；有待审时只导出待审结果。
+
+### 专题统计 tracking 在哪里看
+
+在费用分录下写 `tracking: "健康,大额支出"`，或在交易头下面写 tracking，让该交易的所有费用分录参与专题。名称不必登记到配置。
+
+月报下方的“专题支出”按原币分别列出支出、退款和净额；TUI 向下滚动即可查看，区间／累计与 CSV 也会包含。只有参与的 Expenses 才统计，收入或纯转账不会变成专题支出。同一支出可同时归入多个专题，所以专题之间不能直接相加；budget 和 fund 的计算不受影响。
 
 ### 同日先充值、再付款，却报负余额
 
