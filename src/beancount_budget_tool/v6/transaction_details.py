@@ -58,6 +58,8 @@ def project_transactions(fin, month: str, expense: dict, purpose: dict, pools: d
                                  fin.transaction_text(meta["filename"], meta["lineno"]),
                   "postings": [], "purpose_events": [], "net_allocations": {}, "liabilities": [],
                   "pool_internal": False}
+        if "budget-order" in meta:
+            record["budget_order"] = int(meta["budget-order"])
         for posting in entry.postings:
             ref = facts.for_posting(posting).as_dict()
             key = _key(ref)
@@ -127,6 +129,8 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
     """Readable first; complete reference dictionaries remain in JSON."""
     lines = [f"{record['date']} {record.get('payee') or ''} {record['narration']}",
              f"账本位置：{record['source']}"]
+    if "budget_order" in record:
+        lines.append(f"显式同日顺序 budget-order：{record['budget_order']}（未填为 0）")
     if record["generated"]:
         lines.append("由 Beancount pad 生成；以下位置是原始 pad 指令。")
     for posting in record["postings"]:

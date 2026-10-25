@@ -92,6 +92,32 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         direct_salary = document("report", "--config", simple["config"], "--payday", "2026-09-01",
                                  "--next-payday", "2026-10-01", "--cycle-budget", "200")
         assert direct_salary["report"]["cycle_budget"]["remaining"] == "190", direct_salary
+        # Included importer files can put a real recharge behind a payment by
+        # line number. Only an explicit cash-order declaration resolves it.
+        (directory / "order-main.bean").write_text(
+            'option "operating_currency" "CNY"\n2026-09-01 open Assets:Wallet\n'
+            '2026-09-01 open Income:Pay\n2026-09-01 open Expenses:Food\n'
+            '2026-09-01 * "opening"\n  Assets:Wallet 46.32 CNY\n  Income:Pay -46.32 CNY\n'
+            'include "order-payment.bean"\ninclude "order-recharge.bean"\n', encoding="utf-8")
+        (directory / "order-payment.bean").write_text(
+            '2026-09-02 * "payment"\n  Expenses:Food 199 CNY\n  Assets:Wallet -199 CNY\n', encoding="utf-8")
+        recharge = '\n' * 40 + '2026-09-02 * "recharge"\n  Assets:Wallet 200 CNY\n  Income:Pay -200 CNY\n'
+        (directory / "order-recharge.bean").write_text(recharge, encoding="utf-8")
+        (directory / "order-config.yml").write_text(
+            'schema: 1\nledger: order-main.bean\nbudgets: order-budgets.yml\n'
+            'cutover: "2026-09-01"\nmonth: "2026-09"\nreport_currency: CNY\n'
+            'defaults: {income_purpose: Living, expense_purpose: Living, expense_category: Daily}\n'
+            'accounts:\n  Assets:Wallet:\n    semantics: H\n    payment_scope: {CNY: payable}\n', encoding="utf-8")
+        (directory / "order-budgets.yml").write_text(
+            'schema: 1\ndefaults:\n  expense_targets: {Daily: 2000}\n'
+            'months:\n  "2026-09":\n    completeness_confirmed: true\n', encoding="utf-8")
+        unordered = document("--config", "order-config.yml")
+        assert any(row["reason_code"] == "H_NEGATIVE_INVENTORY" for row in unordered["review_items"]), unordered
+        (directory / "order-recharge.bean").write_text(
+            recharge.replace('* "recharge"\n', '* "recharge"\n  budget-order: -1\n'), encoding="utf-8")
+        ordered = document("--config", "order-config.yml", "--transactions")
+        assert ordered["status"] == "CERTIFIED_SCOPED", ordered
+        assert [row["narration"] for row in ordered["report"]["transactions"]["rows"]] == ["opening", "recharge", "payment"]
         project = document("project", "--config", config, "--output", "budget-project.yaml")
         assert project["status"] == "PROJECT_CREATED", project
         assert document("--month", "2026-09")["report"]["max_spendable"]["max_spendable"] == "190"

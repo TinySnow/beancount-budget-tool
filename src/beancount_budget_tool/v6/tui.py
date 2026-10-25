@@ -143,11 +143,11 @@ def _review_location(source: str | None) -> str:
 def _review_reason(item: dict) -> str:
     detail = item.get("detail") or "尚未提供详细说明；请查看原因码和来源资料。"
     if item.get("reason_code") == "H_NEGATIVE_INVENTORY":
-        match = re.fullmatch(r"真实库存变为负数：(\S+) (\S+) (-?\d+(?:/\d+)?)", detail)
+        match = re.fullmatch(r"真实库存变为负数：(\S+) (\S+) (-?\d+(?:/\d+)?)(?:。(.*))?", detail)
         if match:
-            currency, lot, balance = match.groups()
+            currency, lot, balance, hint = match.groups()
             scope = "账户" if lot == f"{currency}/no-cost" else f"批次 {lot}"
-            return f"这笔交易后，{scope}真实余额为 {amount_text(balance)} {currency}（低于 0）。"
+            return f"这笔交易后，{scope}真实余额为 {amount_text(balance)} {currency}（低于 0）。" + (hint or "")
     return detail
 
 

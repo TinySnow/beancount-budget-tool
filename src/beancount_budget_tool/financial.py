@@ -21,7 +21,7 @@ from .errors import BudgetError, require
 from .exact import Fraction, exact
 
 PRICE = re.compile(r"(?<!@)@@?\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([A-Za-z][A-Za-z0-9_]*)")
-RESERVED_PUSHMETA = re.compile(r"^\s*pushmeta\s+(?:budget|fund|tracking)\s*:", re.IGNORECASE)
+RESERVED_PUSHMETA = re.compile(r"^\s*pushmeta\s+(?:budget|fund|tracking|budget-order)\s*:", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -185,7 +185,8 @@ def _load_financial_uncached(root: Path) -> FinancialInput:
     require({p: s.sha256 for p, s in before.items()} == {p: s.sha256 for p, s in after.items()},
             "INPUT_CHANGED", "加载期间根账本或 include 文件发生变化", str(root))
     require(len(first_entries) == len(second_entries), "INPUT_CHANGED", "加载期间财务指令集合发生变化", str(root))
-    return FinancialInput(root, tuple(second_entries), second_options, after, _digest(after, root), BEANCOUNT_VERSION)
+    from .chronology import order_entries
+    return FinancialInput(root, tuple(order_entries(second_entries)), second_options, after, _digest(after, root), BEANCOUNT_VERSION)
 
 
 def load_financial(root: Path) -> FinancialInput:
