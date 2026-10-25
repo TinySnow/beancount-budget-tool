@@ -19,6 +19,7 @@ from .h_fx import audit_h_fx
 from .h_gains import audit_h_income_gains
 from .h_transfers import audit_h_transfers
 from .holdings import audit_h_holdings
+from .initialization import initial_pad_postings
 from .k_events import audit_k_events
 from .obligations import audit_simple_obligations
 from .native_flows import native_asset_flow
@@ -142,11 +143,21 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     # uncovered legs, including pad-generated postings.
     fin = load_financial(root)
     facts = FactIndex(fin)
+    initial_pads = initial_pad_postings(fin, cutover)
+    by_ref = {_key(row["ref"]): row for row in owner_audit["ownership"]}
+    for posting_id, entry in initial_pads.items():
+        if not first <= entry.date <= last:
+            continue
+        posting = next(p for p in entry.postings if id(p) == posting_id)
+        ref = facts.for_posting(posting).as_dict()
+        key = _key(ref)
+        if key not in used_h and key in by_ref and all(
+                part["role"] == "hold" for part in by_ref[key]["slices"]):
+            add("initial_balance", {"date": entry.date.isoformat()}, [ref], {})
     if "defaults" in owner_document:
         h_accounts = {row["account"] for row in load_yaml(accounts)["accounts"]
                       if row["semantics"] == "H"}
         modes = {name: "H" for name in h_accounts}
-        by_ref = {_key(row["ref"]): row for row in owner_audit["ownership"]}
         for entry in fin.entries:
             if not isinstance(entry, data.Transaction) or not first <= entry.date <= last:
                 continue

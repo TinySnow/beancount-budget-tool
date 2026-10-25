@@ -36,9 +36,18 @@ def _clip(line: str, columns: int) -> str:
     return "".join(result)
 
 
+def _erase_screen(stdscr):
+    stdscr.erase()
+    # erase() clears only curses' virtual buffer. Windows/VS Code can retain
+    # cells after wide-character text changes, so invalidate the physical
+    # screen too; refresh() will repaint one complete frame.
+    if hasattr(stdscr, "clearok"):
+        stdscr.clearok(True)
+
+
 def _draw(stdscr, lines: list[str], offset: int) -> int:
     height, width = stdscr.getmaxyx()
-    stdscr.erase()
+    _erase_screen(stdscr)
     if height < 3 or width < 4:
         stdscr.refresh()
         return offset
@@ -541,6 +550,9 @@ HELP = [
 
 def _put(stdscr, row: int, text: str, style=0):
     try:
+        if hasattr(stdscr, "move") and hasattr(stdscr, "clrtoeol"):
+            stdscr.move(row, 0)
+            stdscr.clrtoeol()
         stdscr.addstr(row, 0, _clip(_clean(text), max(0, stdscr.getmaxyx()[1] - 1)), style)
     except curses.error:
         pass
@@ -548,7 +560,7 @@ def _put(stdscr, row: int, text: str, style=0):
 
 def _draw_browser(stdscr, browser: ReportBrowser):
     height, width = stdscr.getmaxyx()
-    stdscr.erase()
+    _erase_screen(stdscr)
     _put(stdscr, 0, browser.title(), curses.A_REVERSE | curses.A_BOLD)
     if height < 5 or width < 8:
         if height > 1:
@@ -706,7 +718,7 @@ def _read_field(stdscr, title: str, context: list[str], prompt: str,
     try:
         while True:
             height, width = stdscr.getmaxyx()
-            stdscr.erase()
+            _erase_screen(stdscr)
             _put(stdscr, 0, title, curses.A_REVERSE | curses.A_BOLD)
             page = max(1, height - 4)
             lines = _wrap(context, width - 1)

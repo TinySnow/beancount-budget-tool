@@ -8,10 +8,38 @@ from unittest.mock import Mock, patch
 
 from beancount_budget_tool.v6.monthly_report import render_workflow_text
 from beancount_budget_tool.v6.tui import (
-    ReportBrowser, _draw_browser, _report_browser, _review_layout,
+    ReportBrowser, _draw_browser, _put, _read_field, _report_browser, _review_layout,
     _review_location, _review_page_target, _review_reason, _width,
 )
 from test_v6_tui import FakeScreen, pending
+
+
+class PhysicalScreen(FakeScreen):
+    """Model an out-of-sync terminal that retains cells without invalidation."""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.physical = {}
+        self.force_clear = False
+        self.cursor = (0, 0)
+
+    def clearok(self, enabled):
+        self.force_clear = enabled
+
+    def move(self, row, col):
+        self.cursor = (row, col)
+
+    def clrtoeol(self):
+        row, col = self.cursor
+        self.physical[row] = self.physical.get(row, "")[:col]
+
+    def refresh(self):
+        if self.force_clear:
+            self.physical = {}
+            self.force_clear = False
+        for row, col, value in self.rows:
+            old = self.physical.get(row, "")
+            self.physical[row] = old[:col] + value + old[col + len(value):]
+        super().refresh()
 
 
 def inventory_item():
@@ -140,6 +168,33 @@ class ReviewLayoutTests(unittest.TestCase):
         _draw_browser(screen, browser)
         self.assertIn("没有匹配待审项", self.body(screen))
         self.assertIn("待审总数 1", screen.rows[2][2])
+
+    def test_refresh_replaces_stale_physical_cells_between_long_and_short_views(self):
+        browser = self.browser()
+        screen = PhysicalScreen(size=(30, 80))
+        _draw_browser(screen, browser)
+        screen.physical[20] = "old wide-character message outside curses' virtual contents"
+        browser.filter("no matches")
+        _draw_browser(screen, browser)
+        self.assertNotIn(20, screen.physical)
+        self.assertIn("没有匹配待审项", "\n".join(screen.physical.values()))
+        self.assertNotIn("H_NEGATIVE_INVENTORY", "\n".join(screen.physical.values()))
+
+    def test_short_inline_status_clears_the_rest_of_the_previous_row(self):
+        screen = PhysicalScreen(size=(10, 80))
+        _put(screen, 9, "很长的核对消息以及以前残留的文件路径和账户名")
+        screen.refresh()
+        screen.erase()
+        _put(screen, 9, "完成")
+        screen.refresh()
+        self.assertEqual(screen.physical[9], "完成")
+
+    def test_field_dialog_clears_rows_left_by_previous_larger_screen(self):
+        screen = PhysicalScreen(size=(10, 80), keys=("\n",))
+        screen.physical[7] = "obsolete error tail"
+        with patch("beancount_budget_tool.v6.tui.curses.curs_set"):
+            _read_field(screen, "填写", ["简短说明"], "输入：")
+        self.assertNotIn("obsolete error tail", "\n".join(screen.physical.values()))
 
 
 if __name__ == "__main__":

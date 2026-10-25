@@ -14,6 +14,7 @@ MESSAGES = {
     "PAYMENT_SCOPE_PENDING": "该账户的此币种能否直接支付尚未确定；审定 payable 或 excluded。",
     "CLASSIFICATION_UNREVIEWED": "这条收入或费用缺少行内 budget、侧文件认领或已审默认分类。",
     "OWNERSHIP_UNREVIEWED": "这条资产分录缺少 fund、侧文件用途认领或可确定的默认用途。",
+    "PAD_RECONCILIATION_REVIEW": "这笔 pad 是已有余额的校正，或不符合首次正数资产／Equity 初始化条件；请确认差额原因及资金用途，不能再次按期初自由资金自动处理。",
     "FUND_MIXED_SOURCE": "转出账户同时持有多种资金用途，这笔部分转出无法唯一确定来源；在转出分录填写 fund，或明确该账户的转出用途顺序。",
     "FUND_SOURCE_OPENING_PENDING": "转出账户的期初用途尚未完整审定，不能自动继承转出资金用途；先核对 opening 中该账户的用途拆分。",
     "FUND_SOURCE_INSUFFICIENT": "已审用途库存或配置的转出用途顺序不足以覆盖本次转出；核对转出金额、此前资金来源及 fund，不会自动挪用其他用途。",

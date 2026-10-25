@@ -22,8 +22,9 @@ from ..financial import load_financial
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .accounts import _lot, audit_accounts
 from .classification import _key
-from .facts import FactIndex, future_posting_refs
+from .facts import FactIndex, GeneratedPostingRef, future_posting_refs
 from .inline_amounts import parse_inline_amounts
+from .initialization import initial_pad_postings
 from .native_flows import native_asset_flow, native_card_purchase
 from .opening import audit_opening
 from .provenance import valid_digest
@@ -231,6 +232,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
 
     pending_reasons: dict[str, str] = {}
     if defaults is not None:
+        initial_pads = initial_pad_postings(fin, cutover)
         # A nonzero cutover balance can serve as an inferred transfer source
         # only when its entire native coordinate has reviewed opening owners.
         nonzero_opening = {
@@ -282,6 +284,12 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                                             for index, (owner, amount) in enumerate(owner_parts)]}
 
             roots = [p.account.split(":", 1)[0] for p in entry.postings]
+            for key in missing_keys:
+                if id(leg_keys[key]) in initial_pads:
+                    inferred(key, [(defaults["income_owner_id"], exact(leg_keys[key].units.number))],
+                             "首次 pad 初始化余额归配置的默认收入用途；不计收入或正式划拨")
+                elif isinstance(facts.for_posting(leg_keys[key]), GeneratedPostingRef):
+                    pending_reasons[key] = "PAD_RECONCILIATION_REVIEW"
             native = native_asset_flow(fin, entry, semantics) if len(entry.postings) > 2 else None
             card_purchase = native_card_purchase(fin, entry, semantics)
             if native is not None or card_purchase is not None or len(h_legs) == 1 and len(entry.postings) == 2:

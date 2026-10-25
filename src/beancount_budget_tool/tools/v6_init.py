@@ -156,6 +156,7 @@ def create_setup(ledger: Path, month: str, output: Path, *, cutover: date | None
         files = {"setup.yaml": worksheet, "START_HERE.md": (
             "# 首月配置：只填写 setup.yaml\n\n"
             "1. defaults 是未标标签时的收入用途、支出用途和费用类别；确认后把 confirmed 改为 true。\n"
+            "   首次正数、无成本 Assets/Equity pad 初始化也归默认收入用途，不算收入或正式划拨，不用给生成分录补 fund；后续余额校正仍需审阅。\n"
             "2. accounts 的 semantics 填 H（真实余额）或 K（只有累计申赎额）。payment_scope 每个币种填 payable、excluded 或 pending；K 必须全填 excluded。reason 写判断依据。\n"
             "3. H 的非零期初在 owners 中按用途拆分，例如 `{自由资金: '100', 储蓄: '200'}`，合计必须等于 signed_units。K 的 owners 留空，reason 表示确认账面累计额。不要修改提取的账户、币种、lot 和期初数。\n"
             "4. expense_targets 是本月各类别及其子类别的合计消费上限，金额填带引号的非负数字；历史目标无法确认或不考核时填 not_assessed，不计算目标差。allocation_targets 填划拨目标，或明确填 not_assessed。null 仍表示待决定；0 表示真实零额度。\n"

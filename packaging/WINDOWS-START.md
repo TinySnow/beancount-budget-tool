@@ -79,6 +79,8 @@ TUI 按 `m` 直接跳到已登记月份。在 TUI 中保存审阅、月末声明
 
 用文本编辑器打开 `budget-2023-07\setup.yaml`，按同目录 `START_HERE.md` 填写账户、期初用途和目标。再运行：
 
+账本最初用 `pad` 初始化的余额默认归已配置的「自由资金」，不用给自动生成的分录补 `fund`，也不计为收入或预算划拨。此规则只适用于某资产坐标从无交易记录开始的正数 Assets／Equity 初始化；后续余额校正继续待审。cutover 之前的期初用途仍按填写表确认。
+
 ```powershell
 .\beancount-budget-tool.exe init --apply .\budget-2023-07\setup.yaml
 .\beancount-budget-tool.exe --config .\budget-2023-07\compiled\month.yaml --format tui
