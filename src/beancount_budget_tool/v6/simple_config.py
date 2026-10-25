@@ -162,7 +162,9 @@ def _layer(plans: dict, month: str, source: Path):
             try:
                 _month(key)
             except BudgetError as exc:
-                raise BudgetError(exc.code, exc.message, yaml_path_location(source, (field, str(key)))) from exc
+                raise BudgetError(exc.code,
+                    f"{field} 只接受自然月键，如 '2023-07'；完整发薪日期 YYYY-MM-DD 请放在顶层 salary_cycles 中。"
+                    f"当前键：{key!s}", yaml_path_location(source, (field, str(key)))) from exc
         for key in sorted(rows):
             if field == "effective_templates" and key <= month or field == "months" and key == month:
                 apply(rows[key], (field, key), monthly=field == "months")

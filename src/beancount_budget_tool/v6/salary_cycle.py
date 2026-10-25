@@ -162,6 +162,9 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
 
 
 def render_text(outcome: dict) -> str:
+    if outcome["status"] == "NOT_STARTED":
+        return (f"工资周期目标尚未生效（统计截至 {outcome['through']}）。\n"
+                f"首个已配置发薪日：{outcome['first_payday']}。不编造更早的发薪周期，不计算周期剩额或最多能花。")
     boundary = (f"下次工资日 {outcome['next_payday']} 归下一周期；" if outcome.get("next_payday") else "下次工资日尚未登记；仅统计至查询截止日；")
     lines = [f"工资周期 {outcome['from']} 至 {outcome['through']}：{outcome['status']}",
              boundary + "本报告只统计周期消费及额度差。"]
@@ -197,6 +200,9 @@ def render_csv(outcome: dict) -> str:
     writer = csv.DictWriter(stream, fieldnames=fields)
     writer.writeheader()
     base = {key: outcome[key] for key in fields[:4]}
+    if outcome["status"] == "NOT_STARTED":
+        writer.writerow({**base, "metric": "salary_cycle_not_started", "detail": f"首个已配置发薪日：{outcome['first_payday']}；此前无适用周期目标，不生成额度或差额。"})
+        return stream.getvalue()
     if outcome["report"] is None:
         for row in outcome["review_items"]:
             writer.writerow({**base, "metric": row["reason_code"], "source": row["source"], "detail": row["detail"]})

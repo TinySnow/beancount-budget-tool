@@ -1067,6 +1067,10 @@ def _select_salary_cycle(stdscr, browser: ReportBrowser):
     try:
         choices, current = browser.configured_cycle_choices() if hasattr(browser, "configured_cycle_choices") else ([], None)
         if choices:
+            if current is None:
+                _message(stdscr, "工资周期目标尚未生效", [f"首个已配置发薪日：{choices[0][0]}。",
+                         "当前月份末尚无适用周期；可继续核对账务。到首个发薪月份后再按 w 查看。"])
+                return
             value = _read_field(stdscr, "查看已保存发薪周期",
                                 ["日期和额度来自 budgets.yml，无需每次重填。",
                                  *[f"{start}：{label}" for start, label in choices],

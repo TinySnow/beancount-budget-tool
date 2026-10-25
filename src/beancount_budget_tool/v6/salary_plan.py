@@ -96,6 +96,12 @@ def audit_plan(config, path, as_of, *, start=None):
               "next_payday": selected[1] if selected else None, "configured_cycle": True,
               "status": "NEEDS_REVIEW", "report": None, "review_items": []}
     if selected is None:
+        if cycles:
+            # The first explicitly configured payday is the start of this
+            # target policy. Earlier bookkeeping can be reviewed, but there
+            # is no applicable cycle or numeric cap to invent for it.
+            result.update({"status": "NOT_STARTED", "first_payday": min(cycles), "from": None})
+            return result
         result["review_items"] = [{"reason_code": "SALARY_CYCLE_MISSING", "reason_kind": "data_review",
             "detail": "截至本月末尚无已登记发薪周期；在 budgets.yml 的 salary_cycles 填写真实发薪日和目标。",
             "source": _location(plan, path)}]
@@ -151,6 +157,10 @@ def audit_plan(config, path, as_of, *, start=None):
 
 
 def cap(actual, cycle):
+    if cycle["status"] == "NOT_STARTED":
+        return {"status": "NOT_ASSESSED", "basis": "salary_cycle", "max_spendable": None,
+                "first_payday": cycle["first_payday"], "reason_codes": ["SALARY_CYCLE_NOT_STARTED"],
+                "note": "首个已配置发薪周期尚未开始；仅核对账务及已审可支付资金，不签发周期剩额或最多能花。"}
     if cycle["report"] is None:
         return {"status": "NEEDS_REVIEW", "basis": "salary_cycle", "max_spendable": None,
                 "reason_codes": sorted({row["reason_code"] for row in cycle["review_items"]})}

@@ -185,6 +185,80 @@ class SalaryPlanTests(unittest.TestCase):
             with self.assertRaises(BudgetError) as caught:audit_simple(self.config)
             self.assertTrue(caught.exception.source.startswith(str(self.budgets)+':'))
 
+    def test_payday_under_months_points_to_salary_cycles_instead_of_asking_for_more_quotes(self):
+        self.write(self.budgets,{'schema':1,'months':{'2023-08-14':{'expense_targets':{'生活开销':'0'}}}})
+        with self.assertRaises(BudgetError) as caught:audit_simple(self.config,'2023-07')
+        self.assertEqual(caught.exception.code,'PLAN_AMBIGUOUS')
+        self.assertIn('months 只接受自然月键',caught.exception.message)
+        self.assertIn('顶层 salary_cycles',caught.exception.message)
+        self.assertIn('2023-08-14',caught.exception.message)
+        self.assertTrue(caught.exception.source.startswith(str(self.budgets)+':'))
+
+    def first_august_payday(self):
+        self.plans['salary_cycles']={'2023-08-14':{'expense_targets':{'生活开销':'0'}}}
+        self.write(self.budgets,self.plans)
+
+    def test_july_before_first_payday_can_certify_bookkeeping_without_inventing_a_cap(self):
+        self.first_august_payday()
+        original=self.ledger.read_bytes()
+        result=audit_simple(self.config,'2023-07')
+        self.assertEqual(result['status'],'CERTIFIED_SCOPED',result['review_items'])
+        report=result['report']
+        self.assertEqual(report['salary_cycle']['status'],'NOT_STARTED')
+        self.assertEqual(report['salary_cycle']['first_payday'],'2023-08-14')
+        self.assertEqual(report['actual_spendable']['status'],'CERTIFIED')
+        self.assertEqual(report['max_spendable']['status'],'NOT_ASSESSED')
+        self.assertIsNone(report['max_spendable']['max_spendable'])
+        self.assertIn('工资周期目标尚未生效',render_workflow_text(result))
+        self.assertEqual(self.ledger.read_bytes(),original)
+
+    def test_first_payday_activates_a_real_zero_goal_without_charging_earlier_consumption(self):
+        self.first_august_payday()
+        self.ledger.write_text(self.ledger.read_text(encoding='utf-8')+
+            '\n2023-08-20 * "after first salary"\n  Expenses:Food 20 CNY\n  Assets:Cash -20 CNY\n',encoding='utf-8')
+        result=audit_simple(self.config)
+        self.assertEqual(result['status'],'CERTIFIED_SCOPED',result['review_items'])
+        cycle=result['report']['salary_cycle']['report']['cycle_budget']
+        self.assertEqual(cycle['target'],'0')
+        self.assertEqual(cycle['net_spent'],'18')
+        self.assertEqual(result['report']['max_spendable']['max_spendable'],'-18')
+
+    def test_independent_before_first_query_reports_not_started_not_missing_or_zero(self):
+        self.first_august_payday()
+        result=audit_configured_cycle(self.config,as_of='2023-07-31')
+        self.assertEqual(result['status'],'NOT_STARTED')
+        self.assertIsNone(result['from'])
+        self.assertIsNone(result['report'])
+        self.assertEqual(result['review_items'],[])
+        from beancount_budget_tool.v6.salary_cycle import render_text,render_csv as salary_csv
+        self.assertIn('工资周期目标尚未生效',render_text(result))
+        self.assertNotIn('处理待审',render_text(result))
+        self.assertIn('salary_cycle_not_started',salary_csv(result))
+
+    def test_tui_before_first_salary_keeps_month_view_and_explains_future_cycle(self):
+        self.first_august_payday()
+        browser=SimpleReportBrowser(self.config,'2023-07');self.addCleanup(browser.close);browser.refresh()
+        with patch('beancount_budget_tool.v6.tui._message') as message,patch('beancount_budget_tool.v6.tui._read_field') as field:
+            _select_salary_cycle(FakeScreen(),browser)
+        self.assertFalse(browser.period)
+        field.assert_not_called()
+        self.assertEqual(message.call_args.args[1],'工资周期目标尚未生效')
+
+    def test_before_first_period_snapshot_is_explicit_in_cumulative_csv(self):
+        self.first_august_payday()
+        result=audit_simple_period(self.config,'2023-07','2023-08')
+        self.assertEqual(result['status'],'CERTIFIED_SCOPED',result['review_items'])
+        self.assertIn('salary_cycle,',render_csv(result))
+        self.assertIn('NOT_STARTED',render_csv(result))
+
+    def test_before_first_period_does_not_approve_missing_bookkeeping_evidence(self):
+        self.first_august_payday()
+        self.plans['months']['2023-07'].pop('completeness_confirmed');self.write(self.budgets,self.plans)
+        result=audit_simple(self.config,'2023-07')
+        self.assertEqual(result['status'],'NEEDS_REVIEW')
+        self.assertIsNone(result['report'])
+        self.assertTrue(any(row['reason_code']=='EXTERNAL_SCOPE_PENDING' for row in result['review_items']))
+
     def test_advanced_sidecar_decimal_has_the_same_exact_amount_semantics(self):
         from beancount_budget_tool.v6.salary_plan import audit_plan,month_end
         runtime=build_runtime(self.config);self.addCleanup(runtime.close)

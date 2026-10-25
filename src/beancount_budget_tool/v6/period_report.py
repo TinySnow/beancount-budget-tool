@@ -269,6 +269,8 @@ def render_text(outcome: dict) -> str:
                  for row in report["tracking"])
     lines.append("逐月目标比较（消费按子树，划拨按用途；不累计目标差）：")
     for month in report["monthly_reports"]:
+        if month.get("salary_cycle", {}).get("status") == "NOT_STARTED":
+            lines.append(f"  {month['month']}：工资周期目标尚未生效；首个已配置发薪日 {month['salary_cycle']['first_payday']}，不计算周期额度或最多能花。")
         if month.get("salary_cycle", {}).get("report"):
             cycle = month["salary_cycle"]
             lines.append(f"  {month['month']} 发薪周期 {cycle['from']}；统计至 {cycle['through']}（额度不按自然月重置）")
@@ -332,6 +334,9 @@ def csv_rows(outcome: dict) -> list[dict]:
     currency = report["report_currency"]
     for month, source in zip(report["monthly_reports"], outcome["months"]):
         label, config = month["month"], source["config"]
+        if month.get("salary_cycle", {}).get("status") == "NOT_STARTED":
+            add("month_end", label, "salary_cycle", "not_started", None, commodity=currency,
+                source=config, status="NOT_STARTED", detail=f"首个已配置发薪日：{month['salary_cycle']['first_payday']}；此前不套用周期目标。")
         if month.get("salary_cycle", {}).get("report"):
             cycle = month["salary_cycle"]
             for row in cycle["report"]["cycle_targets"]:

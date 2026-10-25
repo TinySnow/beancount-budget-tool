@@ -123,6 +123,12 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert payday_month["report"]["max_spendable"]["max_spendable"] == "90", payday_month
         saved_cycle = document("report", "--config", payday_config, "--cycle", "2026-09-02")
         assert saved_cycle["report"]["cycle_budget"]["remaining"] == "90", saved_cycle
+        plans["salary_cycles"].pop("2026-09-02")
+        plans_path.write_text(yaml.safe_dump(plans, allow_unicode=True), encoding="utf-8")
+        before_first = document("--config", payday_config)
+        assert before_first["status"] == "CERTIFIED_SCOPED", before_first
+        assert before_first["report"]["salary_cycle"]["status"] == "NOT_STARTED", before_first
+        assert before_first["report"]["max_spendable"]["max_spendable"] is None, before_first
         # Included importer files can put a real recharge behind a payment by
         # line number. Only an explicit cash-order declaration resolves it.
         (directory / "order-main.bean").write_text(

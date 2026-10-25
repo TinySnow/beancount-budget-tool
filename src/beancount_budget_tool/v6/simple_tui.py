@@ -146,7 +146,7 @@ class SimpleReportBrowser(ReportBrowser):
         labels = [(start, "，".join(f"{name} {amount if amount is not None else '待定'}"
                                   for name, amount in row["expense_targets"].items()))
                   for start, row in cycles.items()]
-        return labels, chosen[0] if chosen else labels[0][0]
+        return labels, chosen[0] if chosen else None
 
     def select_saved_cycle(self, start):
         choices, _ = self.configured_cycle_choices()

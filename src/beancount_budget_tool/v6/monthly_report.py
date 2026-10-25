@@ -404,10 +404,14 @@ def render_text(report: dict) -> str:
         headline = (f"用途现金可支付：{amount(actual['actual_spendable'])} {currency}；"
                     + (("本周期消费上限不考核，不计算『最多能花』" if capped.get("basis") == "salary_cycle" else "本月消费上限不考核，不计算『最多能花』") if capped["status"] == "NOT_ASSESSED" else
                        "未配置消费目标上限，不签发『最多能花』"))
+        if "SALARY_CYCLE_NOT_STARTED" in capped.get("reason_codes", []):
+            headline = f"用途现金可支付：{amount(actual['actual_spendable'])} {currency}；工资周期目标尚未生效，不计算『最多能花』"
     else:
         headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
              headline, "", ("自然月消费目标（与发薪周期额度分别显示）" if "salary_cycle" in report else "消费目标（目标 − 实际；负数为超支）")]
+    if report.get("salary_cycle", {}).get("status") == "NOT_STARTED":
+        lines[2:2] = [f"首个已配置发薪日：{report['salary_cycle']['first_payday']}；此前仅核对账务，不套用工资周期额度。", ""]
     if report.get("salary_cycle", {}).get("report"):
         cycle = report["salary_cycle"]
         rows = [f"当前发薪周期：{cycle['from']} 起；本次统计至 {cycle['through']}。"
