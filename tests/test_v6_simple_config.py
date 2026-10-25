@@ -15,6 +15,8 @@ import yaml
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool import financial
+from beancount_budget_tool.yamlstrict import yaml_path_location
+from beancount_budget_tool.v6.input_compiler import compile_inputs
 from beancount_budget_tool.tools.v6_init import compile_setup, _SetupDumper
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, create_files, save_snapshot
@@ -63,6 +65,68 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         result = subprocess.run([sys.executable, "-c", script, str(self.config)],
                                 check=True, capture_output=True, encoding="utf-8", timeout=20)
         self.assertEqual(json.loads(result.stdout), {"status": "CERTIFIED_SCOPED", "commands": []})
+
+    def test_daily_report_writes_final_inputs_once_without_intermediate_worksheets(self):
+        self.migrate()
+        write = Path.write_text
+        written = []
+        def record(path, *args, **kwargs):
+            written.append(path)
+            return write(path, *args, **kwargs)
+        with patch.object(Path, "write_text", record):
+            result = audit_simple(self.config, include_transactions=True)
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED")
+        self.assertTrue(written)
+        self.assertEqual(len(written), len(set(written)))
+        self.assertNotIn("setup.yaml", {path.name for path in written})
+        self.assertNotIn("START_HERE.md", {path.name for path in written})
+        self.assertEqual(sorted(path.name for path in self.config.parent.iterdir() if path.is_file()),
+                         ["budgets.yml", "config.yml"])
+
+    def test_first_configuration_does_not_generate_a_legacy_setup_directory(self):
+        write = Path.write_text
+        written = []
+        def record(path, *args, **kwargs):
+            written.append(path.name)
+            return write(path, *args, **kwargs)
+        with patch.object(Path, "write_text", record):
+            result = create_files(self.base / "fresh", ledger=self.ledger, month="2026-09")
+        self.assertEqual(sorted(written), ["budgets.yml", "config.yml"])
+        outcome = audit_simple(Path(result["config"]))
+        self.assertEqual(outcome["status"], "NEEDS_REVIEW")
+        self.assertTrue(outcome["review_items"])  # Inspection never approves account declarations.
+
+    def test_in_memory_compilation_neither_publishes_files_nor_mutates_input(self):
+        source = self.base / "setup.yaml"
+        document = yaml.safe_load(source.read_text(encoding="utf-8"))
+        original = deepcopy(document)
+        output = self.base / "not-published"
+        with patch.object(Path, "write_text", side_effect=AssertionError("unexpected publication")):
+            documents, issues = compile_inputs(document, source, output)
+        self.assertEqual(issues, [])
+        self.assertIn("month.yaml", documents)
+        self.assertEqual(document, original)
+        self.assertFalse(output.exists())
+
+    def test_compiler_pending_locations_use_public_keys_without_a_temporary_yaml(self):
+        self.migrate()
+        original = self.config.read_bytes()
+        config = yaml.safe_load(original)
+        config["accounts"]["Assets:Cash"]["payment_scope"]["CNY"] = None
+        self.write(self.config, config)
+        result = audit_simple(self.config)
+        expected = yaml_path_location(self.config, ("accounts", "Assets:Cash", "payment_scope", "CNY"))
+        self.assertTrue(any(item["source"] == expected and item["reason_code"] == "SETUP_DECISION_REQUIRED"
+                            for item in result["review_items"]), result["review_items"])
+        self.config.write_bytes(original)
+        plans = yaml.safe_load(self.budgets.read_text(encoding="utf-8"))
+        plans["months"]["2026-09"]["expense_targets"]["日常开销"] = None
+        self.write(self.budgets, plans)
+        result = audit_simple(self.config)
+        expected = yaml_path_location(self.budgets, ("months", "2026-09", "expense_targets", "日常开销"))
+        self.assertTrue(any(item["source"] == expected and item["reason_code"] == "SETUP_DECISION_REQUIRED"
+                            for item in result["review_items"]), result["review_items"])
+        self.assertIsNone(result["report"])
 
     def test_migration_preserves_complete_report_and_does_not_touch_originals(self):
         previous = audit_month_workflow(self.old)

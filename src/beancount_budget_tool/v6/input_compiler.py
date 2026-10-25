@@ -124,9 +124,10 @@ def publish_inputs(output: Path, files: dict[str, object]):
         staging.rename(output)
 
 
-def create_setup(ledger: Path, month: str, output: Path, *, cutover: date | None = None,
+def draft_inputs(ledger: Path, month: str, *, cutover: date | None = None,
                  currency: str | None = None, income_purpose: str = "已收入资金",
-                 expense_purpose: str = "待支出资金", expense_category: str | None = None) -> dict:
+                 expense_purpose: str = "待支出资金", expense_category: str | None = None) -> tuple[dict, list]:
+    """Inspect source facts into an unapproved document without creating files."""
     first, _ = month_bounds(month)
     cutover = cutover or first
     category = expense_category or expense_purpose
@@ -141,7 +142,7 @@ def create_setup(ledger: Path, month: str, output: Path, *, cutover: date | None
         require(currency in currencies, "REPORT_CURRENCY_INVALID", "报告货币须来自 operating_currency")
         rows, purposes, _, expense_names, issues = _inspect(fin, cutover, income_purpose, expense_purpose, category)
         worksheet = {
-            "schema": 6, "ledger": relative_reference(fin.root, output.resolve()), "cutover": cutover.isoformat(),
+            "schema": 6, "ledger": str(fin.root), "cutover": cutover.isoformat(),
             "month": month, "report_currency": currency,
             "defaults": {"income_purpose": income_purpose, "expense_purpose": expense_purpose,
                          "expense_category": category, "confirmed": False},
@@ -155,45 +156,56 @@ def create_setup(ledger: Path, month: str, output: Path, *, cutover: date | None
             "allocation_targets": {name: None for name in sorted(purposes)},
             "completeness_confirmed": False,
         }
-        files = {"setup.yaml": worksheet, "START_HERE.md": (
-            "# 首月配置：只填写 setup.yaml\n\n"
-            "1. defaults 是未标标签时的收入用途、支出用途和费用类别；确认后把 confirmed 改为 true。\n"
-            "   首次正数、无成本 Assets/Equity pad 初始化也归默认收入用途，不算收入或正式划拨，不用给生成分录补 fund；后续余额校正仍需审阅。\n"
-            "2. accounts 的 semantics 填 H（真实余额）或 K（只有累计申赎额）。payment_scope 每个币种填 payable、excluded 或 pending；K 必须全填 excluded。reason 写判断依据。\n"
-            "3. H 的非零期初在 owners 中按用途拆分，例如 `{自由资金: '100', 储蓄: '200'}`，合计必须等于 signed_units。K 的 owners 留空，reason 表示确认账面累计额。不要修改提取的账户、币种、lot 和期初数。\n"
-            "4. expense_targets 是本月各类别及其子类别的合计消费上限，金额填带引号的非负数字；历史目标无法确认或不考核时填 not_assessed，不计算目标差。allocation_targets 填划拨目标，或明确填 not_assessed。null 仍表示待决定；0 表示真实零额度。\n"
-            f"5. 确认导入资料覆盖到 {last}，无该截止日尚未入账的责任或付款后，completeness_confirmed 改为 true；报告不代表截止日之后的现实余额。\n\n"
-            "填不出来就保留 null 或 false。在本目录运行下列命令会列出待确认字段和行号，不会自动批准。\n\n"
-            f"```\n{command('beancount-budget-init')} --apply setup.yaml\n```\n\n"
-            f"全部首轮决定明确后生成 compiled/month.yaml，再运行 `{command('beancount-budget-tool')} --config compiled/month.yaml`。复杂转账、负债或缺价仍可能出现在后续待审清单中。\n"
-            "生成目录不会覆盖已有文件；如已生成 compiled，请用 --output 指定新的目录。账本始终只读。\n")}
+        return worksheet, issues
+
+
+def create_setup(ledger: Path, month: str, output: Path, *, cutover: date | None = None,
+                 currency: str | None = None, income_purpose: str = "已收入资金",
+                 expense_purpose: str = "待支出资金", expense_category: str | None = None) -> dict:
+    worksheet, issues = draft_inputs(ledger, month, cutover=cutover, currency=currency,
+                                     income_purpose=income_purpose, expense_purpose=expense_purpose,
+                                     expense_category=expense_category)
+    worksheet["ledger"] = relative_reference(ledger.resolve(), output.resolve())
+    _, last = month_bounds(month)
+    files = {"setup.yaml": worksheet, "START_HERE.md": (
+        "# 首月配置：只填写 setup.yaml\n\n"
+        "1. defaults 是未标标签时的收入用途、支出用途和费用类别；确认后把 confirmed 改为 true。\n"
+        "   首次正数、无成本 Assets/Equity pad 初始化也归默认收入用途，不算收入或正式划拨，不用给生成分录补 fund；后续余额校正仍需审阅。\n"
+        "2. accounts 的 semantics 填 H（真实余额）或 K（只有累计申赎额）。payment_scope 每个币种填 payable、excluded 或 pending；K 必须全填 excluded。reason 写判断依据。\n"
+        "3. H 的非零期初在 owners 中按用途拆分，例如 `{自由资金: '100', 储蓄: '200'}`，合计必须等于 signed_units。K 的 owners 留空，reason 表示确认账面累计额。不要修改提取的账户、币种、lot 和期初数。\n"
+        "4. expense_targets 是本月各类别及其子类别的合计消费上限，金额填带引号的非负数字；历史目标无法确认或不考核时填 not_assessed，不计算目标差。allocation_targets 填划拨目标，或明确填 not_assessed。null 仍表示待决定；0 表示真实零额度。\n"
+        f"5. 确认导入资料覆盖到 {last}，无该截止日尚未入账的责任或付款后，completeness_confirmed 改为 true；报告不代表截止日之后的现实余额。\n\n"
+        "填不出来就保留 null 或 false。在本目录运行下列命令会列出待确认字段和行号，不会自动批准。\n\n"
+        f"```\n{command('beancount-budget-init')} --apply setup.yaml\n```\n\n"
+        f"全部首轮决定明确后生成 compiled/month.yaml，再运行 `{command('beancount-budget-tool')} --config compiled/month.yaml`。复杂转账、负债或缺价仍可能出现在后续待审清单中。\n"
+        "生成目录不会覆盖已有文件；如已生成 compiled，请用 --output 指定新的目录。账本始终只读。\n")}
     publish_inputs(output, files)
     return {"status": "DRAFT_CREATED", "setup": str((output / "setup.yaml").resolve()),
-            "accounts": len(rows), "source_issues": issues,
+            "accounts": len(worksheet["accounts"]), "source_issues": issues,
             "note": "只生成填写表；没有批准账户、期初用途、目标或完整性。"}
 
 
-def compile_setup(setup: Path, output: Path | None = None) -> dict:
-    setup = setup.resolve()
-    output = (output or setup.parent / "compiled").resolve()
-    doc = load_yaml(setup)
+def compile_inputs(doc: dict, source: Path, output: Path, *, location=None) -> tuple[dict, list]:
+    """Build input documents in memory; callers choose publication and locations."""
+    source, output = source.resolve(), output.resolve()
+    loc = location or (lambda keys: yaml_path_location(source, keys))
     fields = {"schema", "ledger", "cutover", "month", "report_currency", "defaults", "accounts",
               "expense_targets", "allocation_targets", "completeness_confirmed"}
     require(type(doc) is dict and set(doc) == fields and type(doc["schema"]) is int and doc["schema"] == 6,
-            "SETUP_INVALID", "填写表字段不完整、含未知字段或版本无效", f"{setup}:1")
+            "SETUP_INVALID", "填写表字段不完整、含未知字段或版本无效", loc(()))
     require(all(type(doc[key]) is str and doc[key] for key in ("ledger", "month", "cutover", "report_currency")),
-            "SETUP_INVALID", "账本、月份、切换点和货币须为字符串", f"{setup}:1")
+            "SETUP_INVALID", "账本、月份、切换点和货币须为字符串", loc(()))
     try:
         cutover = date.fromisoformat(doc["cutover"])
     except ValueError as exc:
-        raise BudgetError("CUTOVER_INVALID", "cutover 须为 YYYY-MM-DD", yaml_path_location(setup, ("cutover",))) from exc
+        raise BudgetError("CUTOVER_INVALID", "cutover 须为 YYYY-MM-DD", loc(("cutover",))) from exc
     defaults = doc["defaults"]
     require(type(defaults) is dict and set(defaults) == {
         "income_purpose", "expense_purpose", "expense_category", "confirmed"},
-        "SETUP_INVALID", "defaults 字段无效", yaml_path_location(setup, ("defaults",)))
+        "SETUP_INVALID", "defaults 字段无效", loc(("defaults",)))
     require(all(type(defaults[key]) is str and defaults[key].strip() for key in
                 ("income_purpose", "expense_purpose", "expense_category")),
-            "SETUP_INVALID", "默认用途和类别须为非空名称", yaml_path_location(setup, ("defaults",)))
+            "SETUP_INVALID", "默认用途和类别须为非空名称", loc(("defaults",)))
     for key in ("income_purpose", "expense_purpose", "expense_category"):
         try:
             if key == "expense_category":
@@ -201,12 +213,12 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
             else:
                 _owners([{"id": "default", "name": defaults[key], "aliases": []}])
         except BudgetError as exc:
-            raise BudgetError(exc.code, exc.message, yaml_path_location(setup, ("defaults", key))) from exc
+            raise BudgetError(exc.code, exc.message, loc(("defaults", key))) from exc
     issues = []
 
     def pending(keys, detail):
         issues.append({"reason_code": "SETUP_DECISION_REQUIRED", "detail": detail,
-                       "source": yaml_path_location(setup, keys)})
+                       "source": loc(keys)})
 
     def money(raw, keys, allow_not_assessed=False, native=False):
         if allow_not_assessed and raw == "not_assessed":
@@ -218,9 +230,9 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
         pending(keys, "填写非负金额（例如 '2000'）" + ("，或 not_assessed" if allow_not_assessed else ""))
         return None
 
-    with month_inputs((setup.parent / doc["ledger"]).resolve(), doc["month"], cutover) as (fin, last):
+    with month_inputs((source.parent / doc["ledger"]).resolve(), doc["month"], cutover) as (fin, last):
         require(doc["report_currency"] in fin.options.get("operating_currency", []),
-                "REPORT_CURRENCY_INVALID", "报告货币须来自 operating_currency", yaml_path_location(setup, ("report_currency",)))
+                "REPORT_CURRENCY_INVALID", "报告货币须来自 operating_currency", loc(("report_currency",)))
         rows, purposes, category_names, expense_names, source_issues = _inspect(
             fin, cutover, defaults["income_purpose"], defaults["expense_purpose"], defaults["expense_category"])
         issues.extend(source_issues)
@@ -228,17 +240,17 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
             pending(("defaults", "confirmed"), "确认未标标签时使用这些默认用途和类别后填 true")
         if doc["completeness_confirmed"] is not True:
             pending(("completeness_confirmed",), f"确认截至 {last} 的账本资料及责任完整后填 true")
-        require(type(doc["accounts"]) is list, "SETUP_INVALID", "accounts 须为列表", yaml_path_location(setup, ("accounts",)))
+        require(type(doc["accounts"]) is list, "SETUP_INVALID", "accounts 须为列表", loc(("accounts",)))
         by_account = {row["account"]: row for row in rows}
         seen = set()
         account_claims, h_openings, k_openings = [], [], []
         for index, row in enumerate(doc["accounts"]):
             keys = ("accounts", index)
             require(type(row) is dict and set(row) == {"account", "semantics", "payment_scope", "opening", "reason"},
-                    "SETUP_INVALID", "账户字段无效", yaml_path_location(setup, keys))
+                    "SETUP_INVALID", "账户字段无效", loc(keys))
             account = row["account"]
             require(type(account) is str and account in by_account and account not in seen,
-                    "SETUP_ACCOUNT_INVALID", "账户不存在或重复，请重新盘点源账本", yaml_path_location(setup, (*keys, "account")))
+                    "SETUP_ACCOUNT_INVALID", "账户不存在或重复，请重新盘点源账本", loc((*keys, "account")))
             seen.add(account)
             original = by_account[account]
             mode = row["semantics"]
@@ -246,7 +258,7 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
                 pending((*keys, "semantics"), f"{account}：选择 H（真实余额）或 K（累计申赎）")
             scope = row["payment_scope"]
             require(type(scope) is dict and set(scope) == set(original["commodities"]),
-                    "SETUP_ACCOUNT_INVALID", "支付范围的币种须与当前账本一致", yaml_path_location(setup, (*keys, "payment_scope")))
+                    "SETUP_ACCOUNT_INVALID", "支付范围的币种须与当前账本一致", loc((*keys, "payment_scope")))
             for commodity, value in scope.items():
                 if value not in ("payable", "excluded", "pending") or mode == "K" and value != "excluded":
                     pending((*keys, "payment_scope", commodity), "选择 payable／excluded／pending；K 只能 excluded")
@@ -254,32 +266,32 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
                 pending((*keys, "reason"), "填写账户语义、支付范围及期初判断依据")
             expected = {(c["commodity"], c["lot"]): c["signed_units"] for c in original["opening_coordinates"]
                         if Fraction(c["signed_units"]) != 0}
-            require(type(row["opening"]) is list, "SETUP_INVALID", "opening 须为列表", yaml_path_location(setup, (*keys, "opening")))
+            require(type(row["opening"]) is list, "SETUP_INVALID", "opening 须为列表", loc((*keys, "opening")))
             visited = set()
             for number, coordinate in enumerate(row["opening"]):
                 ck = (*keys, "opening", number)
                 require(type(coordinate) is dict and set(coordinate) == {"commodity", "lot", "signed_units", "owners"},
-                        "SETUP_INVALID", "期初坐标字段无效", yaml_path_location(setup, ck))
+                        "SETUP_INVALID", "期初坐标字段无效", loc(ck))
                 require(all(type(coordinate[key]) is str for key in ("commodity", "lot", "signed_units")),
-                        "SETUP_INVALID", "期初币种、lot 和数量须保留原字符串", yaml_path_location(setup, ck))
+                        "SETUP_INVALID", "期初币种、lot 和数量须保留原字符串", loc(ck))
                 pair = (coordinate["commodity"], coordinate["lot"])
                 require(pair in expected and pair not in visited and coordinate["signed_units"] == expected[pair],
-                        "SETUP_OPENING_CHANGED", "期初坐标或金额与账本不符，请重新盘点", yaml_path_location(setup, ck))
+                        "SETUP_OPENING_CHANGED", "期初坐标或金额与账本不符，请重新盘点", loc(ck))
                 visited.add(pair)
                 owners = coordinate["owners"]
-                require(type(owners) is dict, "SETUP_INVALID", "owners 须为用途到数量的映射", yaml_path_location(setup, (*ck, "owners")))
+                require(type(owners) is dict, "SETUP_INVALID", "owners 须为用途到数量的映射", loc((*ck, "owners")))
                 if mode == "H":
                     total = Fraction(0)
                     if not owners:
                         pending((*ck, "owners"), "按用途拆分这份真实期初余额")
                     for owner, raw in owners.items():
-                        require(type(owner) is str and owner.strip(), "SETUP_INVALID", "用途名称无效", yaml_path_location(setup, (*ck, "owners")))
+                        require(type(owner) is str and owner.strip(), "SETUP_INVALID", "用途名称无效", loc((*ck, "owners")))
                         if owner != "-":
                             try:
                                 _owners([{"id": "opening", "name": owner, "aliases": []}])
                             except BudgetError as exc:
                                 raise BudgetError(exc.code, exc.message,
-                                                  yaml_path_location(setup, (*ck, "owners", owner))) from exc
+                                                  loc((*ck, "owners", owner))) from exc
                         units = money(raw, (*ck, "owners", owner), native=True)
                         if units is not None and Fraction(units) > 0:
                             total += Fraction(units)
@@ -296,7 +308,7 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
                         pending((*ck, "owners"), "K 期初只确认累计数，owners 留空；不生成真实库存")
                     k_openings.append({"account": account, "commodity": pair[0], "lot": pair[1],
                                        "signed_units": coordinate["signed_units"], "reason": row["reason"]})
-            require(visited == set(expected), "SETUP_OPENING_CHANGED", "填写表遗漏了账本期初坐标", yaml_path_location(setup, (*keys, "opening")))
+            require(visited == set(expected), "SETUP_OPENING_CHANGED", "填写表遗漏了账本期初坐标", loc((*keys, "opening")))
             if mode == "K" and not expected:
                 commodity = original["commodities"][0]
                 k_openings.append({"account": account, "commodity": commodity, "lot": f"{commodity}/no-cost",
@@ -307,20 +319,20 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
         if seen != set(by_account):
             pending(("accounts",), "账本出现新账户或填写表缺账户，请重新生成草稿并保留已有决定")
         require(type(doc["expense_targets"]) is dict and type(doc["allocation_targets"]) is dict,
-                "SETUP_INVALID", "目标须为名称到金额的映射", f"{setup}:1")
+                "SETUP_INVALID", "目标须为名称到金额的映射", loc(()))
         require(all(type(name) is str and bool(name.strip()) for name in
                     list(doc["expense_targets"]) + list(doc["allocation_targets"])),
-                "SETUP_INVALID", "目标名称须为非空字符串", f"{setup}:1")
+                "SETUP_INVALID", "目标名称须为非空字符串", loc(()))
         for name in doc["expense_targets"]:
             try:
                 category_names.add(_name(name))
             except BudgetError as exc:
-                raise BudgetError(exc.code, exc.message, yaml_path_location(setup, ("expense_targets", name))) from exc
+                raise BudgetError(exc.code, exc.message, loc(("expense_targets", name))) from exc
         for name in doc["allocation_targets"]:
             try:
                 _owners([{"id": "allocation", "name": name, "aliases": []}])
             except BudgetError as exc:
-                raise BudgetError(exc.code, exc.message, yaml_path_location(setup, ("allocation_targets", name))) from exc
+                raise BudgetError(exc.code, exc.message, loc(("allocation_targets", name))) from exc
         purposes.update(doc["allocation_targets"])
         category_rows, category_ids = _registry_rows(category_names, "category", True)
         owner_rows, owner_ids = _registry_rows(purposes, "owner")
@@ -340,7 +352,7 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
             if value is not None:
                 allocations[owner_ids[name]] = value
         if issues:
-            return {"status": "NEEDS_REVIEW", "setup": str(setup), "review_items": issues, "config": None}
+            return {}, issues
         for row in h_openings:
             if row["owner"] != "-":
                 row["owner"] = owner_ids[row["owner"]]
@@ -374,6 +386,15 @@ def compile_setup(setup: Path, output: Path | None = None) -> dict:
         files["month.yaml"] = {"schema": 6, "ledger": relative_reference(fin.root, output), "cutover": cutover.isoformat(),
             "month": doc["month"], "report_currency": doc["report_currency"],
             **{name.removesuffix(".yaml"): name for name in files}}
+    return files, []
+
+
+def compile_setup(setup: Path, output: Path | None = None) -> dict:
+    setup = setup.resolve()
+    output = (output or setup.parent / "compiled").resolve()
+    files, issues = compile_inputs(load_yaml(setup), setup, output)
+    if issues:
+        return {"status": "NEEDS_REVIEW", "setup": str(setup), "review_items": issues, "config": None}
     publish_inputs(output, files)
     return {"status": "CONFIG_CREATED", "config": str(output / "month.yaml"),
             "review_items": [], "note": "只编译已填写的首轮决定；运行月报后仍可能出现交易、责任或计价待审。"}

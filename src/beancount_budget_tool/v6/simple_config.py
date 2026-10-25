@@ -29,7 +29,7 @@ from .facts import frozen_fact_indices
 from ..console import configure_output
 from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
 from .input_compiler import (
-    create_setup, compile_setup, SetupDumper, relative_reference,
+    draft_inputs, compile_inputs, SetupDumper, relative_reference,
 )
 from .targets import _month
 
@@ -45,32 +45,6 @@ def is_simple(document: object) -> bool:
 def _write(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.dump(value, Dumper=SetupDumper, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-
-def _setup_keys(path: Path, source: str) -> tuple:
-    """Translate compiler YAML positions back to editable public keys."""
-    from yaml.nodes import MappingNode, SequenceNode
-    try:
-        line = int(source.rsplit(":", 1)[1]) - 1
-    except (ValueError, IndexError):
-        return ()
-    def locate(node, keys=()):
-        if not node.start_mark.line <= line <= node.end_mark.line:
-            return None
-        if isinstance(node, MappingNode):
-            for key, value in node.value:
-                if key.start_mark.line == line:
-                    return keys + (key.value,)
-                found = locate(value, keys + (key.value,))
-                if found is not None:
-                    return found
-        elif isinstance(node, SequenceNode):
-            for index, child in enumerate(node.value):
-                found = locate(child, keys + (index,))
-                if found is not None:
-                    return found
-        return keys
-    return locate(yaml.compose(path.read_text(encoding="utf-8"))) or ()
 
 
 def state_dir(config: Path) -> Path:
@@ -319,93 +293,87 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
         raise BudgetError("CUTOVER_INVALID", "cutover 须为 YYYY-MM-DD", yaml_path_location(config, ("cutover",))) from exc
     root = (config.parent / doc["ledger"]).resolve()
     unresolved_opening = set()
-    with TemporaryDirectory(prefix="budget-input-") as folder:
-        created = create_setup(root, month, Path(folder) / "draft", cutover=cutover,
-                               currency=doc["report_currency"], **{key: doc["defaults"][key] for key in
-                               ("income_purpose", "expense_purpose", "expense_category")})
-        setup = Path(created["setup"])
-        filled = load_yaml(setup)
-        filled["defaults"]["confirmed"] = True
-        # This flag only lets the input compiler run. The final completeness
-        # declaration is removed unless the user actually confirmed this month.
-        filled["completeness_confirmed"] = True
-        owners = set(filled["allocation_targets"]) | set(plans.get("purposes", []))
-        owners.update(row["name"] for row in state.get("ownership", {}).get("owners", []))
-        filled["allocation_targets"] = {name: goals["allocation_targets"].get(name, "not_assessed")
-                                         for name in owners | set(goals["allocation_targets"])}
-        declared_expenses = set(goals["expense_targets"]) | set(goals["expense_direct_targets"])
-        expense = {name: "not_assessed" for name in filled["expense_targets"]
-                   if not any(child.startswith(name + ".") for child in declared_expenses)}
-        expense.update(goals["expense_direct_targets"])
-        expense.update(goals["expense_targets"])
-        # Assembly only needs a complete set of registry names; actual goal
-        # scopes are written below, without adding a parent cap over child goals.
-        filled["expense_targets"] = {name: "not_assessed" for name in filled["expense_targets"]}
-        filled["expense_targets"].update(expense)
-        for cycle in cycles.values():
-            for name in cycle["expense_targets"]:
-                filled["expense_targets"].setdefault(name, "not_assessed")
-        if "income_category" in doc["defaults"]:
-            filled["expense_targets"].setdefault(doc["defaults"]["income_category"], "not_assessed")
-        for row in filled["accounts"]:
-            name = row["account"]
-            declared = doc["accounts"].get(name, doc.get("account_defaults", {}))
-            require_yaml(type(declared) is dict and set(declared) <= {"semantics", "payment_scope", "opening"},
-                         "SIMPLE_ACCOUNT_INVALID", "账户只需 semantics、payment_scope 和必要的 opening", config, ("accounts", name))
-            row["semantics"] = declared.get("semantics")
-            require_yaml(type(declared.get("payment_scope", {})) is dict, "SIMPLE_ACCOUNT_INVALID",
-                         "payment_scope 须为币种到 payable／excluded／pending 的映射", config, ("accounts", name, "payment_scope"))
-            row["payment_scope"].update(declared.get("payment_scope", {}))
-            row["reason"] = f"使用者在 {config.name} 中声明账户属性"
-            opening = declared.get("opening", {})
-            require_yaml(type(opening) in (dict, list), "SIMPLE_ACCOUNT_INVALID", "opening 须为币种用途映射或完整坐标列表", config, ("accounts", name, "opening"))
-            require_yaml(not isinstance(opening, list) or all(type(part) is dict for part in opening),
-                         "SIMPLE_ACCOUNT_INVALID", "opening 坐标须为映射", config, ("accounts", name, "opening"))
-            for coordinate in row["opening"]:
-                if isinstance(opening, list):
-                    matches = [part for part in opening if part.get("commodity") == coordinate["commodity"] and part.get("lot") == coordinate["lot"]]
-                    coordinate["owners"] = matches[0].get("owners", {}) if len(matches) == 1 else {}
-                elif coordinate["lot"] == coordinate["commodity"] + "/no-cost":
-                    coordinate["owners"] = opening.get(coordinate["commodity"], {})
-                if type(coordinate["owners"]) is dict:
-                    for owner in coordinate["owners"]:
-                        if owner != "-":
-                            filled["allocation_targets"].setdefault(owner, goals["allocation_targets"].get(owner, "not_assessed"))
-                if row["semantics"] == "H" and not coordinate["owners"] and Fraction(coordinate["signed_units"]) > 0:
-                    unresolved_opening.add((name, coordinate["commodity"], coordinate["lot"]))
-                    # Input assembly must not require ordinary owner slices
-                    # for a reviewed securities pool. Remove these temporary
-                    # compiler-only rows before any audit sees the document;
-                    # missing ordinary openings still become real review items.
-                    coordinate["owners"] = {"-": coordinate["signed_units"]}
-        _write(setup, filled)
-        runtime.temporary = RuntimeFiles()
-        destination = Path(runtime.temporary.name) / "compiled"
-        result = compile_setup(setup, destination)
-        if result["config"] is None:
-            items = []
-            for item in result["review_items"]:
-                item = {**item, "kind": "configuration", "metrics": ["配置"], "reason_kind": "data_review"}
-                if (item.get("source") or "").startswith(str(setup)):
-                    keys = _setup_keys(setup, item["source"])
-                    public_keys = keys
-                    target = config
-                    if len(keys) > 1 and keys[0] == "accounts" and type(keys[1]) is int:
-                        public_keys = ("accounts", filled["accounts"][keys[1]]["account"], *keys[2:])
-                    elif len(keys) > 1 and keys[0] in ("expense_targets", "allocation_targets"):
-                        field = keys[0] if keys[0] != "expense_targets" or keys[1] not in goals["expense_direct_targets"] else "expense_direct_targets"
-                        public_keys = locations.get((field, keys[1]), ("months", month))
-                        target = budgets
-                    item["source"] = yaml_path_location(target, public_keys)
-                items.append(item)
-            runtime.pending = {"month": month, "status": "NEEDS_REVIEW", "stage": "metrics", "report": None,
-                               "review_items": items, "pending_metrics": [], "configuration_only": True,
-                               "review_queue": {"preflight_only": True}}
-            runtime.check()
-            runtime.close()
-            return runtime
-    paths = {key: destination / (key + ".yaml") for key in load_yaml(destination / "month.yaml") if key not in SCALARS}
-    generated = {key: load_yaml(path) for key, path in paths.items()}
+    filled, _ = draft_inputs(root, month, cutover=cutover, currency=doc["report_currency"],
+                              **{key: doc["defaults"][key] for key in
+                                 ("income_purpose", "expense_purpose", "expense_category")})
+    filled["defaults"]["confirmed"] = True
+    # This flag only lets the input compiler run. The final completeness
+    # declaration is removed unless the user actually confirmed this month.
+    filled["completeness_confirmed"] = True
+    owners = set(filled["allocation_targets"]) | set(plans.get("purposes", []))
+    owners.update(row["name"] for row in state.get("ownership", {}).get("owners", []))
+    filled["allocation_targets"] = {name: goals["allocation_targets"].get(name, "not_assessed")
+                                     for name in owners | set(goals["allocation_targets"])}
+    declared_expenses = set(goals["expense_targets"]) | set(goals["expense_direct_targets"])
+    expense = {name: "not_assessed" for name in filled["expense_targets"]
+               if not any(child.startswith(name + ".") for child in declared_expenses)}
+    expense.update(goals["expense_direct_targets"])
+    expense.update(goals["expense_targets"])
+    # Assembly only needs a complete set of registry names; actual goal
+    # scopes are written below, without adding a parent cap over child goals.
+    filled["expense_targets"] = {name: "not_assessed" for name in filled["expense_targets"]}
+    filled["expense_targets"].update(expense)
+    for cycle in cycles.values():
+        for name in cycle["expense_targets"]:
+            filled["expense_targets"].setdefault(name, "not_assessed")
+    if "income_category" in doc["defaults"]:
+        filled["expense_targets"].setdefault(doc["defaults"]["income_category"], "not_assessed")
+    for row in filled["accounts"]:
+        name = row["account"]
+        declared = doc["accounts"].get(name, doc.get("account_defaults", {}))
+        require_yaml(type(declared) is dict and set(declared) <= {"semantics", "payment_scope", "opening"},
+                     "SIMPLE_ACCOUNT_INVALID", "账户只需 semantics、payment_scope 和必要的 opening", config, ("accounts", name))
+        row["semantics"] = declared.get("semantics")
+        require_yaml(type(declared.get("payment_scope", {})) is dict, "SIMPLE_ACCOUNT_INVALID",
+                     "payment_scope 须为币种到 payable／excluded／pending 的映射", config, ("accounts", name, "payment_scope"))
+        row["payment_scope"].update(declared.get("payment_scope", {}))
+        row["reason"] = f"使用者在 {config.name} 中声明账户属性"
+        opening = declared.get("opening", {})
+        require_yaml(type(opening) in (dict, list), "SIMPLE_ACCOUNT_INVALID", "opening 须为币种用途映射或完整坐标列表", config, ("accounts", name, "opening"))
+        require_yaml(not isinstance(opening, list) or all(type(part) is dict for part in opening),
+                     "SIMPLE_ACCOUNT_INVALID", "opening 坐标须为映射", config, ("accounts", name, "opening"))
+        for coordinate in row["opening"]:
+            if isinstance(opening, list):
+                matches = [part for part in opening if part.get("commodity") == coordinate["commodity"] and part.get("lot") == coordinate["lot"]]
+                coordinate["owners"] = matches[0].get("owners", {}) if len(matches) == 1 else {}
+            elif coordinate["lot"] == coordinate["commodity"] + "/no-cost":
+                coordinate["owners"] = opening.get(coordinate["commodity"], {})
+            if type(coordinate["owners"]) is dict:
+                for owner in coordinate["owners"]:
+                    if owner != "-":
+                        filled["allocation_targets"].setdefault(owner, goals["allocation_targets"].get(owner, "not_assessed"))
+            if row["semantics"] == "H" and not coordinate["owners"] and Fraction(coordinate["signed_units"]) > 0:
+                unresolved_opening.add((name, coordinate["commodity"], coordinate["lot"]))
+                # Input assembly must not require ordinary owner slices
+                # for a reviewed securities pool. Remove these temporary
+                # compiler-only rows before any audit sees the document;
+                # missing ordinary openings still become real review items.
+                coordinate["owners"] = {"-": coordinate["signed_units"]}
+
+    def input_location(keys):
+        target, public_keys = config, keys
+        if len(keys) > 1 and keys[0] == "accounts" and type(keys[1]) is int:
+            public_keys = ("accounts", filled["accounts"][keys[1]]["account"], *keys[2:])
+        elif len(keys) > 1 and keys[0] in ("expense_targets", "allocation_targets"):
+            field = keys[0] if keys[0] != "expense_targets" or keys[1] not in goals["expense_direct_targets"] else "expense_direct_targets"
+            public_keys = locations.get((field, keys[1]), ("months", month))
+            target = budgets
+        return yaml_path_location(target, public_keys)
+
+    runtime.temporary = RuntimeFiles()
+    destination = Path(runtime.temporary.name) / "compiled"
+    documents, issues = compile_inputs(filled, config, destination, location=input_location)
+    if issues:
+        items = [{**item, "kind": "configuration", "metrics": ["配置"], "reason_kind": "data_review"}
+                 for item in issues]
+        runtime.pending = {"month": month, "status": "NEEDS_REVIEW", "stage": "metrics", "report": None,
+                           "review_items": items, "pending_metrics": [], "configuration_only": True,
+                           "review_queue": {"preflight_only": True}}
+        runtime.check()
+        runtime.close()
+        return runtime
+    month_config = documents.pop("month.yaml")
+    generated = {name.removesuffix(".yaml"): document for name, document in documents.items()}
     for key in ("credit_card_whitelist", "same_day_settlements"):
         if key in state.get("accounts", {}):
             generated["accounts"][key] = deepcopy(state["accounts"][key])
@@ -453,7 +421,6 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
                      "消费上限类别须是已使用或已配置目标的类别名称", config, ("spendable_cap_category",))
         generated["expense_plans"]["spendable_cap_category_id"] = category_names[cap]
     generated["expense_plans"]["months"][month] = {"expense_subtree_targets": subtree, "expense_targets": target_values("expense_direct_targets")}
-    month_config = load_yaml(destination / "month.yaml")
     if doc.get("expense_budget_basis") == "salary_cycle":
         generated["salary_cycle"] = {"schema": 1, "cycles": cycles, "category": cap, "source": str(budgets)}
     complete = goals.get("completeness_confirmed")
@@ -558,9 +525,8 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
     with TemporaryDirectory(prefix=".budget-config-", dir=output.parent) as temporary:
         staging = Path(temporary) / "output"
         staging.mkdir()
-        created = create_setup(ledger.resolve(), month, Path(temporary) / "inspect", cutover=date.fromisoformat(cutover), currency=currency,
-                               **{key: names[key] for key in ("income_purpose", "expense_purpose", "expense_category")})
-        setup = load_yaml(Path(created["setup"]))
+        setup, _ = draft_inputs(ledger.resolve(), month, cutover=date.fromisoformat(cutover), currency=currency,
+                                **{key: names[key] for key in ("income_purpose", "expense_purpose", "expense_category")})
         accounts = {}
         declared = {row["account"]: row for row in state.get("accounts", {}).get("accounts", [])}
         for row in setup["accounts"]:
