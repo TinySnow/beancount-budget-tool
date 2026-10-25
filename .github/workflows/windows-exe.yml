@@ -54,6 +54,18 @@ jobs:
           Copy-Item examples/v6/first-month-setup.yaml dist/windows-x64-folder/example/
           Copy-Item examples/v6/simple dist/windows-x64-folder/example/simple -Recurse
           git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64-folder/BUILD-COMMIT.txt
+          foreach ($PackageDir in @('dist/windows-x64', 'dist/windows-x64-folder')) {
+            Copy-Item QUICKSTART.md,LEGACY-WORKFLOWS.md $PackageDir/
+            New-Item -ItemType Directory -Path "$PackageDir/docs"
+            Copy-Item docs/CONFIGURATION.md,docs/v6-monthly-report.md "$PackageDir/docs/"
+            $StartText = Get-Content packaging/WINDOWS-START.md -Raw -Encoding utf8
+            $StartText = $StartText.Replace('../QUICKSTART.md', 'QUICKSTART.md').Replace('../docs/', 'docs/').Replace('../LEGACY-WORKFLOWS.md', 'LEGACY-WORKFLOWS.md')
+            Set-Content "$PackageDir/START-HERE.md" $StartText -Encoding utf8
+            $SourceBase = 'https://github.com/TinySnow/beancount-budget-tool/blob/' + (git rev-parse HEAD).Trim() + '/'
+            $LegacyText = Get-Content LEGACY-WORKFLOWS.md -Raw -Encoding utf8
+            $LegacyText = $LegacyText.Replace('(examples/v6/', '(' + $SourceBase + 'examples/v6/').Replace('(docs/budget-v6-review.md)', '(' + $SourceBase + 'docs/budget-v6-review.md)').Replace('(docs/v6-implementation-status.md)', '(' + $SourceBase + 'docs/v6-implementation-status.md)')
+            Set-Content "$PackageDir/LEGACY-WORKFLOWS.md" $LegacyText -Encoding utf8
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: beancount-budget-tool-windows-x64

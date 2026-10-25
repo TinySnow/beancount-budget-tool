@@ -51,7 +51,7 @@ def check(executable: Path, *, onedir: bool = False) -> None:
                           "TMPDIR": str(unavailable)}
             run("--version", env=restricted)
             print("Folder startup passed with unusable TEMP/TMP/TMPDIR.", flush=True)
-        for command in ("monthly", "configure", "init", "review-month", "review", "review-refs",
+        for command in ("monthly", "configure", "clean", "state", "init", "review-month", "review", "review-refs",
                         "next-month", "report", "audit", "classification-proposals", "project"):
             run(command, "--help")
         ledger = directory / "账本 2026.bean"
@@ -76,6 +76,19 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         direct = document("--config", simple["config"], "--month", "2026-09")
         assert direct["status"] == "CERTIFIED_SCOPED", direct
         assert direct["report"]["max_spendable"]["max_spendable"] == "190", direct
+        state_root = Path(simple["config"]).parent / ".budget-state" / "config"
+        cache = state_root / "runtime" / "old-cache"
+        cache.mkdir(parents=True)
+        (cache / "input.yaml").write_text("rebuildable: true", encoding="utf-8")
+        preview = json.loads(run("clean", "--config", simple["config"], "--dry-run")[0])
+        assert preview["files_removed"] == 1 and cache.exists(), preview
+        cleaned = json.loads(run("clean", "--config", simple["config"])[0])
+        assert cleaned["files_removed"] == 1 and not cache.exists(), cleaned
+        assert [p.name for p in state_root.iterdir()] == ["reviews.json.gz"]
+        assert document("--config", simple["config"])["report"] == direct["report"]
+        exported = json.loads(run("state", "--config", simple["config"], "--export", "advanced-copy")[0])
+        run("state", "--config", simple["config"], "--import-reviewed", exported["config"])
+        assert document("--config", simple["config"])["report"] == direct["report"]
         direct_salary = document("report", "--config", simple["config"], "--payday", "2026-09-01",
                                  "--next-payday", "2026-10-01", "--cycle-budget", "200")
         assert direct_salary["report"]["cycle_budget"]["remaining"] == "190", direct_salary

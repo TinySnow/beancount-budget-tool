@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
@@ -16,8 +16,9 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
 from uuid import uuid4
 
 import yaml
@@ -161,6 +162,12 @@ def _layer(plans: dict, month: str, source: Path):
 
 
 def _baseline(config: Path, inputs: dict, month: str):
+    from .state_store import load_view
+    view = load_view(config, inputs, month)
+    return view if view is not None else _legacy_baseline(config, inputs, month)
+
+
+def _legacy_baseline(config: Path, inputs: dict, month: str):
     manifest = state_dir(config) / "latest.yaml"
     if not manifest.exists():
         inputs[manifest] = None
@@ -200,32 +207,9 @@ def _baseline(config: Path, inputs: dict, month: str):
 
 
 def save_snapshot(config: Path, reviewed: Path, *, expected: dict | None = None):
-    """Copy a self-contained approved state before publishing its atomic pointer."""
-    if expected:
-        _unchanged(expected)
-    document = load_yaml(reviewed)
-    folder = state_dir(config) / "snapshots" / uuid4().hex
-    folder.mkdir(parents=True)
-    watched = {reviewed: reviewed.read_bytes()}
-    output = deepcopy(document)
-    for key in set(document) - SCALARS:
-        source = (reviewed.parent / document[key]).resolve()
-        watched[source] = source.read_bytes()
-        (folder / f"{key}.yaml").write_bytes(watched[source])
-        output[key] = f"{key}.yaml"
-    output["ledger"] = str((reviewed.parent / document["ledger"]).resolve())
-    _write(folder / "month.yaml", output)
-    _unchanged(watched)
-    if expected:
-        _unchanged(expected)
-    manifest = state_dir(config) / "latest.yaml"
-    previous = load_yaml(manifest) if manifest.exists() else {}
-    months = dict(previous.get("months", {}))
-    relative = (folder / "month.yaml").relative_to(manifest.parent).as_posix()
-    months[document["month"]] = relative
-    temporary = manifest.with_name(uuid4().hex + ".yaml")
-    _write(temporary, {"snapshot": relative, "months": months})
-    os.replace(temporary, manifest)
+    """Persist approved data in one compressed, atomically replaced file."""
+    from .state_store import save
+    save(config, reviewed, expected=expected)
 
 
 def _registry(current, old, prefix, *, categories=False):
@@ -251,6 +235,16 @@ def _registry(current, old, prefix, *, categories=False):
 
 
 @dataclass
+class RuntimeFiles:
+    name: str = field(default_factory=lambda: mkdtemp(prefix="budget-runtime-"))
+    keep: bool = False
+
+    def cleanup(self):
+        if not self.keep:
+            shutil.rmtree(self.name, ignore_errors=True)
+
+
+@dataclass
 class Runtime:
     source: Path
     month: str
@@ -258,6 +252,15 @@ class Runtime:
     config: Path | None = None
     pending: dict | None = None
     budgets: Path | None = None
+    temporary: RuntimeFiles | None = field(default=None, repr=False)
+
+    def close(self):
+        if self.temporary is not None:
+            temporary, self.temporary = self.temporary, None
+            temporary.cleanup()
+
+    def __del__(self):
+        self.close()
 
     def check(self):
         _unchanged(self.inputs)
@@ -266,7 +269,12 @@ class Runtime:
         """Internal file locations should lead to the two editable inputs."""
         result = deepcopy(outcome)
         if self.config:
+            for row in result.get("months", []):
+                if (row.get("config") or "").startswith(str(self.config.parent)):
+                    row["config"] = str(self.source)
             for item in result.get("review_items", []):
+                if (item.get("config") or "").startswith(str(self.config.parent)):
+                    item["config"] = str(self.source)
                 if item.get("reason_code") == "EXTERNAL_SCOPE_PENDING":
                     item["detail"] = "核对本月末账单后按 f 确认；也可在 budgets.yml 对应月份填写 completeness_confirmed: true。下一月须单独确认。"
                     item["source"] = yaml_path_location(self.budgets, ("months", item.get("month", result.get("month", self.month)), "completeness_confirmed"))
@@ -341,6 +349,10 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
                     coordinate["owners"] = matches[0].get("owners", {}) if len(matches) == 1 else {}
                 elif coordinate["lot"] == coordinate["commodity"] + "/no-cost":
                     coordinate["owners"] = opening.get(coordinate["commodity"], {})
+                if type(coordinate["owners"]) is dict:
+                    for owner in coordinate["owners"]:
+                        if owner != "-":
+                            filled["allocation_targets"].setdefault(owner, goals["allocation_targets"].get(owner, "not_assessed"))
                 if row["semantics"] == "H" and not coordinate["owners"] and Fraction(coordinate["signed_units"]) > 0:
                     unresolved_opening.add((name, coordinate["commodity"], coordinate["lot"]))
                     # Input assembly must not require ordinary owner slices
@@ -349,7 +361,8 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
                     # missing ordinary openings still become real review items.
                     coordinate["owners"] = {"-": coordinate["signed_units"]}
         _write(setup, filled)
-        destination = state_dir(config) / "runtime" / uuid4().hex
+        runtime.temporary = RuntimeFiles()
+        destination = Path(runtime.temporary.name) / "compiled"
         result = compile_setup(setup, destination)
         if result["config"] is None:
             items = []
@@ -371,6 +384,7 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
                                "review_items": items, "pending_metrics": [], "configuration_only": True,
                                "review_queue": {"preflight_only": True}}
             runtime.check()
+            runtime.close()
             return runtime
     paths = {key: destination / (key + ".yaml") for key in load_yaml(destination / "month.yaml") if key not in SCALARS}
     generated = {key: load_yaml(path) for key, path in paths.items()}
@@ -451,6 +465,8 @@ def audit_simple(config: Path, month: str | None = None, *, include_transactions
         if exc.source and runtime.config and exc.source.startswith(str(runtime.config.parent)):
             raise BudgetError(exc.code, exc.message, yaml_path_location(config, ())) from exc
         raise
+    finally:
+        runtime.close()
 
 
 def audit_simple_period(config: Path, since=None, through=None):
@@ -460,19 +476,25 @@ def audit_simple_period(config: Path, since=None, through=None):
     first, last = _month(since or doc["cutover"][:7]), _month(through or doc["month"])
     require(first <= last, "PERIOD_RANGE_INVALID", "起始月份不能晚于结束月份")
     months = _months(first, last)
-    runtimes = [build_runtime(config, month) for month in months]
-    if any(runtime.pending for runtime in runtimes):
-        rows = [{"month": runtime.month, "config": str(config),
-                 "status": "NEEDS_REVIEW" if runtime.pending else "NOT_RUN"} for runtime in runtimes]
-        reviews = [{**item, "month": runtime.month, "config": str(config)} for runtime in runtimes
-                   if runtime.pending for item in runtime.pending["review_items"]]
-        outcome = _combine_months(months, rows, [], reviews, set(), [])
-    else:
-        outcome = audit_period([runtime.config for runtime in runtimes], first, last)
-    for runtime in runtimes:
-        runtime.check()
-        outcome = runtime.public_sources(outcome)
-    return outcome
+    runtimes = []
+    try:
+        for month in months:
+            runtimes.append(build_runtime(config, month))
+        if any(runtime.pending for runtime in runtimes):
+            rows = [{"month": runtime.month, "config": str(config),
+                     "status": "NEEDS_REVIEW" if runtime.pending else "NOT_RUN"} for runtime in runtimes]
+            reviews = [{**item, "month": runtime.month, "config": str(config)} for runtime in runtimes
+                       if runtime.pending for item in runtime.pending["review_items"]]
+            outcome = _combine_months(months, rows, [], reviews, set(), [])
+        else:
+            outcome = audit_period([runtime.config for runtime in runtimes], first, last)
+        for runtime in runtimes:
+            runtime.check()
+            outcome = runtime.public_sources(outcome)
+        return outcome
+    finally:
+        for runtime in runtimes:
+            runtime.close()
 
 
 def create_files(output: Path, *, ledger: Path | None = None, month: str | None = None, old_config: Path | None = None):

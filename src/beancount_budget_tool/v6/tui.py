@@ -880,7 +880,7 @@ def _export_report(stdscr, browser: ReportBrowser):
         browser.refresh()
         if browser.error:
             raise browser.error
-        write_export(browser.outcome, browser.config, path, format, period=browser.period)
+        write_export(browser.outcome, getattr(browser, "display_config", browser.config), path, format, period=browser.period)
         state = browser.outcome["status"]
         exported_scope = (f"{browser.outcome['from']} 至 {browser.outcome['through']}" if browser.period else
                           browser.outcome["month"])

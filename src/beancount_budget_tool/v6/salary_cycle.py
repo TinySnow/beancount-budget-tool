@@ -60,13 +60,16 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
     from .simple_config import is_simple, build_runtime
     if is_simple(load_yaml(config)):
         runtime = build_runtime(config, last.strftime("%Y-%m"))
-        if runtime.pending:
-            return {"mode": "v6_salary_cycle_spending", "from": first.isoformat(), "through": last.isoformat(),
-                    "next_payday": next_payday, "status": "NEEDS_REVIEW", "report": None,
-                    "review_items": runtime.pending["review_items"]}
-        result = audit_salary_cycle(runtime.config, payday, next_payday, budget, category, expected_identity=expected_identity)
-        runtime.check()
-        return runtime.public_sources(result)
+        try:
+            if runtime.pending:
+                return {"mode": "v6_salary_cycle_spending", "from": first.isoformat(), "through": last.isoformat(),
+                        "next_payday": next_payday, "status": "NEEDS_REVIEW", "report": None,
+                        "review_items": runtime.pending["review_items"]}
+            result = audit_salary_cycle(runtime.config, payday, next_payday, budget, category, expected_identity=expected_identity)
+            runtime.check()
+            return runtime.public_sources(result)
+        finally:
+            runtime.close()
     from .period_report import _inputs
     config = config.resolve()
     rows, ordered, watched = _inputs([config], None, None)

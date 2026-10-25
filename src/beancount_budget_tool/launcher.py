@@ -14,6 +14,8 @@ COMMANDS = {
     "report": ("beancount_budget_tool.v6.period_report", "区间报告／CSV 导出"),
     "init": ("beancount_budget_tool.tools.v6_init", "生成／编译首月配置"),
     "configure": ("beancount_budget_tool.v6.simple_config", "创建／迁移 config.yml + budgets.yml 两文件入口"),
+    "clean": ("beancount_budget_tool.v6.state_store", "清理缓存并将审阅记录收拢到单个文件"),
+    "state": ("beancount_budget_tool.v6.state_store", "清理／导出／导入高级审阅状态"),
     "project": ("beancount_budget_tool.v6.project", "登记月份，生成默认项目入口"),
     "review-month": ("beancount_budget_tool.tools.v6_review_migration_month", "逐月校对／监测改动"),
     "review": ("beancount_budget_tool.tools.v6_review_decisions", "生成／保存交易待审填写表"),

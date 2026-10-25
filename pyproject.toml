@@ -23,6 +23,7 @@ beancount-budget-review = "beancount_budget_tool.tools.v6_review_decisions:main"
 beancount-budget-next-month = "beancount_budget_tool.tools.v6_next_month:main"
 beancount-budget-init = "beancount_budget_tool.tools.v6_init:main"
 beancount-budget-configure = "beancount_budget_tool.v6.simple_config:main"
+beancount-budget-state = "beancount_budget_tool.v6.state_store:main"
 beancount-budget-project = "beancount_budget_tool.v6.project:main"
 
 [tool.setuptools.packages.find]

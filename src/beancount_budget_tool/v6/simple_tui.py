@@ -7,7 +7,7 @@ import sys
 from ..errors import BudgetError, require
 from ..yamlstrict import load_yaml
 from .monthly_report import audit_month_workflow, render_workflow_text
-from .simple_config import build_runtime, save_snapshot, state_dir
+from .simple_config import build_runtime, save_snapshot
 from .tui import ReportBrowser, _report_browser
 from .targets import _month
 
@@ -26,7 +26,14 @@ class SimpleReportBrowser(ReportBrowser):
     def display_config(self):
         return self.user_config
 
+    def close(self):
+        if self.runtime is not None:
+            self.runtime.close()
+        for runtime in self.range_runtimes:
+            runtime.close()
+
     def refresh(self):
+        self.close()
         self.clear()
         self.range_runtimes = []
         try:
@@ -36,7 +43,7 @@ class SimpleReportBrowser(ReportBrowser):
                 self._accept_outcome(self.runtime.pending, self.renderer)
                 return
             self.configs, self.index = [self.runtime.config], 0
-            self.review_roots = [state_dir(self.user_config) / "reviews"]
+            self.review_roots = [Path(self.runtime.temporary.name) / "reviews"]
             super().refresh()
             self.runtime.check()
             for runtime in self.range_runtimes:
@@ -82,7 +89,15 @@ class SimpleReportBrowser(ReportBrowser):
         return [(self.selected_month, self.config)]
 
     def show_saved_month(self, result):
-        save_snapshot(self.user_config, Path(result["config"]), expected=self.runtime.inputs)
+        try:
+            save_snapshot(self.user_config, Path(result["config"]), expected=self.runtime.inputs)
+        except BaseException as exc:
+            # Do not erase a newly approved receipt if persistence failed.
+            self.runtime.temporary.keep = True
+            if isinstance(exc, (BudgetError, OSError, UnicodeError, TypeError)):
+                raise BudgetError("SIMPLE_STATE_SAVE_FAILED",
+                    f"审阅状态未覆盖；新决定保留在 {result['config']}。原因：{exc}", str(self.user_config)) from exc
+            raise
         self.period = False
         self.filter("")
         self.refresh()
@@ -129,3 +144,5 @@ def run_simple_tui(config: Path, month: str | None = None):
         pass
     except curses.error as exc:
         raise BudgetError("TUI_UNAVAILABLE", "当前终端无法打开 TUI") from exc
+    finally:
+        browser.close()
