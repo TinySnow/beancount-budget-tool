@@ -4,10 +4,10 @@
 
 ## 1. 准备程序和路径
 
-Windows 下载目录版 `beancount-budget-tool-windows-x64-folder`，完整解压。保留 exe 旁的 `_internal`。在 PowerShell／VS Code 终端运行，先将下面两个路径换成自己的：
+Windows 可选单文件包 `beancount-budget-tool-windows-x64`，无需旁边的 `_internal`。新版在 `%LOCALAPPDATA%\BeancountBudgetTool\Runtime` 自动解包依赖，正常退出清理本次运行目录；不再依赖系统 TEMP 路径。另保留 `-folder` 目录兼容包，选择它时须保留 `_internal`。在 PowerShell／VS Code 终端运行，先将下面两个路径换成自己的：
 
 ```powershell
-$ToolDir = "C:\Tools\beancount-budget-tool-windows-x64-folder"
+$ToolDir = "C:\Tools\beancount-budget-tool-windows-x64"
 $LedgerDir = "D:\Beancount"
 $Exe = Join-Path $ToolDir "beancount-budget-tool.exe"
 $Config = Join-Path $LedgerDir "budget\simple\config.yml"
@@ -75,6 +75,41 @@ months:
 历史目标记不清时，明确填 `not_assessed`；`null` 表示还没决定，`0` 是真实零额度。数字是计划目标，不会自动增加资金余额。新用途可以从账本 fund 自动识别，不需要再登记 ID。
 
 完整字段、每月沿用目标、期初拆分和 K 账户含义见[配置参考](docs/CONFIGURATION.md)。
+
+### 消费上限按发薪周期，而不是自然月
+
+在 config.yml 顶层添加：
+
+```yaml
+expense_budget_basis: salary_cycle
+```
+
+在 budgets.yml 顶层保存实际发薪日及各周期目标（日期和金额只是示例，类别名使用你的费用类别）：
+
+```yaml
+salary_cycles:
+  '2023-07-08':
+    expense_targets:
+      生活开销: 2000
+  '2023-08-02':
+    expense_targets:
+      生活开销: 2000
+```
+
+7 月 8 日包含在第一周期；8 月 2 日全天归下一周期。每次实际发薪后补一条日期，不猜预计到账日；没有下一条时，末周期保持未结束，只算到查询截止日。目标记不清可填 `not_assessed`，不要填 null 或 0 代替。
+
+这种模式下，不需要另设自然月消费上限；将旧 `defaults`／`months` 中不再考核的 `expense_targets` 移走或明确改为 `not_assessed`，不要把同一额度在两处重复配置。已有划拨目标 `allocation_targets` 可以保留。
+
+仍逐月审核账本，cutover 不变。7 月月报取 7 月 31 日的真实可支付资金，周期消费则从 7 月 8 日累计至 7 月 31 日；**最多能花＝可支付资金与该周期剩余额度的较小值**。额度不在月初重置，不拿未来交易来计算历史可花。
+
+TUI 按 `w` 可从已保存的发薪日选完整周期，不再重填额度。也可直接查询：
+
+```powershell
+& $Exe report --config $Config --cycle 2023-07-08
+& $Exe report --config $Config --cycle current --as-of 2023-07-31
+```
+
+第一条统计 7 月 8 日至 8 月 1 日，第二条只统计截至 7 月 31 日的当前周期。工资周期查询只给消费与目标差；可支付资金及最多能花由自然月末快照签出。周期早于 cutover 的缺失消费不能当零。
 
 ## 4. 修改 2023 年 7 月账本，运行核对
 
@@ -160,7 +195,7 @@ Beancount 同日交易会使用各文件的行号排序，跨文件时可能与�
 | `a`、`p`、`x` | 已审交易明细／区间／导出 |
 | `w` | 工资周期查询 |
 
-工资周期在 `w` 中填两次真实工资日、可选额度和类别；**本次工资日包含在本周期，下一次工资日属于下一周期**。自然月 `expense_targets` 不会自动变成工资周期额度。工资周期目前是查询参数，不是配置文件字段。
+保存了 `salary_cycles` 时，`w` 直接选择发薪日并复用额度；没有保存时仍可手填两次工资日、额度和类别做临时查询。**本次工资日包含在本周期，下一次工资日属于下一周期**。自然月目标不会自动折算成周期额度。
 
 ## 哪些文件要保留
 

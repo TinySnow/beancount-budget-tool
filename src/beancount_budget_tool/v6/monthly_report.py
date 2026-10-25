@@ -35,7 +35,7 @@ REQUIRED = {"schema", "ledger", "cutover", "month", "report_currency",
             "accounts", "opening", "ownership", "obligations", "classifications",
             "expense_plans", "purpose_plans", "h_transfers", "k_events", "h_fx",
             "purpose_pools"}
-OPTIONAL = {"completeness", "benefit_groups", "debt_coverage", "debt_settlements"}
+OPTIONAL = {"completeness", "benefit_groups", "debt_coverage", "debt_settlements", "salary_cycle"}
 
 
 def _config_month(document: dict, config: Path) -> str:
@@ -179,6 +179,10 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
         tracking = audit_monthly_tracking(root, cutover, month)
         outflows = audit_default_outflows(root, cutover, month, accounts, ownership, opening,
                                          obligations, path("purpose_pools"))
+        salary = None
+        if path("salary_cycle"):
+            from .salary_plan import audit_plan
+            salary = audit_plan(config, path("salary_cycle"), as_of)
         owner_document = load_yaml(ownership)
         owner_names = {row["id"]: row["name"] for row in owner_document["owners"]}
         purpose_balances = summarize_purpose_balances(account_purposes, pool, k_book,
@@ -198,7 +202,14 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
                  tracking["ledger_snapshot"], outflows["ledger_snapshot"]}) == 1 and
             all(row["report_currency"] == currency for row in (actual, expense, purpose, pool)),
             "MONTH_REPORT_MISMATCH", "月报各项审计的来源快照或报告货币不一致")
-    max_spendable = summarize_max_spendable(actual, expense)
+    if salary is not None:
+        from .salary_plan import cap
+        require(salary["report"] is None or salary["report"]["ledger_snapshot"] == actual["ledger_snapshot"],
+                "MONTH_REPORT_MISMATCH", "工资周期与月报来源快照不同")
+        max_spendable = cap(actual, salary)
+        details["salary_cycle"] = salary
+    else:
+        max_spendable = summarize_max_spendable(actual, expense)
     return {**details, "mode": "v6_reviewed_month", "month": month, "as_of": as_of.isoformat(),
             "report_currency": currency, "ledger_snapshot": actual["ledger_snapshot"],
             "owner_names": owner_names,
@@ -264,6 +275,11 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
                             "source": str((config.parent / document[source_key]).resolve())
                             if source_key in document else str(config)})
     capped = report.get("max_spendable", {"status": "NOT_CONFIGURED"})
+    if report.get("salary_cycle", {}).get("status") in ("NEEDS_REVIEW", "IMPLEMENTATION_BLOCKED"):
+        cycle = report["salary_cycle"]
+        pending.append({"metric": "工资周期", "status": cycle["status"],
+                        "reason_codes": sorted({row["reason_code"] for row in cycle["review_items"]}),
+                        "review_items": cycle["review_items"]})
     if capped["status"] == "NEEDS_REVIEW":
         pending.append({"metric": "最多能花", "status": "NEEDS_REVIEW",
                         "reason_codes": capped["reason_codes"],
@@ -380,18 +396,26 @@ def render_text(report: dict) -> str:
     owner_names = report.get("owner_names", {})
     if capped["status"] == "CERTIFIED":
         headline = (f"最多能花：{amount(capped['max_spendable'])} {currency}"
-                    f"（{capped['category_name']}消费目标差 {amount(capped['consumption_target_remaining'])}；"
+                    f"（{capped['category_name']}{'发薪周期剩余额度' if capped.get('basis') == 'salary_cycle' else '消费目标差'} {amount(capped['consumption_target_remaining'])}；"
                     f"用途现金可支付 {amount(capped['payable_after_obligations'])}）")
     elif capped["status"] == "NEEDS_REVIEW":
         headline = f"最多能花：待审（{', '.join(capped['reason_codes'])}）"
     elif actual["status"] == "CERTIFIED":
         headline = (f"用途现金可支付：{amount(actual['actual_spendable'])} {currency}；"
-                    + ("本月消费上限不考核，不计算『最多能花』" if capped["status"] == "NOT_ASSESSED" else
+                    + (("本周期消费上限不考核，不计算『最多能花』" if capped.get("basis") == "salary_cycle" else "本月消费上限不考核，不计算『最多能花』") if capped["status"] == "NOT_ASSESSED" else
                        "未配置消费目标上限，不签发『最多能花』"))
     else:
         headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
-             headline, "", "消费目标（目标 − 实际；负数为超支）"]
+             headline, "", ("自然月消费目标（与发薪周期额度分别显示）" if "salary_cycle" in report else "消费目标（目标 − 实际；负数为超支）")]
+    if report.get("salary_cycle", {}).get("report"):
+        cycle = report["salary_cycle"]
+        rows = [f"当前发薪周期：{cycle['from']} 起；本次统计至 {cycle['through']}。"
+                + (f"下次发薪日 {cycle['next_payday']} 归下一周期。" if cycle["next_payday"] else "下次发薪日尚未登记。")]
+        for row in cycle["report"]["cycle_targets"]:
+            rows.append(f"  {row['category_name']}：周期额度 {amount(row['target']) if row['target'] is not None else '不考核'}，"
+                        f"净消费 {amount(row['net_spent'])}，剩余 {amount(row['remaining']) if row['remaining'] is not None else '不计算'} {currency}")
+        lines[2:2] = [*rows, ""]
     if actual["status"] == "CERTIFIED" and actual.get("clearing_receivables"):
         lines[2:2] = ["待报销代垫（应收原币；未到账，不计入可花现金）", *(
             f"  {row['clearing_id']}：待收 {amount(row['remaining_native'])} "

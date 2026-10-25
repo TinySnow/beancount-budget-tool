@@ -36,6 +36,8 @@ exe = EXE(
     [] if folder_bundle else analysis.datas, [],
     name="beancount-budget-tool", console=True, upx=False,
     exclude_binaries=folder_bundle,
+    runtime_tmpdir=(r"%LOCALAPPDATA%\BeancountBudgetTool\Runtime"
+                    if sys.platform == "win32" and not folder_bundle else None),
 )
 if folder_bundle:
     bundle = COLLECT(

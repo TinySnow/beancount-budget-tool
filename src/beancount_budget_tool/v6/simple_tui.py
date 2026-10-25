@@ -18,6 +18,7 @@ class SimpleReportBrowser(ReportBrowser):
         self.selected_month = _month(month or load_yaml(config)["month"])
         self.runtime = None
         self.range_runtimes = []
+        self.saved_cycle = None
         super().__init__([config], audit_month_workflow, render_workflow_text)
         # Transaction details remain available just as in the normal browser.
         self.loader = lambda path: audit_month_workflow(path, include_transactions=True)
@@ -37,6 +38,13 @@ class SimpleReportBrowser(ReportBrowser):
         self.clear()
         self.range_runtimes = []
         try:
+            if self.period and self.saved_cycle is not None:
+                from .salary_plan import audit_configured_cycle
+                from .salary_cycle import render_text
+                self.configs, self.index = [self.user_config], 0
+                cutoff = self._saved_cutoff(self.saved_cycle)
+                self._accept_outcome(audit_configured_cycle(self.user_config, self.saved_cycle, cutoff.isoformat()), render_text)
+                return
             self.runtime = build_runtime(self.user_config, self.selected_month)
             if self.runtime.pending:
                 self.period = False
@@ -70,6 +78,8 @@ class SimpleReportBrowser(ReportBrowser):
         month = _month(month)
         require(month >= load_yaml(self.user_config)["cutover"][:7], "MONTH_INVALID", "月份不得早于 cutover", str(self.user_config))
         self.selected_month, self.period = month, False
+        self.saved_cycle = None
+        self.salary_cycle = None
         self.filter("")
         self.clear()
 
@@ -119,9 +129,52 @@ class SimpleReportBrowser(ReportBrowser):
         return [runtime.config for runtime in self.range_runtimes]
 
     def period_label(self):
+        if self.period and self.saved_cycle is not None:
+            return f"已保存发薪周期 {self.saved_cycle}"
         if self.period and self.salary_cycle is None and self.period_range is None:
             return f"区间 {load_yaml(self.user_config)['cutover'][:7]} 至 {self.selected_month}"
         return super().period_label()
+
+    def configured_cycle_choices(self):
+        from .simple_config import _documents
+        from .salary_plan import read_cycles, month_end, window
+        doc, path, plans = _documents(self.user_config)
+        cycles = read_cycles(plans, path)
+        if not cycles:
+            return [], None
+        chosen = window(cycles, month_end(self.selected_month))
+        labels = [(start, "，".join(f"{name} {amount if amount is not None else '待定'}"
+                                  for name, amount in row["expense_targets"].items()))
+                  for start, row in cycles.items()]
+        return labels, chosen[0] if chosen else labels[0][0]
+
+    def select_saved_cycle(self, start):
+        choices, _ = self.configured_cycle_choices()
+        require(start in dict(choices), "SALARY_CYCLE_UNKNOWN", "发薪日尚未在 budgets.yml 登记", str(self.user_config))
+        self.saved_cycle = start
+        from datetime import timedelta
+        cutoff = self._saved_cutoff(start)
+        self.salary_cycle = (start, (cutoff + timedelta(days=1)).isoformat(), None, None)
+        self.period, self.view = True, "report"
+        self.filter("")
+        self.clear()
+
+    def _saved_cutoff(self, start):
+        from datetime import date, timedelta
+        from .simple_config import _documents
+        from .salary_plan import read_cycles, month_end
+        _, path, plans = _documents(self.user_config)
+        cycles = read_cycles(plans, path)
+        following = next((day for day in cycles if day > start), None)
+        return date.fromisoformat(following) - timedelta(days=1) if following else month_end(self.selected_month)
+
+    def select_period(self, *args):
+        self.saved_cycle = None
+        return super().select_period(*args)
+
+    def select_salary_cycle(self, *args):
+        self.saved_cycle = None
+        return super().select_salary_cycle(*args)
 
     def open_review_month(self):
         if not self.period or self.view != "reviews" or self.error or self.help or not self.reviews():

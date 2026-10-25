@@ -79,10 +79,12 @@ def _unchanged(inputs: dict):
             "INPUT_CHANGED", "配置、预算或审阅记录在计算期间改变；请重算")
 
 
-def _documents(config: Path):
+def _documents(config: Path, inputs: dict | None = None):
+    inputs = {} if inputs is None else inputs
+    inputs.setdefault(config, config.read_bytes())
     doc = load_yaml(config)
     fields = {"schema", "ledger", "budgets", "cutover", "month", "report_currency", "defaults", "accounts"}
-    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"account_defaults", "spendable_cap_category", "classification_defaults"},
+    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis"},
                  "SIMPLE_CONFIG_INVALID", "config.yml 须含 schema: 1、ledger、budgets、cutover、month、report_currency、defaults、accounts", config)
     for key in ("ledger", "budgets", "cutover", "month", "report_currency"):
         require_yaml(type(doc[key]) is str and bool(doc[key].strip()), "SIMPLE_CONFIG_INVALID",
@@ -94,6 +96,10 @@ def _documents(config: Path):
                  "SIMPLE_CONFIG_INVALID", "defaults 须指定默认收入用途、支出用途和费用类别", config, ("defaults",))
     require_yaml("classification_defaults" not in doc or type(doc["classification_defaults"]) is bool,
                  "SIMPLE_CONFIG_INVALID", "classification_defaults 须为 true 或 false", config, ("classification_defaults",))
+    require_yaml(doc.get("expense_budget_basis", "calendar_month") in ("calendar_month", "salary_cycle"),
+                 "SIMPLE_CONFIG_INVALID", "expense_budget_basis 须为 calendar_month 或 salary_cycle", config, ("expense_budget_basis",))
+    require_yaml(doc.get("expense_budget_basis") != "salary_cycle" or doc.get("spendable_cap_category", defaults["expense_category"]) is not None,
+                 "SIMPLE_CONFIG_INVALID", "工资周期上限须指定消费类别，不能同时关闭 spendable_cap_category", config, ("spendable_cap_category",))
     from .classification import _name
     from .ownership import _owners
     for key, value in defaults.items():
@@ -105,12 +111,14 @@ def _documents(config: Path):
         except BudgetError as exc:
             raise BudgetError(exc.code, exc.message, yaml_path_location(config, ("defaults", key))) from exc
     budgets = (config.parent / doc["budgets"]).resolve()
+    inputs.setdefault(budgets, budgets.read_bytes())
     plans = load_yaml(budgets)
     require_yaml(type(plans) is dict and type(plans.get("schema")) is int and plans["schema"] == 1 and
-                 set(plans) <= {"schema", "purposes", "defaults", "effective_templates", "months"},
+                 set(plans) <= {"schema", "purposes", "defaults", "effective_templates", "months", "salary_cycles"},
                  "SIMPLE_BUDGETS_INVALID", "budgets.yml 须为 schema: 1 的目标配置", budgets)
     require_yaml(type(plans.get("purposes", [])) is list and all(type(name) is str and name.strip() for name in plans.get("purposes", [])),
                  "SIMPLE_BUDGETS_INVALID", "purposes 须为用途名称列表（也可从 fund 自动发现）", budgets, ("purposes",))
+    _unchanged(inputs)
     return doc, budgets, plans
 
 
@@ -281,7 +289,7 @@ class Runtime:
                     continue
                 source = item.get("source") or ""
                 if source.startswith(str(self.config.parent)):
-                    target = self.budgets if any(key in source for key in ("expense_plans", "purpose_plans")) else self.source
+                    target = self.budgets if any(key in source for key in ("expense_plans", "purpose_plans", "salary_cycle")) else self.source
                     item["source"] = yaml_path_location(target, ())
         return result
 
@@ -289,10 +297,11 @@ class Runtime:
 def build_runtime(config: Path, month: str | None = None) -> Runtime:
     config = config.resolve()
     inputs = {config: config.read_bytes()}
-    doc, budgets, plans = _documents(config)
-    inputs[budgets] = budgets.read_bytes()
+    doc, budgets, plans = _documents(config, inputs)
     month = _month(month or doc["month"])
     goals, locations = _layer(plans, month, budgets)
+    from .salary_plan import read_cycles
+    cycles = read_cycles(plans, budgets)
     state, previous = _baseline(config, inputs, month)
     if previous:
         require(previous["cutover"] == doc["cutover"] and previous["report_currency"] == doc["report_currency"],
@@ -327,6 +336,9 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
         # scopes are written below, without adding a parent cap over child goals.
         filled["expense_targets"] = {name: "not_assessed" for name in filled["expense_targets"]}
         filled["expense_targets"].update(expense)
+        for cycle in cycles.values():
+            for name in cycle["expense_targets"]:
+                filled["expense_targets"].setdefault(name, "not_assessed")
         if "income_category" in doc["defaults"]:
             filled["expense_targets"].setdefault(doc["defaults"]["income_category"], "not_assessed")
         for row in filled["accounts"]:
@@ -436,6 +448,8 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
         generated["expense_plans"]["spendable_cap_category_id"] = category_names[cap]
     generated["expense_plans"]["months"][month] = {"expense_subtree_targets": subtree, "expense_targets": target_values("expense_direct_targets")}
     month_config = load_yaml(destination / "month.yaml")
+    if doc.get("expense_budget_basis") == "salary_cycle":
+        generated["salary_cycle"] = {"schema": 1, "cycles": cycles, "category": cap, "source": str(budgets)}
     complete = goals.get("completeness_confirmed")
     old_complete = state.get("completeness", {})
     if complete is True:
@@ -570,6 +584,9 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
         budgets = {"schema": 1, "defaults": {}, "months": {month: {"expense_targets": {names["expense_category"]: "not_assessed"}}}}
         if old_config:
             budgets = {"schema": 1}
+            if "salary_cycle" in state:
+                public["expense_budget_basis"] = "salary_cycle"
+                budgets["salary_cycles"] = deepcopy(state["salary_cycle"]["cycles"])
             for key, doc in (("expense_plans", state["expense_plans"]), ("purpose_plans", state["purpose_plans"])):
                 for field in ("defaults", "effective_templates", "months"):
                     if field not in doc:

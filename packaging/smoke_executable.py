@@ -8,6 +8,8 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 
+import yaml
+
 
 def check(executable: Path, *, onedir: bool = False) -> None:
     source = Path(__file__).resolve().parents[1] / "examples" / "v6"
@@ -42,6 +44,14 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             return json.loads(run(*args, "--format", "json")[0])
 
         run("--version")
+        if os.name == "nt" and not onedir:
+            # The bootloader must use its own per-user runtime base, even if
+            # the caller's system TEMP settings cannot contain a directory.
+            unavailable = directory / "not-a-temporary-directory"
+            unavailable.write_text("not a directory", encoding="utf-8")
+            restricted = {**environment, "TMP": str(unavailable), "TEMP": str(unavailable)}
+            run("--version", env=restricted)
+            print("Windows one-file startup passed with unusable TEMP/TMP.", flush=True)
         if onedir:
             # A file cannot contain a new _MEI directory, even for an admin.
             # Folder startup must not rely on the one-file extraction path.
@@ -92,6 +102,27 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         direct_salary = document("report", "--config", simple["config"], "--payday", "2026-09-01",
                                  "--next-payday", "2026-10-01", "--cycle-budget", "200")
         assert direct_salary["report"]["cycle_budget"]["remaining"] == "190", direct_salary
+        payday_dir = directory / "payday"
+        shutil.copytree(Path(simple["config"]).parent, payday_dir)
+        payday_config = payday_dir / "config.yml"
+        profile = yaml.safe_load(payday_config.read_text(encoding="utf-8"))
+        profile["expense_budget_basis"] = "salary_cycle"
+        payday_config.write_text(yaml.safe_dump(profile, allow_unicode=True), encoding="utf-8")
+        plans_path = payday_dir / "budgets.yml"
+        plans = yaml.safe_load(plans_path.read_text(encoding="utf-8"))
+        layers = [plans.get("defaults", {}), *plans.get("months", {}).values(), *plans.get("effective_templates", {}).values()]
+        for layer in layers:
+            layer.pop("expense_targets", None)
+            layer.pop("expense_direct_targets", None)
+        category = profile["defaults"]["expense_category"]
+        plans["salary_cycles"] = {day: {"expense_targets": {category: "100"}}
+                                  for day in ("2026-09-02", "2026-10-02")}
+        plans_path.write_text(yaml.safe_dump(plans, allow_unicode=True), encoding="utf-8")
+        payday_month = document("--config", payday_config)
+        assert payday_month["status"] == "CERTIFIED_SCOPED", payday_month
+        assert payday_month["report"]["max_spendable"]["max_spendable"] == "90", payday_month
+        saved_cycle = document("report", "--config", payday_config, "--cycle", "2026-09-02")
+        assert saved_cycle["report"]["cycle_budget"]["remaining"] == "90", saved_cycle
         # Included importer files can put a real recharge behind a payment by
         # line number. Only an explicit cash-order declaration resolves it.
         (directory / "order-main.bean").write_text(

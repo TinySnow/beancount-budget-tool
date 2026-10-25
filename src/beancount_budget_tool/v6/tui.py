@@ -1065,6 +1065,17 @@ def _select_salary_cycle(stdscr, browser: ReportBrowser):
     if browser.help:
         return
     try:
+        choices, current = browser.configured_cycle_choices() if hasattr(browser, "configured_cycle_choices") else ([], None)
+        if choices:
+            value = _read_field(stdscr, "查看已保存发薪周期",
+                                ["日期和额度来自 budgets.yml，无需每次重填。",
+                                 *[f"{start}：{label}" for start, label in choices],
+                                 "含本次发薪日，不含下一发薪日；末周期统计至 config.yml 默认月份末。"],
+                                "发薪日 YYYY-MM-DD：", current)
+            if value is not None:
+                browser.select_saved_cycle(value.strip())
+                browser.refresh()
+            return
         from .project import _metadata
         from ..tools.v6_next_month import _next
         month, _ = _metadata(browser.config)

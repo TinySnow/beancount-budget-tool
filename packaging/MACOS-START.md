@@ -57,6 +57,8 @@ cd beancount-budget-tool-macos-arm64
 
 两文件 TUI 当前没有自动 watch；保存后须按 `r`。同日明确先充值时，可在充值交易头下写 `budget-order: -1`；`tracking` 的专题支出出现在月报下方。
 
+消费上限跟发薪日走时，在 config.yml 添加 `expense_budget_basis: salary_cycle`，在 budgets.yml 的 `salary_cycles` 逐条保存实际发薪日和 expense_targets；不必另外设置自然月上限。月报依然逐月审核账务，最多能花改用当前发薪周期剩余额度与可支付资金的较小值。`w` 只选日期，不再反复填额度；详见 QUICKSTART 的周期示例。
+
 ## 升级和清理
 
 更新时替换单个 `beancount-budget-tool` 程序即可，保留账本、config.yml、budgets.yml 和保存审阅记录的 `.budget-state`。从旧 Mac 目录版升级，确认新单文件程序能运行后，可删除旧程序包及其 `_internal`；不要把账本或配置一起删掉。旧缓存很多时，退出其他预算工具窗口后执行：

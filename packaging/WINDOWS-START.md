@@ -4,7 +4,7 @@
 
 ## 下载后先试一下
 
-推荐目录包 `beancount-budget-tool-windows-x64-folder`。完整解压后，在该目录打开 PowerShell／VS Code 终端：
+可选单文件包 `beancount-budget-tool-windows-x64`，exe 可独立移动，不需要外置 `_internal`。完整解压后，在该目录打开 PowerShell／VS Code 终端：
 
 ```powershell
 .\beancount-budget-tool.exe --version
@@ -13,7 +13,9 @@
 
 虚拟例子应显示最多能花 **190 CNY**，按 `q` 退出。程序是终端工具，直接双击不会打开图形窗口。
 
-**目录版 exe 与 `_internal` 必须一起保留。** `_internal` 内是 Python 和动态库，不能删除，也不要只复制 exe。另有单文件包，其 exe 可以单独复制，但启动需要在 Temp 解包；若遇到 `Could not create temporary directory!`，使用目录包，无需一直开启管理员终端。
+新版单文件会在 `%LOCALAPPDATA%\BeancountBudgetTool\Runtime` 下自动创建本次运行的私有目录并解包依赖，正常退出清理本次目录；不再使用调用终端的 TEMP／TMP 路径。无需自己建目录或以管理员运行。
+
+另保留 `beancount-budget-tool-windows-x64-folder` 目录兼容包，只有选择这个版本时，exe 与 `_internal` 才必须一起保留。切换为单文件需要下载对应包，不能删除旧目录版的依赖来转换。此前 VS Code 的故障根因尚未确认：固定解包目录只是绕过默认 Temp 路径，不能保证权限／终端策略问题都已解决。请用普通 VS Code 终端试新版；如仍失败，保留错误和 BUILD-COMMIT.txt。
 
 ## 接入自己的账本
 
@@ -37,7 +39,7 @@
 
 修改账本 fund／budget 或两份配置后，保存并按 `r`。待审项按 `Enter` 查看完整文件与行号；`e` 保存分类／用途决定，`f` 核对本月末资料完整性，`n` 进入下一月，`m` 跳月，`x` 导出。每月仍用同一 config、budgets 和 cutover，无需复制填写表或手工编译。
 
-工资周期按 `w`，填本次和下次工资日期、可选额度；本次工资日包含，下一工资日归下一周期。工资周期额度与自然月消费目标独立。
+消费上限按发薪周期时，在 config.yml 设置 `expense_budget_basis: salary_cycle`，在 budgets.yml 的 `salary_cycles` 按实际发薪日保存 expense_targets；无需另设自然月上限。月报的最多能花使用当前周期剩余额度与已审可支付资金的较小值。`w` 直接选已保存周期；本次工资日包含，下一工资日全天归下一周期。完整示例见 QUICKSTART。
 
 同日充值实际在先，却因不同文件行号报短时负余额时，可在充值交易头下、第一条分录前写 `budget-order: -1`，保存后 `r` 重算。未填为 0；必须使用支持此字段的新版 exe。只支持不跨成本交易或自动 pad 的普通无成本交易，不自动猜先后，也不改变 Fava 的排序。完整例子见 [QUICKSTART](../QUICKSTART.md#同日先充值再付款却报负余额)。
 

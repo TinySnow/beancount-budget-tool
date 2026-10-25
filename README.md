@@ -25,9 +25,12 @@ python -m beancount_budget_tool --config budget/simple/config.yml --month 2023-0
 
 TUI：`r` 重算，`m` 跳月，`n` 下一月，`Enter` 看完整来源，`?` 看帮助。明确的 `fund` 新用途自动识别；缺少金额、用途或证据时继续待审，不把计划变成现金。
 
+消费上限可按实际发薪周期：config.yml 设置 `expense_budget_basis: salary_cycle`，budgets.yml 的 `salary_cycles` 保存日期和额度。账务仍逐月核对，最多能花取当前周期剩余额度与已审可支付资金的较小值，额度不在月初重置。TUI `w` 直接选保存的周期，CLI 可用 `report --config config.yml --cycle current`。
+
 ## 哪些文件不能删
 
 - 目录版 exe 旁边的 `_internal` 是运行依赖，必须和 exe 一起保留。
+- Windows 单文件版不需要 `_internal`，会在用户 LocalAppData 的程序专用 Runtime 目录自动解包，正常退出清理本次目录；目录兼容包仍提供。
 - `.budget-state` 中的 `reviews.json.gz` 保存已审决定、月末确认等数据，应随账本备份。
 - 新版生成的运行输入在系统临时目录，正常重算／退出后自动释放。旧缓存可退出 TUI 后运行 `clean --config config.yml` 清理；不要直接删整个状态目录。
 

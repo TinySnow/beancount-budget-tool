@@ -162,8 +162,9 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
 
 
 def render_text(outcome: dict) -> str:
+    boundary = (f"下次工资日 {outcome['next_payday']} 归下一周期；" if outcome.get("next_payday") else "下次工资日尚未登记；仅统计至查询截止日；")
     lines = [f"工资周期 {outcome['from']} 至 {outcome['through']}：{outcome['status']}",
-             f"下次工资日 {outcome['next_payday']} 归下一周期；本报告只统计周期消费及额度差。"]
+             boundary + "本报告只统计周期消费及额度差。"]
     if outcome["report"] is None:
         lines.extend(f"{row['reason_code']}：{row['detail']} [{row['source']}]" for row in outcome["review_items"])
         return "\n".join([*lines, "本次未签发周期数字，请处理待审或实现缺口后重算。"])
@@ -174,6 +175,11 @@ def render_text(outcome: dict) -> str:
         lines += [f"本周期额度 {amount(cycle['target'])}；额度剩余 {amount(cycle['remaining'])} {currency}"]
     else:
         lines += ["未指定周期额度，只统计实际消费。"]
+    for row in report.get("cycle_targets", []):
+        if row["category_id"] == cycle["category_id"]:
+            continue
+        lines.append(f"{row['category_name']}：周期额度 {amount(row['target']) if row['target'] is not None else '不考核'}；"
+                     f"净消费 {amount(row['net_spent'])}；剩余 {amount(row['remaining']) if row['remaining'] is not None else '不计算'} {currency}")
     lines += ["", "类别 | 直接净消费 | 含子类别净消费"]
     lines += [f"{row['name']} | {amount(row['direct'])} | {amount(row['subtree'])} {currency}"
               for row in report["categories"] if row["active_direct"] or row["id"] == cycle["category_id"]]
@@ -200,9 +206,10 @@ def render_csv(outcome: dict) -> str:
             for key in ("direct_gross_spent", "direct_refunded", "direct", "subtree"):
                 writer.writerow({**base, "category": row["name"], "metric": key,
                                  "value": row[key], "commodity": report["report_currency"]})
-        for key in ("target", "remaining"):
-            writer.writerow({**base, "category": report["cycle_budget"]["category_name"], "metric": "cycle_" + key,
-                "value": report["cycle_budget"][key], "commodity": report["report_currency"], "detail": report["note"]})
+        for cycle in report.get("cycle_targets", [report["cycle_budget"]]):
+            for key in ("target", "remaining"):
+                writer.writerow({**base, "category": cycle["category_name"], "metric": "cycle_" + key,
+                    "value": cycle[key], "commodity": report["report_currency"], "detail": report["note"]})
         names = {row["id"]: row["name"] for row in report["categories"]}
         for row in report["native_totals"]:
             writer.writerow({**base, "category": names.get(row["category_id"], row["category_id"]),

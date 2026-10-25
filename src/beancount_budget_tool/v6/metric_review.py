@@ -7,6 +7,7 @@ from .review_diagnostics import merge_metric_items, review_item
 
 
 SOURCES = {"实际可花": ("completeness", "as_of"),
+           "工资周期": ("salary_cycle", "cycles"),
            "消费目标": ("expense_plans", "months"),
            "用途划拨": ("purpose_plans", "months"),
            "最多能花": ("expense_plans", "spendable_cap_category_id"),
@@ -24,6 +25,8 @@ def enrich_metric_reviews(config: Path, document: dict, report: dict,
     owner_names = report.get("owner_names", {})
     for metric in pending:
         key, field = SOURCES[metric["metric"]]
+        if metric["metric"] == "最多能花" and report.get("max_spendable", {}).get("basis") == "salary_cycle":
+            key, field = "salary_cycle", "cycles"
         sidecar = (config.parent / document[key]).resolve() if key in document else None
         fallback = (yaml_key_location(sidecar, field) if sidecar and sidecar.is_file()
                     else yaml_key_location(config, key))
@@ -61,7 +64,7 @@ def enrich_metric_reviews(config: Path, document: dict, report: dict,
             # Reuse debt/valuation source causes rather than inventing a
             # second issue at the expense-plan file for the same obstacle.
             for parent in pending:
-                if parent["metric"] not in ("实际可花", "消费目标"):
+                if parent["metric"] not in ("实际可花", "消费目标", "工资周期"):
                     continue
                 for item in parent.get("review_items", []):
                     if item.get("blocking_reason_code", item["reason_code"]) in metric["reason_codes"]:

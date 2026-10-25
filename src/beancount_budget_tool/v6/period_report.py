@@ -269,6 +269,12 @@ def render_text(outcome: dict) -> str:
                  for row in report["tracking"])
     lines.append("逐月目标比较（消费按子树，划拨按用途；不累计目标差）：")
     for month in report["monthly_reports"]:
+        if month.get("salary_cycle", {}).get("report"):
+            cycle = month["salary_cycle"]
+            lines.append(f"  {month['month']} 发薪周期 {cycle['from']}；统计至 {cycle['through']}（额度不按自然月重置）")
+            for row in cycle["report"]["cycle_targets"]:
+                lines.append(f"    {row['category_name']}：周期额度 {_fmt(row['target']) if row['target'] is not None else '不考核'}，"
+                             f"净消费 {_fmt(row['net_spent'])}，剩余 {_fmt(row['remaining']) if row['remaining'] is not None else '不计算'} {currency}")
         for row in month["expense_targets"]["categories"]:
             if row["subtree_target"] is not None:
                 lines.append(f"  {month['month']} {row['name']}：目标 {_fmt(row['subtree_target'])}，消费 {_fmt(row['subtree_spent'])}，差额 {_fmt(row['subtree_remaining'])} {currency}")
@@ -326,6 +332,13 @@ def csv_rows(outcome: dict) -> list[dict]:
     currency = report["report_currency"]
     for month, source in zip(report["monthly_reports"], outcome["months"]):
         label, config = month["month"], source["config"]
+        if month.get("salary_cycle", {}).get("report"):
+            cycle = month["salary_cycle"]
+            for row in cycle["report"]["cycle_targets"]:
+                for metric in ("target", "gross_spent", "refunded", "net_spent", "remaining"):
+                    add("month_end", label, "salary_cycle", metric, row[metric], id=row["category_id"],
+                        name=row["category_name"], commodity=currency, source=config, status=row["status"],
+                        detail=f"发薪周期 {cycle['from']}；统计至 {cycle['through']}；跨月不重置，不加总周期快照。")
         for metric in EXPENSE_METRICS[:3]:
             total = sum((Fraction(row[metric]) for row in month["expense_targets"]["categories"]), Fraction(0))
             add("month", label, "expense_total", metric, exact_text(total), commodity=currency, source=config)
@@ -415,19 +428,31 @@ def main(argv=None) -> int:
     parser.add_argument("--next-payday", help="下次工资到账日 YYYY-MM-DD（归下一周期，本次不包含）")
     parser.add_argument("--cycle-budget", help="本工资周期的消费额度；省略时只统计消费，不套用月目标")
     parser.add_argument("--cycle-category", help="周期额度对应的消费类别名称或 ID；默认使用消费上限类别")
+    parser.add_argument("--cycle", help="查询 budgets.yml 已保存的发薪日 YYYY-MM-DD；current 选当前配置月份末的周期")
+    parser.add_argument("--as-of", help="已保存周期的统计截止日 YYYY-MM-DD；不含之后的交易")
     parser.add_argument("--format", choices=("text", "json", "csv"), default="text")
     parser.add_argument("--output", type=Path, help="保存到新文件；CSV 使用 UTF-8 BOM，便于 Windows 打开中文")
     args = parser.parse_args(argv)
     if not args.config and not args.project and (Path.cwd() / "config.yml").is_file():
         args.config = [Path.cwd() / "config.yml"]
     salary = any(value is not None for value in (args.payday, args.next_payday, args.cycle_budget, args.cycle_category))
+    if args.cycle and (salary or args.since or args.through) or args.as_of and not args.cycle:
+        parser.error("--cycle／--as-of 不与手填工资周期或自然月区间混用")
     if salary and (not args.payday or not args.next_payday or args.since or args.through):
         parser.error("工资周期须同时提供 --payday 和 --next-payday，不与自然月 --from／--through 混用")
     try:
         if args.output:
             require(not args.output.exists(), "PERIOD_OUTPUT_EXISTS", "输出文件已存在，请选择新文件", str(args.output))
         text_renderer, csv_renderer = render_text, render_csv
-        if salary:
+        if args.cycle:
+            from .simple_config import is_simple
+            from .salary_plan import audit_configured_cycle
+            from .salary_cycle import render_text as salary_text, render_csv as salary_csv
+            require(args.config and len(args.config) == 1 and is_simple(load_yaml(args.config[0])),
+                    "SALARY_PLAN_CONFIG_REQUIRED", "已保存工资周期请提供一份两文件入口 --config config.yml")
+            outcome = audit_configured_cycle(args.config[0], None if args.cycle == "current" else args.cycle, args.as_of)
+            text_renderer, csv_renderer = salary_text, salary_csv
+        elif salary:
             from .salary_cycle import audit_salary_cycle, select_config, render_text as salary_text, render_csv as salary_csv
             project = load_project(args.project or Path.cwd() / DEFAULT_PROJECT) if not args.config else None
             config = select_config(args.config or list(project.months.values()), args.payday, args.next_payday)
