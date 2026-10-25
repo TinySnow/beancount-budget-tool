@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
+from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.monthly_report import render_workflow_text
 from beancount_budget_tool.v6.tui import (
     ReportBrowser, _clip, _draw, _draw_browser, _put, _read_field, _report_browser, _review_layout,
@@ -122,6 +123,32 @@ class ReviewLayoutTests(unittest.TestCase):
         self.assertEqual(_review_location(r"C:\账本\month.yaml"), "位置：month.yaml")
         self.assertEqual(_review_location("/ledger/month.yaml:8"), "位置：第 8 行 · month.yaml")
         self.assertEqual(_review_location(None), "位置：未提供")
+
+    def test_multiline_error_keeps_source_position_and_amounts_readable(self):
+        error = BudgetError("H_OWNER_NEGATIVE", "主动资产用途划拨不能透支交易前余额\n"
+                            "账户：Assets:Bank-银行:中国:工商银行\n"
+                            "资金用途：额外储蓄\n"
+                            "划拨前余额：0 CNY（可划出 0 CNY）\n"
+                            "本次净划出：1200 CNY\n本次缺口：1200 CNY\n"
+                            "划拨后余额：-1200 CNY",
+                            r"C:\Users\Example\Documents\账本\2023\10\icbc.bean:51")
+        browser = ReportBrowser([Path("month.yaml")], Mock(side_effect=error), render_workflow_text)
+        browser.refresh()
+        for width in (40, 80):
+            with self.subTest(width=width):
+                screen = FakeScreen(size=(40, width))
+                _draw_browser(screen, browser)
+                body = self.body(screen)
+                text = body.replace("\n", "")
+                self.assertIn("位置：第 51 行 · icbc.bean", text)
+                self.assertLess(text.index("第 51 行"), text.index("账户："))
+                self.assertIn("资金用途：额外储蓄", text)
+                self.assertIn("划拨前余额：0 CNY（可划出 0 CNY）", text)
+                self.assertIn("本次净划出：1200 CNY", text)
+                self.assertIn("本次缺口：1200 CNY", text)
+                self.assertIn(error.source, text)
+                self.assertNotIn(r"\n", body)
+                self.assertTrue(all(sum(map(_width, value)) < width for _, _, value in screen.rows))
 
     def test_config_header_is_short_and_full_path_remains_in_help(self):
         browser = self.browser()

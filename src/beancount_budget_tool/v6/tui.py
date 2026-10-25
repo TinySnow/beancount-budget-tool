@@ -606,7 +606,9 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         subtitle = "帮助；Esc 返回"
     elif browser.error:
         lines = ["本次计算失败；旧月报已清除。修正文件后按 r 重算。",
-                 f"{browser.error.code}：{browser.error.message}", f"来源：{browser.error.source or '未提供'}"]
+                 _review_location(browser.error.source),
+                 *f"{browser.error.code}：{browser.error.message}".splitlines(),
+                 f"来源：{browser.error.source or '未提供'}"]
         subtitle = "计算失败；不显示旧数字或局部月报"
     elif browser.outcome is None:
         lines = ["正在读取当前账本与配置并运行审计。旧结果已清除，请等待。"]

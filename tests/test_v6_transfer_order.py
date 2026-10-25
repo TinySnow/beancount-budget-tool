@@ -98,6 +98,63 @@ class TransferOrderTests(unittest.TestCase):
         self.assertEqual(rows[0]["origin"], "inline")
         self.assertEqual(rows[1]["slices"][0]["owner_id"], "savings")
 
+    def test_overdraft_names_the_purpose_and_does_not_expose_internal_maps(self):
+        self.case("1200", "储蓄别名")
+        self.root.write_text(self.root.read_text(encoding="utf-8").replace("400 CNY", "2000 CNY"),
+                             encoding="utf-8")
+        opening = yaml.safe_load(self.opening.read_text(encoding="utf-8"))
+        opening["h_holdings"][1]["units"] = "1900"
+        self.save(self.opening, opening)
+        document = yaml.safe_load(self.ownership.read_text(encoding="utf-8"))
+        document["owners"].append({"id": "fund_35cacd0163c1c4625679",
+                                   "name": "额外储蓄", "aliases": ["储蓄别名"]})
+        self.save(self.ownership, document)
+        with self.assertRaises(BudgetError) as caught:
+            self.owned()
+        error = caught.exception
+        self.assertEqual(error.code, "H_OWNER_NEGATIVE")
+        self.assertIn("账户：Assets:Mixed", error.message)
+        self.assertIn("资金用途：额外储蓄", error.message)
+        self.assertIn("划拨前余额：0 CNY（可划出 0 CNY）", error.message)
+        self.assertIn("本次净划出：1200 CNY", error.message)
+        self.assertIn("本次缺口：1200 CNY", error.message)
+        self.assertIn("划拨后余额：-1200 CNY", error.message)
+        for internal in ("fund_", "Fraction", "before=", "after=", "储蓄别名"):
+            self.assertNotIn(internal, str(error))
+        line = self.root.read_text(encoding="utf-8").splitlines().index('  Assets:Mixed -1200 CNY') + 1
+        self.assertEqual(error.source, f"{self.root.resolve()}:{line}")
+
+    def test_overdraft_shows_exact_decimal_balance_and_only_the_missing_amount(self):
+        self.case("150.5", "投资")
+        document = yaml.safe_load(self.opening.read_text(encoding="utf-8"))
+        document["h_holdings"][0]["units"] = "100.25"
+        document["h_holdings"][1]["units"] = "299.75"
+        self.save(self.opening, document)
+        with self.assertRaises(BudgetError) as caught:
+            self.owned()
+        text = caught.exception.message
+        self.assertIn("资金用途：投资", text)
+        self.assertIn("划拨前余额：100.25 CNY（可划出 100.25 CNY）", text)
+        self.assertIn("本次净划出：150.5 CNY", text)
+        self.assertIn("本次缺口：50.25 CNY", text)
+        self.assertIn("划拨后余额：-50.25 CNY", text)
+        self.assertNotIn("资金用途：储蓄", text)
+
+    def test_split_overdraft_lists_every_insufficient_purpose(self):
+        self.case("200", "投资:150,额外储蓄:50")
+        document = yaml.safe_load(self.ownership.read_text(encoding="utf-8"))
+        document["owners"].append({"id": "extra_savings", "name": "额外储蓄", "aliases": []})
+        self.save(self.ownership, document)
+        with self.assertRaises(BudgetError) as caught:
+            self.owned()
+        text = caught.exception.message
+        self.assertIn("资金用途：投资", text)
+        self.assertIn("划拨前余额：100 CNY", text)
+        self.assertIn("资金用途：额外储蓄", text)
+        self.assertIn("划拨前余额：0 CNY", text)
+        self.assertNotIn("资金用途：储蓄", text)
+        self.assertEqual(text.count("本次缺口：50 CNY"), 2)
+
     def test_public_default_still_requires_a_choice(self):
         self.case(ordered=False)
         self.assertEqual({row["reason_code"] for row in self.owned()["missing_h_ownership"]},
@@ -139,6 +196,10 @@ class TransferOrderTests(unittest.TestCase):
         with self.assertRaises(BudgetError) as caught:
             self.owned()
         self.assertEqual(caught.exception.code, "H_OWNER_NEGATIVE")
+        self.assertIn("划拨前余额：-20 CNY（可划出 0 CNY）", caught.exception.message)
+        self.assertIn("本次净划出：150 CNY", caught.exception.message)
+        self.assertIn("本次缺口：150 CNY", caught.exception.message)
+        self.assertIn("划拨后余额：-170 CNY", caught.exception.message)
 
     def test_invalid_and_duplicate_rules_have_yaml_locations(self):
         self.case()

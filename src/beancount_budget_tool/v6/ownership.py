@@ -17,7 +17,7 @@ import re
 from beancount.core import data
 
 from ..errors import require
-from ..exact import exact, exact_text
+from ..exact import amount_text, exact, exact_text
 from ..financial import load_financial
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .accounts import _lot, audit_accounts
@@ -67,6 +67,34 @@ def _signed_units(value: object, source: str) -> Fraction:
     return Fraction(value)
 
 
+def _require_transfer_balance(coordinate: tuple[str, str, str],
+                              before: dict[str, Fraction], after: dict[str, Fraction],
+                              owner_names: dict[str, str], source: str) -> None:
+    # Consumption may leave a negative purpose balance; a voluntary transfer
+    # may neither create a deficit nor deepen an existing one.
+    overdrawn = [owner for owner, amount in after.items()
+                 if amount < 0 and amount < before.get(owner, Fraction(0))]
+    if not overdrawn:
+        return
+    account, commodity, lot = coordinate
+    lines = ["主动资产用途划拨不能透支交易前余额", f"账户：{account}"]
+    if lot != f"{commodity}/no-cost":
+        lines.append(f"库存批次：{lot}")
+    for owner in overdrawn:
+        previous = before.get(owner, Fraction(0))
+        available = max(previous, Fraction(0))
+        outgoing = previous - after[owner]
+        lines.extend([
+            f"资金用途：{owner_names[owner]}",
+            f"划拨前余额：{amount_text(previous)} {commodity}（可划出 {amount_text(available)} {commodity}）",
+            f"本次净划出：{amount_text(outgoing)} {commodity}",
+            f"本次缺口：{amount_text(outgoing - available)} {commodity}",
+            f"划拨后余额：{amount_text(after[owner])} {commodity}",
+        ])
+    lines.append("请核对转出腿的 fund、此前用途分配及同日交易顺序；不会自动挪用账户内其他用途的余额。")
+    require(False, "H_OWNER_NEGATIVE", "\n".join(lines), source)
+
+
 def audit_ownership(root: Path, cutover: date, accounts: Path,
                     declarations: Path | None = None,
                     opening: Path | None = None) -> dict:
@@ -114,6 +142,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 unknown.append(record)
 
     names = {}
+    owner_names = {"-": "未指定用途"}
     claims = {}
     defaults = None
     transfer_orders = {}
@@ -134,6 +163,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             require_yaml(valid, "OWNERSHIP_DECLARATION_INVALID", "归属声明的版本或原审快照格式不匹配",
                          declarations, (field,))
         names = _owners(document["owners"], source=declarations)
+        owner_names.update({row["id"]: row["name"] for row in document["owners"]})
         ids = set(names.values())
         if "defaults" in document:
             defaults = document["defaults"]
@@ -364,11 +394,12 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                          for owner, amount in deltas.items()}
                 after.update({owner: amount for owner, amount in before.items() if owner not in after})
                 if len(entry.postings) == len(h_legs) == 2:
-                    require(all(amount >= 0 or amount >= before.get(owner, Fraction(0))
-                                for owner, amount in after.items()),
-                            "H_OWNER_NEGATIVE", "主动资产用途划拨不能透支交易前余额",
-                            f"{entry.meta.get('filename')}:{entry.meta.get('lineno')} "
-                            f"{coordinate} before={before} after={after}")
+                    outgoing = next((posting for key, posting in leg_keys.items()
+                                     if coordinates[key] == coordinate and posting.units.number < 0),
+                                    next(posting for key, posting in leg_keys.items()
+                                         if coordinates[key] == coordinate))
+                    _require_transfer_balance(coordinate, before, after, owner_names,
+                                              _source(outgoing.meta or entry.meta))
                 running[coordinate] = after
 
     compiled = [compiled_by_key[key] for key in order if key in compiled_by_key]
