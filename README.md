@@ -1,5 +1,10 @@
 # beancount-budget-tool
 
+> **分支 `dpsk/v6`**：新增 `bgbudget/` —— 单引擎预算工具（一个引擎、两种视图：轻量视图与 v6 已审月报逐行一致；
+> 完整视图实现 REQUIREMENTS 的全部语义）。推送本分支会自动构建 macOS / Linux / Windows 单文件可执行程序
+> （workflow：`.github/workflows/bgbudget-exe.yml`）。用法与边界见 [bgbudget/README.md](bgbudget/README.md)。
+
+
 从 Beancount 账本核对预算、资金用途和可花金额。当前为 v6 开发预览。
 
 日常只编辑 **`config.yml`、`budgets.yml` 和你自己的账本**。运行后得到已核对月报，或带文件、行号的待审清单。无需手工编译、维护内部 ID 或逐月创建配置。
