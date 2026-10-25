@@ -68,7 +68,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     known = []
     pending = []
 
-    def add(kind: str, event: dict, refs: list[dict], allocations: dict[str, str]) -> None:
+    def add(kind: str, event: dict, refs: list[dict], allocations: dict[str, str], *, source_refs=None) -> None:
         keys = [_key(ref) for ref in refs]
         require(len(keys) == len(set(keys)) and not (set(keys) & used_h),
                 "PURPOSE_EVENT_DOUBLE_CLAIM", "H 资产腿被多个用途边界事件使用", kind)
@@ -79,6 +79,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
             totals[owner] += Fraction(amount)
         known.append({"kind": kind, "date": event["date"],
                       "h_refs": refs, "net_allocations": allocations,
+                      **({"source_refs": source_refs} if source_refs is not None else {}),
                       **({"protocol": event} if include_evidence else {})})
 
     for event in transfers["events"]:
@@ -90,7 +91,10 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
         if event["date"][:7] != month:
             continue
         if event["status"] == "CERTIFIED":
-            add("k_event", event, [event["cash_ref"]], event["net_allocations"])
+            if event["shape"] == "zero_record":
+                add("k_event", event, [], {}, source_refs=[event["k_ref"]])
+            else:
+                add("k_event", event, [event["cash_ref"]], event["net_allocations"])
         else:
             pending.append({"kind": "k_event", "ref": event["k_ref"],
                             "reason": event["status"]})

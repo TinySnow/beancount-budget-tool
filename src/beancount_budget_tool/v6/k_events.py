@@ -23,7 +23,7 @@ from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_transaction_refs
 from .inline_amounts import parse_inline_amounts
-from .native_flows import native_book_redemption
+from .native_flows import native_book_redemption, zero_native_record
 from .ownership import _owners, audit_ownership
 from .provenance import validate_event_declaration
 from .source import scan_v6_source
@@ -40,13 +40,27 @@ def _number(value: object, path: Path, keys: tuple) -> Fraction:
     return Fraction(value)
 
 
-def _redemption_claim(candidate: dict, raw_fund: str, cash_claim: dict,
-                       names: dict[str, str], source: str) -> dict | None:
-    parts = parse_inline_amounts(raw_fund, Fraction(candidate["signed_k_units"]), source,
-                                 known_names=set(names), code="K_EVENT_UNITS_MISMATCH")
+def _inline_parts(raw_fund: str, amount: Fraction, names: dict[str, str], source: str) -> list[tuple[str, Fraction]]:
+    parts = parse_inline_amounts(raw_fund, amount, source, known_names=set(names),
+                                code="K_EVENT_UNITS_MISMATCH")
     for name, units in parts:
         require(name == "-" or name in names, "OWNER_UNKNOWN", f"行内 fund 用途未登记：{name}", source)
-    k_owners = {"-" if name == "-" else names[name] for name, units in parts}
+    return [("-" if name == "-" else names[name], units) for name, units in parts]
+
+
+def _zero_claim(candidate: dict, raw_fund: str | None, names: dict[str, str], source: str) -> dict:
+    parts = _inline_parts(raw_fund, Fraction(0), names, source) if raw_fund is not None else []
+    return {"reason": "原交易所有分录均为零金额；仅保留用途标注，不推断未记录的份额或价值",
+            "net_allocations": {}, "slices": [
+                {"id": "zero_" + sha256(_key(candidate["k_ref"]).encode()).hexdigest()[:24] + f"_{index}",
+                 "k_owner_id": owner, "signed_k_units": "0", "boundary_role": "no_monetary_effect"}
+                for index, (owner, units) in enumerate(parts)]}
+
+
+def _redemption_claim(candidate: dict, raw_fund: str, cash_claim: dict,
+                       names: dict[str, str], source: str) -> dict | None:
+    parts = _inline_parts(raw_fund, Fraction(candidate["signed_k_units"]), names, source)
+    k_owners = {owner for owner, units in parts}
     cash_owners = {part["owner_id"] for part in cash_claim["slices"]}
     if len(k_owners) != 1 or k_owners != cash_owners:
         return None  # A source/destination remap needs a separate gain/loss policy.
@@ -61,11 +75,12 @@ def _redemption_claim(candidate: dict, raw_fund: str, cash_claim: dict,
 
 def audit_k_events(root: Path, cutover: date, accounts: Path,
                    ownership: Path, declarations: Path | None = None) -> dict:
-    """Bind each approved K intent to exactly one same-transaction H cash leg.
+    """Audit K cash events and source-bound, non-monetary zero records.
 
     A reviewed event remains pending until the H cash leg has matching owner
     slices. This prevents an approved K intention from silently rewriting
     actual cash ownership or counting a budget allocation twice.
+    All-zero records retain their labels without inventing a cash leg or value.
     """
     scan_v6_source(root, cutover)
     account_audit = audit_accounts(root, cutover, accounts)
@@ -110,8 +125,11 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
             amount = exact(posting.units.number)
             reason = None
             cash = None
+            zero_record = zero_native_record(fin, entry, report_currency)
             redemption = native_book_redemption(fin, entry, modes)
-            if (redemption is not None and redemption.book is posting and
+            if zero_record:
+                pass  # No H cash counterpart exists or is needed for a zero record.
+            elif (redemption is not None and redemption.book is posting and
                     posting.units.currency == report_currency):
                 cash = redemption.cash
             elif len(entry.postings) != 2 or len(k_postings) != 1:
@@ -135,13 +153,20 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
                          "date": entry.date.isoformat(),
                          "signed_k_units": exact_text(amount),
                          "commodity": posting.units.currency,
-                         "kind": "subscription" if amount > 0 else "redemption" if amount < 0 else None,
+                         "kind": "zero_record" if zero_record else
+                                 "subscription" if amount > 0 else "redemption" if amount < 0 else None,
                          "cash_ref": facts.for_posting(cash).as_dict() if cash is not None and
                                      reason is None else None,
                          "cash_account": cash.account if cash is not None and reason is None else None,
-                         "shape": ("book_redemption_income" if redemption is not None and reason is None else
+                         "shape": ("zero_record" if zero_record else
+                                   "book_redemption_income" if redemption is not None and reason is None else
                                    "simple_cash" if reason is None else "unsupported"),
                          "reason_code": reason}
+            if zero_record:
+                candidate.update({"protocol": "zero_book_record_v1",
+                                  "zero_refs": [facts.for_posting(p).as_dict() for p in entry.postings],
+                                  "monetary_change": "0", "share_quantity": None, "market_value": None,
+                                  "note": "零金额不代表基金份额或价值为零；实际份额和价值未记录"})
             if candidate["shape"] == "book_redemption_income":
                 candidate.update({"income_ref": facts.for_posting(redemption.income).as_dict(),
                                   "signed_income_units": exact_text(-redemption.gain),
@@ -260,11 +285,9 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
     def inline_claim(key: str, cash_claim: dict) -> dict:
         candidate = candidates[key]
         amount = Fraction(candidate["signed_k_units"])
-        parsed = parse_inline_amounts(inline_funds[key], amount, source_locations[key],
-                                      known_names=set(names), code="K_EVENT_UNITS_MISMATCH")
+        parsed = _inline_parts(inline_funds[key], amount, names, source_locations[key])
         k_remaining: dict[str, Fraction] = {}
-        for name, units in parsed:
-            owner = "-" if name == "-" else names[name]
+        for owner, units in parsed:
             k_remaining[owner] = k_remaining.get(owner, Fraction(0)) + abs(units)
         cash_remaining: dict[str, Fraction] = {}
         for part in cash_claim["slices"]:
@@ -330,7 +353,10 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
             cash_claim = cash_claims.get(_key(candidate["cash_ref"]))
             if cash_claim is not None:
                 claim = inline_claim(key, cash_claim)
-        if candidate["shape"] not in ("simple_cash", "book_redemption_income"):
+        if candidate["shape"] == "zero_record":
+            claim = _zero_claim(candidate, inline_funds.get(key), names, source_locations[key])
+            state, codes = "CERTIFIED", []
+        elif candidate["shape"] not in ("simple_cash", "book_redemption_income"):
             state, codes = "UNSUPPORTED", ["K_EVENT_SHAPE_UNSUPPORTED"]
         elif purpose_unsupported:
             state, codes = "UNSUPPORTED", ["K_REDEMPTION_PURPOSE_UNSUPPORTED"]

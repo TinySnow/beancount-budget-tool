@@ -33,6 +33,14 @@ class NativeBookRedemption:
     gain: Fraction
 
 
+def zero_native_record(fin, entry, currency: str) -> bool:
+    """Prove only the absence of recorded monetary movement, never share value."""
+    return (isinstance(entry, data.Transaction) and bool(entry.postings) and all(
+        exact(p.units.number) == 0 and p.units.currency == currency and
+        p.cost is None and p.price is None and fin.raw_price(p)[0] == "none"
+        for p in entry.postings))
+
+
 def native_book_redemption(fin, entry, modes: dict | None = None) -> NativeBookRedemption | None:
     """Prove cash receipt = book-flow principal + signed income, without lots.
 

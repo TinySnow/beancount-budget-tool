@@ -116,10 +116,13 @@ def audit_k_book_purposes(root: Path, cutover: date, as_of: date,
                 event["reason_codes"][0], sources[_key(event["k_ref"])], ref=event["k_ref"],
                 account=event["k_account"], commodity=event["commodity"],
                 signed_units=event["signed_k_units"], blocking_reason_code="K_BOOK_PURPOSE_PENDING"))
+    zero_records = [event for event in events_audit["events"]
+                    if event["shape"] == "zero_record" and event["date"] <= as_of.isoformat()]
     return {"mode": "v6_k_book_purpose_changes", "cutover": cutover.isoformat(),
             "as_of": as_of.isoformat(), "ledger_snapshot": fin.digest,
             "status": "CERTIFIED" if not pending and
             account_audit["review_state"] == "complete" else "NEEDS_REVIEW",
             "rows": rows, "pending_accounts": [row["account"] for row in pending],
             "review_items": review_items,
+            **({"zero_value_records": zero_records} if zero_records else {}),
             "note": "逐 K 账户的签约申赎账面数与 cutover 后用途变动；不代表基金份额、市值、可赎回额或真实持有余额，且不与 H 资产合计"}

@@ -102,14 +102,14 @@ def project_transactions(fin, month: str, expense: dict, purpose: dict, pools: d
             record["postings"].append(part)
         rows.append(record)
     for event in funds["events"]:
-        matched = [by_posting[_key(ref)] for ref in event["h_refs"]]
+        matched = [by_posting[_key(ref)] for ref in event["h_refs"] or event.get("source_refs", [])]
         require(bool(matched) and all(row is matched[0] for row in matched),
                 "TRANSACTION_DETAILS_MISMATCH", "用途事件不能跨交易拼接到详情")
         record = matched[0]
         record["purpose_events"].append(event)
         for ident, amount in event["net_allocations"].items():
             record["net_allocations"][ident] = exact_text(Fraction(record["net_allocations"].get(ident, "0")) + Fraction(amount))
-        if event["kind"] == "k_event":
+        if event["kind"] == "k_event" and event["protocol"]["slices"]:
             protocol = event["protocol"]
             leg = next(part for part in record["postings"] if part["ref"] == protocol["k_ref"])
             leg["k_purpose"] = {"basis": "K_book_flow_not_holdings_or_market_value", "slices": [
@@ -183,6 +183,8 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
             lines.append(f"赎回核对：实收 {amount_text(protocol['signed_cash_units'])} {currency}＝账面本金 "
                          f"{amount_text(protocol['principal_book_value'])} {currency}＋损益 "
                          f"{amount_text(protocol['income_value'])} {currency}")
+        elif event["kind"] == "k_event" and protocol.get("shape") == "zero_record":
+            lines.append("K 零金额记录：预算变动和正式划拨均为 0；实际份额与基金价值未记录，不能由 0 元推断。")
     allocations = record["net_allocations"]
     lines.append("本笔正式净划拨 G：" + ("，".join(
         f"{owner_names[ident]} {amount_text(value)} {record['report_currency']}" for ident, value in allocations.items()) if allocations else "0（按已审用途事件）"))

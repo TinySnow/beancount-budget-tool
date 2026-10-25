@@ -12,7 +12,7 @@ from beancount_budget_tool.financial import booked_through
 from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
 from beancount_budget_tool.tools.v6_propose_benefit_groups import propose
 from beancount_budget_tool.v6.k_events import audit_k_events
-from beancount_budget_tool.v6.monthly_report import audit_month_workflow
+from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_text
 from beancount_budget_tool.v6.review_diagnostics import review_item
 from beancount_budget_tool.v6.spending import audit_monthly_spending
 from beancount_budget_tool.v6.transaction_details import render_transaction
@@ -82,6 +82,93 @@ class NativeFlowTests(unittest.TestCase):
         spending = audit_monthly_spending(self.ledger, date(2026, 9, 1), "2026-09",
                                           self.config.parent / document["classifications"], "CNY")
         return spending["metrics"]["income_supplement"]["report_total"]
+
+    def zero_records(self, fund="额外储蓄", units="0.00", income="-0.00", extra=""):
+        source = '2026-08-01 open Income:Gift\n'
+        for ident in ("gift-a", "gift-b"):
+            source += ('2026-09-12 * "基金平台" "活动赠送"\n'
+                       f'  orderId: "{ident}"\n  Assets:Book {units} CNY\n' +
+                       (f'    fund: "{fund}"\n' if fund else '') +
+                       f'  Income:Gift {income} CNY\n' + extra)
+        return source
+
+    def test_zero_k_gifts_preserve_both_sources_without_inventing_cash_shares_or_value(self):
+        report = self.report(self.zero_records())
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "150")
+        self.assertEqual(report["max_spendable"]["max_spendable"], "150")
+        self.assertEqual(self.income_total(), "0")
+        records = report["k_book_purposes"]["zero_value_records"]
+        self.assertEqual(len(records), 2)
+        self.assertNotEqual(records[0]["k_ref"], records[1]["k_ref"])
+        self.assertTrue(all(row["cash_ref"] is None and row["share_quantity"] is None and
+                            row["market_value"] is None and row["monetary_change"] == "0" for row in records))
+        self.assertTrue(all(row["kind"] == row["shape"] == "zero_record" for row in records))
+        self.assertTrue(all(len(row["zero_refs"]) == 2 for row in records))
+        self.assertIn("保留 2 条 K 零金额记录", render_text(report))
+        for tx in report["transactions"]["rows"]:
+            event = tx["purpose_events"][0]
+            self.assertEqual(event["h_refs"], [])
+            self.assertEqual(event["source_refs"], [tx["postings"][0]["ref"]])
+            self.assertEqual(tx["postings"][0]["k_purpose"]["slices"][0]["name"], "额外储蓄")
+            detail = "\n".join(render_transaction(tx, report["owner_names"]))
+            self.assertIn("实际份额与基金价值未记录", detail)
+            self.assertIn('orderId: "gift-', detail)
+
+    def test_zero_k_record_without_fund_needs_no_monetary_ownership_decision(self):
+        report = self.report(self.zero_records(fund=None))
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "150")
+        self.assertTrue(all(row["slices"] == [] for row in report["k_book_purposes"]["zero_value_records"]))
+
+    def test_all_zero_record_can_include_extra_zero_postings(self):
+        report = self.report(self.zero_records(extra='  Expenses:Food 0.00 CNY\n'))
+        self.assertEqual(len(report["k_book_purposes"]["zero_value_records"]), 2)
+        self.assertTrue(all(len(row["zero_refs"]) == 3 for row in report["k_book_purposes"]["zero_value_records"]))
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "150")
+
+    def test_tiny_nonzero_k_gift_is_not_rounded_to_a_zero_record(self):
+        self.configure(self.zero_records(units="0.00000001", income="-0.00000001"))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIsNone(outcome["report"])
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_zero_k_leg_cannot_hide_nonzero_income_and_cash(self):
+        self.configure(self.zero_records(income="-1", extra='  Assets:Cash 1 CNY\n    fund: "自由资金"\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIsNone(outcome["report"])
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_zero_with_an_explicit_price_is_not_an_unpriced_zero_record(self):
+        self.configure(self.zero_records(income="-0.00").replace('Income:Gift -0.00 CNY', 'Income:Gift -0.00 CNY @ 1 CNY'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_future_zero_records_do_not_enter_the_earlier_month(self):
+        self.configure(self.zero_records())
+        before = audit_month_workflow(self.config)["report"]
+        future = self.zero_records().replace('2026-08-01 open Income:Gift\n', '').replace(
+            '2026-09-12', '2026-10-12').replace('gift-', 'future-')
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + future, encoding="utf-8")
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(len(outcome["report"]["k_book_purposes"]["zero_value_records"]), 2)
+        self.assertEqual(outcome["report"]["actual_spendable"]["actual_spendable"],
+                         before["actual_spendable"]["actual_spendable"])
+
+    def test_zero_fund_annotations_still_validate_registered_names(self):
+        self.configure(self.zero_records())
+        doc = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        path = self.config.parent / doc["ownership"]
+        owners = yaml.safe_load(path.read_text(encoding="utf-8"))
+        owners["owners"] = [row for row in owners["owners"] if row["name"] != "额外储蓄"]
+        path.write_text(yaml.safe_dump(owners, allow_unicode=True), encoding="utf-8")
+        with self.assertRaises(BudgetError) as caught:
+            audit_month_workflow(self.config)
+        self.assertEqual(caught.exception.code, "OWNER_UNKNOWN")
+        self.assertIn("额外储蓄", caught.exception.message)
+        self.assertTrue(caught.exception.source.startswith(str(self.ledger)))
 
     def test_book_redemption_gain_certifies_without_recounting_principal_or_allocations(self):
         report = self.report(self.redemption())

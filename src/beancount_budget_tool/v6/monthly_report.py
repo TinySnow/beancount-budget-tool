@@ -527,6 +527,10 @@ def render_text(report: dict) -> str:
                 name = owner_names.get(part["owner_id"], part["owner_id"])
                 lines.append(f"    cutover 后已审 {name} 申赎净变动 "
                              f"{amount(part['signed_change'])} {row['commodity']}")
+        zero_records = report["k_book_purposes"].get("zero_value_records", [])
+        if zero_records:
+            lines.append(f"  截至报告日保留 {len(zero_records)} 条 K 零金额记录；不改变预算、现金或 G，"
+                         "实际份额与价值未记录，不能把 0 元当作价值为零。")
     if "account_purposes" in report:
         lines += ["", "其他 H 资产账户的用途份额（原币）"]
         for row in report["account_purposes"].get("negative_purpose_positions", []):
