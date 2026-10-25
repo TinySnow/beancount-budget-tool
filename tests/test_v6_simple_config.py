@@ -188,8 +188,10 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
 
     def test_entire_simple_report_shares_one_capture_and_final_verification(self):
         self.migrate()
-        with patch.object(financial, "_load_financial_uncached", wraps=financial._load_financial_uncached) as load:
+        with patch.object(financial, "_load_financial_uncached", wraps=financial._load_financial_uncached) as load, \
+             patch("beancount_budget_tool.v6.review_queue.Path", wraps=Path) as source_paths:
             first = audit_simple(self.config, include_transactions=True)
+        source_paths.assert_not_called()  # Canonical source locations come from the frozen input.
         self.assertEqual(first["status"], "CERTIFIED_SCOPED")
         self.assertEqual(load.call_count, 2)
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +

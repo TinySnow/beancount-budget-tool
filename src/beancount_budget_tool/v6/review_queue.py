@@ -109,7 +109,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                 meta = posting.meta or entry.meta
                 filename = meta.get("filename")
                 lineno = meta.get("lineno")
-                source = (f"{Path(filename).resolve()}:{lineno}"
+                source = (f"{fin._source(filename).path}:{lineno}"
                           if isinstance(filename, str) and isinstance(lineno, int)
                           else None)
                 source_by_ref[key] = source

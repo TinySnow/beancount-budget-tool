@@ -9,9 +9,11 @@ import unittest
 from unittest.mock import patch
 
 from beancount.core import data
+from beancount.parser import parser
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.exact import Fraction
+from beancount_budget_tool.refs import ReferenceIndex
 from beancount_budget_tool.financial import (
     FinancialInput, SourceFile, frozen_financial, load_financial,
 )
@@ -26,6 +28,77 @@ LEDGER = '''2026-09-01 open Assets:Bank
 
 
 class FinancialLexicalCacheTests(unittest.TestCase):
+    def test_canonical_reference_filenames_do_not_repeat_filesystem_resolution(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text(LEDGER, encoding="utf-8")
+            fin = load_financial(root)
+            with patch("beancount_budget_tool.refs.Path", wraps=Path) as paths:
+                index = ReferenceIndex(fin)
+            paths.assert_not_called()
+            postings = next(entry for entry in fin.entries if isinstance(entry, data.Transaction)).postings
+            self.assertEqual(len(index.by_posting), len(postings))
+
+    def test_noncanonical_reference_filename_resolves_once_and_keeps_the_same_refs(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder).resolve() / "main.bean"
+            root.write_text(LEDGER, encoding="utf-8")
+            fin = load_financial(root)
+            expected = ReferenceIndex(fin)
+            from copy import deepcopy
+            entries = deepcopy(fin.entries)
+            alias = str(root.parent) + "/./main.bean"
+            for entry in entries:
+                if isinstance(entry, data.Transaction):
+                    entry.meta["filename"] = alias
+                    for posting in entry.postings:
+                        posting.meta["filename"] = alias
+            aliased = replace(fin, entries=entries)
+            with patch("beancount_budget_tool.refs.Path", wraps=Path) as paths:
+                actual = ReferenceIndex(aliased)
+            self.assertEqual(paths.call_count, 1)
+            self.assertEqual(set(actual.by_ref), set(expected.by_ref))
+            self.assertEqual(set(actual.by_txref), set(expected.by_txref))
+
+    def test_raw_positions_are_parsed_once_for_bounded_and_complete_views(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text(LEDGER.replace("exchange", "换汇").replace("\n", "\r\n"), encoding="utf-8")
+            fin = load_financial(root)
+            with patch("beancount_budget_tool.financial.parser.parse_string", wraps=parser.parse_string) as parse:
+                ReferenceIndex(fin)
+                ReferenceIndex(replace(fin, entries=fin.entries[:2], reference_entries=fin.entries))
+            self.assertEqual(parse.call_count, len(fin.sources))
+            raw, errors, _ = parser.parse_file(str(root))
+            self.assertEqual(errors, [])
+            expected = {entry.meta["lineno"]: tuple(posting.meta["lineno"] for posting in entry.postings)
+                        for entry in raw if isinstance(entry, data.Transaction)}
+            self.assertEqual(fin.sources[root.resolve()]._posting_lines, expected)
+
+    def test_source_change_after_cached_raw_positions_still_blocks_the_report(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text(LEDGER, encoding="utf-8")
+            with self.assertRaises(BudgetError) as caught:
+                with frozen_financial(root) as fin:
+                    original = set(ReferenceIndex(fin).by_ref)
+                    root.write_text("; changed during the report\n" + LEDGER, encoding="utf-8")
+                    self.assertEqual(set(ReferenceIndex(fin).by_ref), original)
+            self.assertEqual(caught.exception.code, "INPUT_CHANGED")
+
+    def test_raw_position_cache_stays_frozen_and_a_reload_observes_new_lines(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text(LEDGER, encoding="utf-8")
+            first = load_financial(root)
+            old_positions = first.sources[root.resolve()]._posting_lines
+            expected = set(ReferenceIndex(first).by_ref)
+            root.write_text("; inserted outside the transaction\n" + LEDGER, encoding="utf-8")
+            second = load_financial(root)
+            self.assertNotEqual(old_positions, second.sources[root.resolve()]._posting_lines)
+            self.assertIs(first.sources[root.resolve()]._posting_lines, old_positions)
+            self.assertEqual(set(ReferenceIndex(second).by_ref), expected)
+
     def test_repeated_source_reads_reuse_lines_and_canonical_filename(self):
         path = Path("/frozen/main.bean")
         source = SourceFile(path, LEDGER, "digest")

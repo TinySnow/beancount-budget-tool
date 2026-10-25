@@ -19,6 +19,8 @@ import re
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from beancount import __version__ as BEANCOUNT_VERSION, loader
+from beancount.core import data
+from beancount.parser import parser
 
 from .errors import BudgetError, require
 from .exact import Fraction, exact
@@ -46,6 +48,14 @@ class SourceFile:
     @cached_property
     def lines(self) -> Tuple[str, ...]:
         return tuple(self.text.splitlines())
+
+    @cached_property
+    def _posting_lines(self) -> Dict[int, Tuple[int, ...]]:
+        """Official raw syntax positions shared by views of this frozen text."""
+        entries, errors, _ = parser.parse_string(self.text, report_filename=str(self.path))
+        require(not errors, "CLAIM_REF_INVALID", "来源文件无法由官方 parser 唯一识别", str(self.path))
+        return {entry.meta["lineno"]: tuple(posting.meta["lineno"] for posting in entry.postings)
+                for entry in entries if isinstance(entry, data.Transaction)}
 
 
 @dataclass(frozen=True)

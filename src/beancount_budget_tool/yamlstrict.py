@@ -9,7 +9,9 @@ import yaml
 from .errors import BudgetError
 
 
-class StrictLoader(yaml.SafeLoader):
+# Both loaders use the same safe constructors and strict mapping checks.
+# Wheels normally include libyaml; pure-Python installations keep the fallback.
+class StrictLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
     pass
 
 

@@ -10,7 +10,7 @@ import yaml
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.yamlstrict import (
-    _location_tree, load_yaml, require_quoted_month_keys, yaml_path_location,
+    _location_tree, _mapping, StrictLoader, load_yaml, require_quoted_month_keys, yaml_path_location,
 )
 
 
@@ -22,6 +22,37 @@ class YamlLocationCacheTests(unittest.TestCase):
         self.path = self.base / "first.yaml"
         _location_tree.cache_clear()
         self.addCleanup(_location_tree.cache_clear)
+
+    def strict_loaders(self):
+        class PythonStrictLoader(yaml.SafeLoader):
+            pass
+        PythonStrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
+        return (StrictLoader, PythonStrictLoader)
+
+    def test_accelerated_and_python_loaders_preserve_values_and_fresh_copies(self):
+        text = "\ufeffschema: 1\n名称: '生活费'\nflags: [true, false, null]\namount: '0.000000000000000001'\ndate: 2023-07-01\n"
+        self.path.write_text(text, encoding="utf-8")
+        documents = []
+        for loader in self.strict_loaders():
+            with patch("beancount_budget_tool.yamlstrict.StrictLoader", loader):
+                document = load_yaml(self.path)
+                documents.append(document)
+                document["flags"].append("caller modification")
+                self.assertEqual(load_yaml(self.path)["flags"], [True, False, None])
+        self.assertEqual(documents[0], documents[1])
+
+    def test_accelerated_and_python_loaders_keep_duplicate_and_error_positions(self):
+        for text in ("outer:\n  item: one\n  item: two\n", "items: [\n",
+                     "? [bad, key]\n: value\n", "bad: !!python/object:builtins.object {}\n"):
+            with self.subTest(text=text):
+                self.path.write_text(text, encoding="utf-8")
+                errors = []
+                for loader in self.strict_loaders():
+                    with patch("beancount_budget_tool.yamlstrict.StrictLoader", loader):
+                        with self.assertRaises(BudgetError) as caught:
+                            load_yaml(self.path)
+                        errors.append((caught.exception.code, caught.exception.source))
+                self.assertEqual(errors[0], errors[1])
 
     def test_repeated_lookup_reuses_syntax_but_reports_each_callers_path(self):
         text = "items:\n  - name: one\n    amount: '10'\n"

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Tuple
 
 from beancount.core import data
-from beancount.parser import parser
 
 from .errors import BudgetError, require
 from .financial import FinancialInput
@@ -99,14 +98,18 @@ class ReferenceIndex:
         self.by_txref: Dict[TransactionRef, data.Transaction] = {}
         self.by_posting: Dict[int, BookedRef] = {}
         self.by_ref: Dict[BookedRef, data.Posting] = {}
+        # Loader filenames normally already match the frozen source names.
+        # Resolve only unfamiliar aliases, once per index rather than per posting.
+        source_paths = {str(path): path for path in fin.sources}
+
+        def source_path(filename: str) -> Path:
+            if filename not in source_paths:
+                source_paths[filename] = Path(filename).resolve()
+            return source_paths[filename]
+
         raw_postings: Dict[Tuple[Path, int], Tuple[int, ...]] = {}
-        for path in fin.sources:
-            raw_entries, errors, _ = parser.parse_file(str(path))
-            require(not errors, "CLAIM_REF_INVALID", "来源文件无法由官方 parser 唯一识别", str(path))
-            for raw in raw_entries:
-                if not isinstance(raw, data.Transaction):
-                    continue
-                raw_postings[(path, raw.meta["lineno"])] = tuple(p.meta["lineno"] for p in raw.postings)
+        for path, source in fin.sources.items():
+            raw_postings.update({(path, lineno): lines for lineno, lines in source._posting_lines.items()})
         transactions = [entry for entry in fin.entries if isinstance(entry, data.Transaction)]
         transactions.sort(key=lambda tx: (str(tx.meta.get("filename", "")), tx.meta.get("lineno", 0)))
         occurrence: Dict[Tuple[str, str], int] = {}
@@ -114,7 +117,7 @@ class ReferenceIndex:
             filename, lineno = tx.meta.get("filename"), tx.meta.get("lineno")
             if not isinstance(filename, str) or not isinstance(lineno, int):
                 continue  # A generated transaction requires GeneratedRef, not a guessed RawTxnRef.
-            path = Path(filename).resolve()
+            path = source_path(filename)
             if path not in fin.sources:
                 continue
             raw_text = fin.transaction_text(filename, lineno)
@@ -134,7 +137,7 @@ class ReferenceIndex:
             for posting in tx.postings:
                 meta = posting.meta or {}
                 line = meta.get("lineno")
-                if not isinstance(meta.get("filename"), str) or Path(meta["filename"]).resolve() != path or line not in raw_lines:
+                if not isinstance(meta.get("filename"), str) or source_path(meta["filename"]) != path or line not in raw_lines:
                     continue  # Refuse during claim lookup; never synthesize an identity.
                 child_ordinals[line] = child_ordinals.get(line, 0) + 1
                 ref = BookedRef(relative, tx_hash, occurrence[group], raw_lines.index(line) + 1,
