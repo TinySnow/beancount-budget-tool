@@ -13,7 +13,9 @@
 
 “关于本机”可查看芯片；终端 `uname -m` 原生环境一般分别显示 arm64／x86_64。
 
-下载的 Artifact 是 zip，先解压，再解压里面的 `.tar.gz`，得到完整程序文件夹。保留 `.tar.gz` 内的可执行权限和符号链接；程序与 `_internal` 必须一起移动和保留。
+下载的 Artifact 是 zip，先解压，再解压里面的 `.tar.gz`。其中 `beancount-budget-tool` 是**单文件程序**，可以单独移动和运行，没有外置 `_internal`。其他文件是说明、许可证和虚拟示例，不是程序运行依赖；使用真实账本时仍需保留自己的账本、配置和审阅数据。
+
+保留 tar.gz 中的可执行权限。依赖库已装在程序内部，启动时会解压到系统临时目录，正常退出后清理。
 
 例如 Apple Silicon 包：
 
@@ -57,7 +59,7 @@ cd beancount-budget-tool-macos-arm64
 
 ## 升级和清理
 
-更新时替换程序整包，保留账本、config.yml、budgets.yml 和保存审阅记录的 `.budget-state`。旧缓存很多时，退出其他预算工具窗口后执行：
+更新时替换单个 `beancount-budget-tool` 程序即可，保留账本、config.yml、budgets.yml 和保存审阅记录的 `.budget-state`。从旧 Mac 目录版升级，确认新单文件程序能运行后，可删除旧程序包及其 `_internal`；不要把账本或配置一起删掉。旧缓存很多时，退出其他预算工具窗口后执行：
 
 ```bash
 ./beancount-budget-tool clean --config "$HOME/Beancount/budget/simple/config.yml" --dry-run

@@ -144,6 +144,8 @@ months:
 
 `_internal` 是目录版 exe 的依赖；完整保留。单文件版没有这个目录，但启动要在 Temp 解包，不能通过删除目录版依赖来转换版本。
 
+当前 Mac 的 arm64／x64 包均为单文件版，可单独移动 `beancount-budget-tool`；Windows 仍提供目录版与单文件版。更换程序不影响账本、两份配置和审阅状态，后者继续单独备份。
+
 正常使用只会在有已审数据时保存 `.budget-state/config/reviews.json.gz`，包含已审来源决定、月末声明、债务证据和恢复资料。它不是缓存，需备份。运行输入放系统临时目录，正常重算／退出自动释放；纯行内配置可完全没有持久状态。
 
 升级后退出其他预算工具窗口，执行 `clean --config config.yml`，可将旧 latest.yaml、snapshots、reviews 收拢并删除旧 runtime 缓存。`--dry-run` 只预览。文件损坏或无法证明安全时会保留原文件，不通过删除审阅记录来消除错误。

@@ -21,7 +21,7 @@ python -m beancount_budget_tool --config budget/simple/config.yml --month 2023-0
 
 原配置保留。Windows exe 将 `python -m beancount_budget_tool` 换成 PowerShell 的 `& $Exe`。
 
-[Actions 可执行包](https://github.com/TinySnow/beancount-budget-tool/actions/workflows/windows-exe.yml)提供 Windows x64，以及 Mac 的 Apple Silicon（arm64）／Intel（x64）版。Mac 解压 Artifact 后再解压 tar.gz，在终端使用 `./beancount-budget-tool`；无需安装 Python。详见 [Mac 启动说明](packaging/MACOS-START.md)。
+[Actions 可执行包](https://github.com/TinySnow/beancount-budget-tool/actions/workflows/windows-exe.yml)提供 Windows x64，以及 Mac 的 Apple Silicon（arm64）／Intel（x64）单文件版。Mac 解压 Artifact 后再解压 tar.gz，在终端使用 `./beancount-budget-tool`；可单独移动程序，无需外置 `_internal` 或安装 Python。详见 [Mac 启动说明](packaging/MACOS-START.md)。
 
 TUI：`r` 重算，`m` 跳月，`n` 下一月，`Enter` 看完整来源，`?` 看帮助。明确的 `fund` 新用途自动识别；缺少金额、用途或证据时继续待审，不把计划变成现金。
 

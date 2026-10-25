@@ -1,4 +1,4 @@
-"""Package a native folder build without losing Mach-O symlinks or execute bits."""
+"""Package a native single-file executable, retaining its execute permissions."""
 
 import argparse
 from pathlib import Path
@@ -10,19 +10,20 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def prepare(bundle: Path, output: Path, arch: str, revision: str, *, source: Path = ROOT) -> Path:
+def prepare(executable: Path, output: Path, arch: str, revision: str, *, source: Path = ROOT) -> Path:
     if arch not in {"arm64", "x64"}:
         raise ValueError("arch must be arm64 or x64")
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("revision must be the complete Git commit")
-    if not (bundle / "beancount-budget-tool").is_file() or not (bundle / "_internal").is_dir():
-        raise ValueError("bundle must contain the executable and its _internal dependencies")
+    if not executable.is_file():
+        raise ValueError("executable must be the single-file binary, not a bundle directory")
     name = f"beancount-budget-tool-macos-{arch}"
     package, archive = output / name, output / (name + ".tar.gz")
     if package.exists() or package.is_symlink() or archive.exists() or archive.is_symlink():
         raise FileExistsError("download output already exists; choose a new output directory")
     output.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(bundle, package, symlinks=True)
+    package.mkdir()
+    shutil.copy2(executable, package / "beancount-budget-tool")
     for filename in ("LICENSE", "QUICKSTART.md", "LEGACY-WORKFLOWS.md"):
         shutil.copy2(source / filename, package / filename)
     shutil.copy2(source / "packaging/THIRD-PARTY-NOTICES.md", package / "THIRD-PARTY-NOTICES.md")
@@ -48,7 +49,7 @@ def prepare(bundle: Path, output: Path, arch: str, revision: str, *, source: Pat
     legacy_path.write_text(legacy, encoding="utf-8")
     (package / "BUILD-COMMIT.txt").write_text(revision + "\n", encoding="utf-8")
     # Uploading a folder directly drops Unix permissions in Actions artifacts.
-    # tar also keeps the framework/dylib symlinks inside the PyInstaller bundle.
+    # The binary embeds its libraries; no sibling runtime directories are copied.
     with tarfile.open(archive, "w:gz", dereference=False) as tar:
         tar.add(package, arcname=name)
     return archive
@@ -56,12 +57,12 @@ def prepare(bundle: Path, output: Path, arch: str, revision: str, *, source: Pat
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", required=True, type=Path)
+    parser.add_argument("--executable", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--arch", required=True, choices=("arm64", "x64"))
     parser.add_argument("--revision", required=True)
     args = parser.parse_args()
-    print(prepare(args.bundle, args.output, args.arch, args.revision))
+    print(prepare(args.executable, args.output, args.arch, args.revision))
 
 
 if __name__ == "__main__":

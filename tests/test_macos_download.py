@@ -1,4 +1,4 @@
-"""The delivered tar must keep native libraries, symlinks and execute bits."""
+"""The Mac download carries one independent executable with its execute bit."""
 
 import importlib.util
 import os
@@ -29,14 +29,15 @@ class MacDownloadTests(unittest.TestCase):
         self.revision = 'a' * 40
 
     def package(self):
-        return module.prepare(self.bundle, self.output, 'arm64', self.revision)
+        return module.prepare(self.executable, self.output, 'arm64', self.revision)
 
     def test_download_has_offline_guides_example_revision_and_execute_permission(self):
         archive = self.package()
         name = 'beancount-budget-tool-macos-arm64'
         with tarfile.open(archive, 'r:gz') as tar:
             members = {member.name: member for member in tar}
-            self.assertIn(name + '/_internal/libexample.dylib', members)
+            self.assertFalse(any('/_internal' in path for path in members))
+            self.assertEqual(tar.extractfile(name + '/beancount-budget-tool').read(), self.executable.read_bytes())
             if os.name != 'nt':
                 self.assertTrue(members[name + '/beancount-budget-tool'].mode & 0o111)
             self.assertEqual(tar.extractfile(name + '/BUILD-COMMIT.txt').read().decode().strip(), self.revision)
@@ -50,18 +51,12 @@ class MacDownloadTests(unittest.TestCase):
             legacy = tar.extractfile(name + '/LEGACY-WORKFLOWS.md').read().decode('utf-8')
             self.assertIn('/blob/' + self.revision + '/examples/v6/', legacy)
 
-    def test_download_keeps_library_symlink_and_its_relative_target(self):
-        link = self.bundle / '_internal/libcurrent.dylib'
-        try:
-            link.symlink_to('libexample.dylib')
-        except OSError:
-            self.skipTest('symlinks unavailable')
-        with tarfile.open(self.package(), 'r:gz') as tar:
-            member = tar.getmember('beancount-budget-tool-macos-arm64/_internal/libcurrent.dylib')
-            self.assertTrue(member.issym())
-            self.assertEqual(member.linkname, 'libexample.dylib')
+    def test_old_bundle_directory_is_rejected_instead_of_shipping_dependencies(self):
+        with self.assertRaises(ValueError):
+            module.prepare(self.bundle, self.output, 'arm64', self.revision)
+        self.assertFalse(self.output.exists())
 
-    def test_missing_runtime_and_existing_archive_are_never_overwritten(self):
+    def test_missing_executable_and_existing_archive_are_never_overwritten(self):
         self.executable.unlink()
         with self.assertRaises(ValueError):
             self.package()

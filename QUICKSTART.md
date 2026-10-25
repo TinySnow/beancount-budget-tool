@@ -14,7 +14,7 @@ $Config = Join-Path $LedgerDir "budget\simple\config.yml"
 & $Exe --version
 ```
 
-Mac 可下载 `beancount-budget-tool-macos-arm64`（Apple Silicon）或 `beancount-budget-tool-macos-x64`（Intel）。Artifact 的 zip 解压后，再解压其中的 tar.gz，完整保留程序与 `_internal`。在程序目录运行：
+Mac 可下载 `beancount-budget-tool-macos-arm64`（Apple Silicon）或 `beancount-budget-tool-macos-x64`（Intel）。Artifact 的 zip 解压后，再解压其中的 tar.gz；其中 `beancount-budget-tool` 是单文件程序，可单独移动，没有外置 `_internal`。在解压目录先运行示例：
 
 ```bash
 ./beancount-budget-tool --config example/simple/config.yml --format tui
@@ -168,6 +168,7 @@ Beancount 同日交易会使用各文件的行号排序，跨文件时可能与�
 |---|---|
 | 账本、config.yml、budgets.yml | 必须保留、备份 |
 | 目录版 exe 和 `_internal` | 一起保留；不能只留 exe 或手动精简依赖 |
+| Mac 单文件 `beancount-budget-tool` | 可单独移动；启动时自动在临时目录解包依赖，无外置 `_internal` |
 | `.budget-state/config/reviews.json.gz` | 有已审记录时必须保留，随账本备份；不用手改 |
 | 旧 `runtime`／`snapshots`／`reviews`／`latest.yaml` | 不要直接整目录删；用下面的清理命令收拢记录 |
 | 导出的报表 | 可自行归档；删报表不影响账本或审阅决定 |
