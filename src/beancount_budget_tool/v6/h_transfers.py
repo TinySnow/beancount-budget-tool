@@ -18,7 +18,7 @@ from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_transaction_refs
 from .ownership import _owners, audit_ownership
-from .event_declarations import validate_event_declaration
+from .provenance import validate_event_declaration
 from .source import scan_v6_source
 
 

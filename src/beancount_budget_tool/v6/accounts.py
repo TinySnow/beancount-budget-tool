@@ -17,7 +17,7 @@ from beancount.core import data
 
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml, yaml_path_location
 from .facts import FactIndex, GeneratedPostingRef, future_transactions
 from .provenance import asset_opening_fingerprint
@@ -39,6 +39,7 @@ def _where(posting: data.Posting) -> str:
     return f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
 
 
+@shared_audit
 def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) -> dict:
     """列出全部有直接 posting 的资产账户，并可校验人工声明。
 

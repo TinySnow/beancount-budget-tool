@@ -24,7 +24,7 @@ from .classification import _key
 from .facts import FactIndex, future_transaction_refs
 from .inline_amounts import parse_inline_amounts
 from .ownership import _owners, audit_ownership
-from .event_declarations import validate_event_declaration
+from .provenance import validate_event_declaration
 from .source import scan_v6_source
 
 

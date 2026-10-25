@@ -7,9 +7,11 @@ the lexical evidence that Beancount's booked AST may normalize away.
 from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from datetime import date
-from functools import cached_property
+from functools import cached_property, wraps
 from hashlib import sha256
+from inspect import signature
 import json
 from pathlib import Path
 import re
@@ -53,6 +55,10 @@ class FinancialInput:
     def _raw_prices(self) -> Dict[Tuple[str, int], Tuple[str, Fraction, str]]:
         # Lexical evidence belongs to this frozen source, never to a filename
         # across reloads. A fresh load/replace starts with an empty price cache.
+        return {}
+
+    @cached_property
+    def _audit_results(self) -> dict:
         return {}
 
     def _source(self, filename: str) -> SourceFile:
@@ -124,6 +130,7 @@ def _digest(sources: Mapping[Path, SourceFile], root: Path) -> str:
 
 
 _FROZEN_FINANCIAL: ContextVar[Optional[FinancialInput]] = ContextVar("frozen_financial", default=None)
+_FROZEN_THROUGH: ContextVar[Optional[date]] = ContextVar("frozen_through", default=None)
 _BOOKED_THROUGH: ContextVar[Optional[date]] = ContextVar("booked_through", default=None)
 
 
@@ -198,6 +205,51 @@ def load_financial(root: Path) -> FinancialInput:
     return _bounded(_load_financial_uncached(resolved))
 
 
+def shared_audit(audit):
+    """Reuse a pure base audit within one frozen input, never across reloads.
+
+    Only apply to audits whose dependencies are the frozen ledger and their
+    explicit Path arguments. File contents are checked on every call; return
+    independent copies so report annotations cannot mutate another consumer.
+    Exceptions are not cached, and standalone calls keep their original path.
+    """
+    parameters = signature(audit)
+
+    @wraps(audit)
+    def run(*args, **kwargs):
+        frozen = _FROZEN_FINANCIAL.get()
+        if frozen is None:
+            return audit(*args, **kwargs)
+        arguments = parameters.bind(*args, **kwargs)
+        arguments.apply_defaults()
+        root = arguments.arguments["root"]
+        if not isinstance(root, Path) or root.resolve() != frozen.root:
+            return audit(*args, **kwargs)
+        try:
+            watched = {value.resolve(): sha256(value.read_bytes()).digest()
+                       for name, value in arguments.arguments.items()
+                       if name != "root" and isinstance(value, Path)}
+            key = (audit, _BOOKED_THROUGH.get(),
+                   tuple((name, value.resolve() if isinstance(value, Path) else value)
+                         for name, value in arguments.arguments.items()), tuple(watched.items()))
+            hash(key)
+        except (OSError, TypeError):
+            return audit(*args, **kwargs)  # Preserve the audit's own input diagnostics.
+        if key in frozen._audit_results:
+            return deepcopy(frozen._audit_results[key])
+        result = audit(*args, **kwargs)
+        for path, digest in watched.items():
+            try:
+                unchanged = sha256(path.read_bytes()).digest() == digest
+            except OSError:
+                unchanged = False
+            require(unchanged, "INPUT_CHANGED", "基础审计期间配置或审阅文件发生变化", str(path))
+        frozen._audit_results[key] = deepcopy(result)
+        return result
+
+    return run
+
+
 @contextmanager
 def frozen_financial(root: Path):
     """Share one booked source within a report, then verify it did not change.
@@ -205,11 +257,20 @@ def frozen_financial(root: Path):
     Re-loading at exit detects edited source files, newly matched includes and
     loader changes before any report can be returned to the caller.
     """
+    frozen = _FROZEN_FINANCIAL.get()
+    if (frozen is not None and frozen.root == root.resolve() and
+            _FROZEN_THROUGH.get() == _BOOKED_THROUGH.get()):
+        # The outer owner still verifies the complete source at exit. A
+        # different root or report cutoff must establish its own snapshot.
+        yield frozen
+        return
     fin = _bounded(_load_financial_uncached(root))
     token = _FROZEN_FINANCIAL.set(fin)
+    through_token = _FROZEN_THROUGH.set(_BOOKED_THROUGH.get())
     try:
         yield fin
     finally:
+        _FROZEN_THROUGH.reset(through_token)
         _FROZEN_FINANCIAL.reset(token)
         after = _load_financial_uncached(root)
         require(after.digest == fin.digest, "INPUT_CHANGED",

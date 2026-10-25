@@ -10,7 +10,7 @@ import test_v6_h_fx as fx
 import test_v6_k_events as k_events
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.v6.event_declarations import validate_event_declaration
+from beancount_budget_tool.v6.provenance import validate_event_declaration
 
 
 class EventLocationTests(unittest.TestCase):

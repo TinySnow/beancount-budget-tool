@@ -100,6 +100,9 @@ def reference_fact_index(fin: FinancialInput) -> "FactIndex":
 @contextmanager
 def frozen_fact_indices():
     """Reuse source-reference work only within one frozen report."""
+    if _FACT_INDEX_CACHE.get() is not None:
+        yield
+        return
     token = _FACT_INDEX_CACHE.set({})
     reference_token = _REFERENCE_INDEX_CACHE.set({})
     try:

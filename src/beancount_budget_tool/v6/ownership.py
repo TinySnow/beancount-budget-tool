@@ -18,7 +18,7 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import amount_text, exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .accounts import _lot, audit_accounts
 from .classification import _key
@@ -95,6 +95,7 @@ def _require_transfer_balance(coordinate: tuple[str, str, str],
     require(False, "H_OWNER_NEGATIVE", "\n".join(lines), source)
 
 
+@shared_audit
 def audit_ownership(root: Path, cutover: date, accounts: Path,
                     declarations: Path | None = None,
                     opening: Path | None = None) -> dict:

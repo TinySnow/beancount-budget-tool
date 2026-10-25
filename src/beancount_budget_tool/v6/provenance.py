@@ -1,9 +1,10 @@
-"""Stable review provenance for the asset state at the v6 cutover."""
+"""Source-bound review metadata and stable booked-state fingerprints."""
 
 from __future__ import annotations
 
 from datetime import date
 from hashlib import sha256
+from pathlib import Path
 import json
 import re
 
@@ -12,6 +13,7 @@ from beancount.core import data
 from ..exact import exact, exact_text
 from ..financial import FinancialInput
 from ..refs import _lot
+from ..yamlstrict import require_yaml
 from .facts import FactIndex
 
 
@@ -20,6 +22,24 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 def valid_digest(value: object) -> bool:
     return type(value) is str and bool(SHA256.fullmatch(value))
+
+
+def validate_event_declaration(document: object, path: Path, cutover: date,
+                               loader_version: str, code: str) -> None:
+    """Check the common evidence header for transfer, FX and K review files."""
+    required = {"schema", "cutover", "ledger_snapshot", "loader_version", "events"}
+    unknown = set(document) - required if type(document) is dict else set()
+    require_yaml(type(document) is dict and set(document) == required, code,
+                 "事件侧文件字段不完整或含未知字段", path,
+                 (sorted(unknown, key=str)[0],) if unknown else ())
+    for field, valid in (
+        ("schema", type(document["schema"]) is int and document["schema"] == 6),
+        ("cutover", type(document["cutover"]) is str and document["cutover"] == cutover.isoformat()),
+        ("ledger_snapshot", valid_digest(document["ledger_snapshot"])),
+        ("loader_version", document["loader_version"] == loader_version),
+        ("events", type(document["events"]) is list),
+    ):
+        require_yaml(valid, code, "事件版本、cutover、原审快照或事件列表格式不匹配", path, (field,))
 
 
 def asset_opening_fingerprint(fin: FinancialInput, cutover: date) -> str:

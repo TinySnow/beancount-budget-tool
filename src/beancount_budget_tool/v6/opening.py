@@ -10,6 +10,7 @@ import re
 
 from ..errors import require
 from ..exact import exact_text
+from ..financial import shared_audit
 from ..yamlstrict import load_yaml
 from .accounts import audit_accounts
 
@@ -30,6 +31,7 @@ def _owner(value: object, source: str) -> str:
     return value
 
 
+@shared_audit
 def audit_opening(root: Path, cutover: date, accounts: Path,
                   declarations: Path | None = None) -> dict:
     """Check exact cutover quantities for reviewed H/K accounts.
