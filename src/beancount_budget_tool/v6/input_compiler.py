@@ -50,9 +50,9 @@ SetupDumper.add_representer(str, _string)
 
 def relative_reference(ledger: Path, directory: Path) -> str:
     try:
-        return os.path.relpath(ledger, directory)
+        return Path(os.path.relpath(ledger, directory)).as_posix()
     except ValueError:  # Windows paths on different drives cannot be relative.
-        return str(ledger)
+        return ledger.as_posix()
 
 
 @contextmanager

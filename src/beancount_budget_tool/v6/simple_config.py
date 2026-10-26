@@ -27,7 +27,7 @@ from ..errors import BudgetError, require
 from ..financial import financial_session
 from .facts import frozen_fact_indices
 from ..console import configure_output
-from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
+from ..yamlstrict import config_path, load_yaml, require_yaml, yaml_path_location
 from .input_compiler import (
     draft_inputs, compile_inputs, SetupDumper, relative_reference,
 )
@@ -121,7 +121,7 @@ def _documents(config: Path, inputs: dict | None = None):
                 _owners([{"id": "default", "name": value, "aliases": []}])
         except BudgetError as exc:
             raise BudgetError(exc.code, exc.message, yaml_path_location(config, ("defaults", key))) from exc
-    budgets = (config.parent / doc["budgets"]).resolve()
+    budgets = config_path(config, doc["budgets"], "budgets")
     inputs.setdefault(budgets, budgets.read_bytes())
     plans = load_yaml(budgets)
     require_yaml(type(plans) is dict and type(plans.get("schema")) is int and plans["schema"] == 1 and
@@ -200,25 +200,25 @@ def _legacy_baseline(config: Path, inputs: dict, month: str):
     require(type(pointer.get("months", {})) is dict and
             all(type(key) is str and type(value) is str for key, value in pointer.get("months", {}).items()),
             "SIMPLE_STATE_INVALID", "内部月份审阅指针无效", str(manifest))
-    path = (manifest.parent / pointer["snapshot"]).resolve()
+    path = config_path(manifest, pointer["snapshot"], "snapshot")
     require(path.is_relative_to(state_dir(config)), "SIMPLE_STATE_INVALID", "内部审阅指针越界", str(manifest))
     doc = load_yaml(path)
     inputs[path] = path.read_bytes()
     files = {}
     for key in set(doc) - SCALARS:
-        source = (path.parent / doc[key]).resolve()
+        source = config_path(path, doc[key], key)
         inputs[source] = source.read_bytes()
         files[key] = load_yaml(source)
     monthly = pointer.get("months", {}).get(month)
     if monthly and monthly != pointer["snapshot"]:
-        local = (manifest.parent / monthly).resolve()
+        local = config_path(manifest, monthly)
         require(local.is_relative_to(state_dir(config)), "SIMPLE_STATE_INVALID", "月份审阅指针越界", str(manifest))
         inputs[local] = local.read_bytes()
         local_doc = load_yaml(local)
         for key in ("completeness", "debt_coverage", "debt_settlements"):
             files.pop(key, None)
             if key in local_doc:
-                source = (local.parent / local_doc[key]).resolve()
+                source = config_path(local, local_doc[key], key)
                 inputs[source] = source.read_bytes()
                 files[key] = load_yaml(source)
     elif not monthly and doc["month"] != month:
@@ -324,7 +324,7 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
         cutover = date.fromisoformat(doc["cutover"])
     except ValueError as exc:
         raise BudgetError("CUTOVER_INVALID", "cutover 须为 YYYY-MM-DD", yaml_path_location(config, ("cutover",))) from exc
-    root = (config.parent / doc["ledger"]).resolve()
+    root = config_path(config, doc["ledger"], "ledger")
     unresolved_opening = set()
     filled, _ = draft_inputs(root, month, cutover=cutover, currency=doc["report_currency"],
                               **{key: doc["defaults"][key] for key in
@@ -534,9 +534,9 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
         require(type(old) is dict and REQUIRED <= set(old) <= REQUIRED | OPTIONAL,
                 "SIMPLE_IMPORT_INVALID", "迁移来源须是现有 month.yaml", str(old_config))
         watched[old_config] = old_config.read_bytes()
-        ledger, month = (old_config.parent / old["ledger"]).resolve(), old["month"]
+        ledger, month = config_path(old_config, old["ledger"], "ledger"), old["month"]
         for key in set(old) - SCALARS:
-            path = (old_config.parent / old[key]).resolve()
+            path = config_path(old_config, old[key], key)
             watched[path] = path.read_bytes()
             state[key] = load_yaml(path)
         defaults = state["ownership"].get("defaults")
@@ -611,7 +611,7 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
             # Missing old targets were unresolved, not an explicit decision to
             # stop assessing them. Preserve that distinction during migration.
             from .purpose_targets import load_purpose_targets
-            purpose_path = (old_config.parent / old["purpose_plans"]).resolve()
+            purpose_path = config_path(old_config, old["purpose_plans"], "purpose_plans")
             expanded = load_purpose_targets(purpose_path, month, currency, set(owner_names))
             for ident in expanded["missing_target_ids"]:
                 budgets.setdefault("months", {}).setdefault(month, {}).setdefault("allocation_targets", {})[owner_names[ident]] = None

@@ -1,6 +1,7 @@
 """Read reviewable YAML without silently accepting duplicate or implicit dates."""
 
-from pathlib import Path
+import os
+from pathlib import Path, PureWindowsPath
 from functools import lru_cache
 from typing import Any
 
@@ -32,6 +33,14 @@ def _mapping(loader: StrictLoader, node: yaml.MappingNode, deep: bool = False) -
 
 
 StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
+
+
+def config_path(config: Path, value: str, key: str | None = None) -> Path:
+    """Resolve YAML file references with either platform's relative separator."""
+    if os.name != "nt" and PureWindowsPath(value).drive:
+        raise BudgetError("CONFIG_PATH_PLATFORM", "Windows 盘符或网络绝对路径不能在本机定位；请改为本机路径或相对路径",
+                          yaml_path_location(config, (key,)) if key else str(config))
+    return (config.parent / value.replace("\\", "/")).resolve()
 
 
 def load_yaml(path: Path) -> Any:

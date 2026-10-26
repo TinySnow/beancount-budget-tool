@@ -8,7 +8,7 @@ import time
 from beancount.parser import parser
 
 from ..errors import BudgetError
-from ..yamlstrict import load_yaml
+from ..yamlstrict import config_path, load_yaml
 
 
 class InputWatch:
@@ -30,7 +30,7 @@ class InputWatch:
                 for key, value in document.items():
                     if key in {"ledger", "budgets"} or isinstance(value, str) and value.endswith((".yaml", ".yml")):
                         if isinstance(value, str):
-                            path = (config.parent / value).resolve()
+                            path = config_path(config, value, key)
                             files.add(path)
                             if key == "ledger":
                                 roots.add(path)

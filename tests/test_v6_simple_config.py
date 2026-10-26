@@ -51,6 +51,37 @@ class SimpleConfigTests(unittest.TestCase):
         self.budgets = Path(result["budgets"])
         return result
 
+    def test_windows_relative_config_paths_produce_the_same_report_on_each_platform(self):
+        self.migrate()
+        expected = audit_simple(self.config)
+        doc = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        doc["ledger"] = "..\\\\main.bean"
+        doc["budgets"] = ".\\budgets.yml"
+        self.write(self.config, doc)
+        inputs = {path: path.read_bytes() for path in self.config.parent.rglob("*") if path.is_file()}
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(result["report"], expected["report"])
+        self.assertTrue(all(path.read_bytes() == body for path, body in inputs.items()))
+
+    @unittest.skipIf(sys.platform == "win32", "Foreign drive path rejection applies outside Windows")
+    def test_foreign_windows_absolute_paths_point_to_the_config_field(self):
+        self.migrate()
+        for value in (r"C:\Users\name\main.bean", r"\\server\share\main.bean", r"C:main.bean"):
+            with self.subTest(value=value):
+                doc = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+                doc["ledger"] = value
+                self.write(self.config, doc)
+                with self.assertRaises(BudgetError) as caught:
+                    audit_simple(self.config)
+                self.assertEqual(caught.exception.code, "CONFIG_PATH_PLATFORM")
+                self.assertEqual(caught.exception.source, yaml_path_location(self.config, ("ledger",)))
+
+    def test_generated_yaml_paths_use_forward_slashes(self):
+        from beancount_budget_tool.v6.input_compiler import relative_reference
+        nested = self.base / "中文 空格" / "budget" / "simple"
+        self.assertEqual(relative_reference(self.base / "中文 空格" / "main.bean", nested), "../../main.bean")
+
     def test_daily_month_indexes_only_visible_facts_even_with_future_card_transactions(self):
         from datetime import date
         from beancount.core import data

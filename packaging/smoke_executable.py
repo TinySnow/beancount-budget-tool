@@ -84,6 +84,14 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert outcome["review_items"] == [], outcome
         simple = json.loads(run("configure", "--from-config", config, "--output", "two-files")[0])
         direct = document("--config", simple["config"], "--month", "2026-09")
+        simple_path = Path(simple["config"])
+        original_profile = simple_path.read_bytes()
+        profile = yaml.safe_load(original_profile)
+        profile["ledger"] = profile["ledger"].replace("/", "\\")
+        profile["budgets"] = ".\\budgets.yml"
+        simple_path.write_text(yaml.safe_dump(profile, allow_unicode=True), encoding="utf-8")
+        assert document("--config", simple_path, "--month", "2026-09")["report"] == direct["report"]
+        simple_path.write_bytes(original_profile)
         assert direct["status"] == "CERTIFIED_SCOPED", direct
         assert direct["report"]["max_spendable"]["max_spendable"] == "190", direct
         state_root = Path(simple["config"]).parent / ".budget-state" / "config"

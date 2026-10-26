@@ -255,6 +255,23 @@ class InputWatchTests(unittest.TestCase):
             self.assertTrue(self.watch.changed())
         self.assertFalse(self.watch.changed())
 
+    def test_windows_config_paths_watch_external_ledger_includes_and_budget_file(self):
+        config = self.base / "budget" / "simple" / "config.yml"
+        config.parent.mkdir(parents=True)
+        plans = self.base / "目标 空格" / "budgets.yml"
+        plans.parent.mkdir()
+        plans.write_text("schema: 1\n", encoding="utf-8")
+        config.write_text("schema: 1\nledger: '..\\..\\main.bean'\n"
+                          "budgets: '../../目标 空格\\budgets.yml'\n", encoding="utf-8")
+        self.watch = InputWatch([config])
+        watched = self.watch.snapshot()
+        for path in (self.root, self.child, plans):
+            self.assertIn(str(path), watched)
+        self.child.write_text("; modified include\n", encoding="utf-8")
+        self.change()
+        plans.write_text("schema: 1\n# modified goals\n", encoding="utf-8")
+        self.change()
+
     def test_included_nonstandard_filename_and_atomic_save_trigger_reload(self):
         replacement = self.child.with_suffix('.save')
         replacement.write_text('; changed\n', encoding='utf-8')
