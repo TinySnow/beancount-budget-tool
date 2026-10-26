@@ -93,8 +93,7 @@ def audit_simple_obligations(root: Path, cutover: date,
     require(budget_names is None or type(budget_names) is list and all(type(name) is str for name in budget_names),
             "OBLIGATION_DECLARATION_INVALID", "budget_categories 须为类别名称列表", str(declarations))
     ruled = audit_rule_accounts(fin, facts, cutover, as_of, configured,
-                               rule_assets, before_ref=before_ref, budget_names=budget_names,
-                               owner_names=rule_owners, default_expense_owner=rule_defaults.get("expense_owner_id")) if configured else None
+                               rule_assets, before_ref=before_ref, budget_names=budget_names) if configured else None
     opening = defaultdict(Fraction)
     historical_sources = {}
     candidates = {}

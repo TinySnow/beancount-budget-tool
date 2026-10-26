@@ -24,7 +24,7 @@ from .accounts import _lot, audit_accounts
 from .classification import _key
 from .facts import FactIndex, GeneratedPostingRef, future_posting_refs, future_transactions
 from .inline_amounts import parse_inline_amounts
-from .liability_rules import validate_rules, native_rule_flow, cash_owner_parts
+from .liability_rules import validate_rules, native_rule_flow, cash_owner_parts, CreditOwners, receivable_cash_matches
 from .initialization import initial_pad_postings
 from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt, native_group_payment
 from .opening import audit_opening
@@ -302,14 +302,19 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             for coordinate in nonzero_opening - incomplete:
                 running[coordinate] = reviewed_opening[coordinate]
                 unknown_coordinates.remove(coordinate)
+        cash_accounts = {account for account, mode in semantics.items() if mode == "H"}
+        credit_owners = CreditOwners(fin, cutover, liability_rules, defaults, owner_names) if liability_rules else None
         # Unknown opening ownership limits inference only from that coordinate;
         # explicit post-cutover labels on other coordinates remain valid.
         for entry in fin.entries:
             if not isinstance(entry, data.Transaction) or entry.date < cutover:
                 continue
+            rule_flow = native_rule_flow(fin, entry, liability_rules, cash_accounts) if liability_rules else None
             h_legs = [posting for posting in entry.postings
                       if semantics.get(posting.account) == "H"]
             if not h_legs:
+                if credit_owners is not None:
+                    credit_owners.advance(entry, rule_flow, {})
                 continue
             leg_keys = {_key(facts.for_posting(p).as_dict()): p for p in h_legs}
             coordinates = {key: (p.account, p.units.currency, _lot(p))
@@ -337,14 +342,18 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             card_purchase = native_card_purchase(fin, entry, semantics)
             receipt = native_payable_receipt(fin, entry, semantics)
             payment = native_group_payment(fin, entry, semantics)
-            rule_flow = native_rule_flow(fin, entry, liability_rules,
-                                        {account for account, mode in semantics.items() if mode == "H"})
             if rule_flow is not None:
                 default = defaults["income_owner_id"] if rule_flow == "receipt" else defaults["expense_owner_id"]
-                owner = cash_owner_parts(fin, entry, rule_flow, liability_rules, default)
+                returning = rule_flow == "receipt" and credit_owners.returning(entry)
                 for key in missing_keys:
-                    if owner is not None:
-                        inferred(key, [(owner, exact(leg_keys[key].units.number))], "config 负债账户规则的现金用途；借入资金沿默认收入用途")
+                    parts = credit_owners.receipt_parts(entry, leg_keys[key]) if returning else cash_owner_parts(
+                        fin, entry, rule_flow, liability_rules, default, leg_keys[key])
+                    if parts is not None:
+                        inferred(key, parts, "退回已证明的预付资金用途" if returning else
+                                 "config 负债账户规则的现金用途；借入资金沿默认收入用途")
+                    elif returning:
+                        pending_reasons[key] = ("LIABILITY_CREDIT_PURPOSE_PENDING" if credit_owners.pure_return(entry) else
+                                                "LIABILITY_CREDIT_MIXED_UNSUPPORTED")
             elif receipt is not None or native is not None or card_purchase is not None or payment is not None or len(h_legs) == 1 and len(entry.postings) == 2:
                 # Defaults select each asset's owner, not an allocation of
                 # payments to individual expense/income counterparts.
@@ -407,6 +416,13 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     elif target_key not in compiled_by_key:
                         pending_reasons[target_key] = "FUND_SOURCE_UNRESOLVED"
 
+            if credit_owners is not None:
+                credit_issue = credit_owners.advance(entry, rule_flow, {id(posting): compiled_by_key[key]["slices"]
+                    for key, posting in leg_keys.items() if key in compiled_by_key})
+                if credit_issue is not None:
+                    for key in leg_keys:
+                        compiled_by_key.pop(key, None)
+                        pending_reasons[key] = credit_issue
             if any(key not in compiled_by_key for key in leg_keys):
                 unknown_coordinates.update(coordinates.values())
                 continue
@@ -434,6 +450,22 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                                               _source(outgoing.meta or entry.meta))
                 running[coordinate] = after
 
+    if liability_rules:
+        # Verify the actual compiled cash vector, including existing external
+        # approvals; raw tags/defaults alone would reject valid reviewed funds.
+        cash_accounts = {account for account, mode in semantics.items() if mode == "H"}
+        for entry in fin.entries:
+            if not isinstance(entry, data.Transaction) or entry.date < cutover or not any(
+                    p.account in liability_rules and liability_rules[p.account]["role"] == "receivable" for p in entry.postings):
+                continue
+            if native_rule_flow(fin, entry, liability_rules, cash_accounts) is None:
+                continue
+            cash_keys = {_key(facts.for_posting(p).as_dict()): p for p in entry.postings if p.account in cash_accounts}
+            owned = {id(p): compiled_by_key[key]["slices"] for key, p in cash_keys.items() if key in compiled_by_key}
+            if receivable_cash_matches(fin, entry, liability_rules, owned) is False:
+                for key in cash_keys:
+                    compiled_by_key.pop(key, None)
+                    pending_reasons[key] = "LIABILITY_RULE_PURPOSE_MISMATCH"
     compiled = [compiled_by_key[key] for key in order if key in compiled_by_key]
     missing = [{**h_candidates[key][1],
                 **({"reason_code": pending_reasons[key]} if key in pending_reasons else {})}

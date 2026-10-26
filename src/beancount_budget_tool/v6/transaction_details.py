@@ -13,9 +13,9 @@ from .facts import FactIndex
 
 ORIGINS = {"inline": "行内标签", "external": "审阅决定", "default": "默认规则", "inferred": "默认或已审库存继承"}
 FLOW_NAMES = {"expenses_paid": "消费实付", "expense_refunds": "消费退款", "debt_payments": "还债",
-              "advances_paid": "单位代垫", "advance_reimbursements": "报销收回"}
+              "advances_paid": "单位代垫", "advance_reimbursements": "报销收回", "credit_returns": "预付／溢缴退回"}
 DEBT_NAMES = {"payable_receipt": "收入与应付款混合到账", "consumer_purchase": "刷卡消费", "payment": "还款", "advance_outflow": "单位代垫",
-              "advance_reimbursement": "代垫收回", "consumer_refund": "消费退回信用卡", "refinance": "债务转移"}
+              "advance_reimbursement": "代垫收回", "consumer_refund": "消费退回信用卡", "refinance": "债务转移", "credit_return": "预付／溢缴退回"}
 VALUE_NAMES = {"native_report_currency": "原币即报告货币", "source_price_@": "原分录单价", "source_price_@@": "原分录总价"}
 
 

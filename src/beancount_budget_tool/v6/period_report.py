@@ -119,7 +119,7 @@ def _sum_rows(reports, section, list_key, keys, metrics):
         for row in report[section][list_key]:
             key = tuple(row[field] for field in keys)
             for metric in metrics:
-                totals[key][metric] += Fraction(row[metric])
+                totals[key][metric] += Fraction(row.get(metric, "0") if metric == "credit_returns" else row[metric])
     return [{**dict(zip(keys, key)), **{metric: exact_text(values[metric]) for metric in metrics}}
             for key, values in sorted(totals.items())]
 
@@ -220,12 +220,14 @@ def _combine_months(ordered, months, reports, reviews, snapshots, warnings) -> d
     for row in purpose_rows:
         row["name"] = names[row["owner_id"]]
     last = reports[-1]
+    outflow_metrics = OUTFLOW_METRICS + (("credit_returns",) if any(
+        "credit_returns" in row for report in reports for row in report["default_outflows"]["totals"] or []) else ())
     result["report"] = {
         "report_currency": last["report_currency"], "ledger_snapshot": next(iter(snapshots)),
         "monthly_reports": reports, "warnings": warnings,
         "expense_totals": expense_total, "expenses": expenses, "purpose_allocations": purpose_rows,
         "tracking": _sum_rows(reports, "tracking", "topics", ("topic", "commodity"), ("spent", "returned", "net")),
-        "default_outflows": (_sum_rows(reports, "default_outflows", "totals", ("commodity",), OUTFLOW_METRICS)
+        "default_outflows": (_sum_rows(reports, "default_outflows", "totals", ("commodity",), outflow_metrics)
                              if all(row["default_outflows"]["status"] == "CERTIFIED" for row in reports) else None),
         "default_outflows_status": ("CERTIFIED" if all(row["default_outflows"]["status"] == "CERTIFIED" for row in reports)
                                     else "NOT_CONFIGURED"),
@@ -264,6 +266,8 @@ def render_text(outcome: dict) -> str:
     for row in report["default_outflows"] or []:
         lines.append(f"  {row['commodity']}：消费实付 {_fmt(row['expenses_paid'])}，退款 {_fmt(row['expense_refunds'])}，"
                      f"还债 {_fmt(row['debt_payments'])}，代垫 {_fmt(row['advances_paid'])}，报销 {_fmt(row['advance_reimbursements'])}，净流出 {_fmt(row['net_outflow'])}")
+        if row.get("credit_returns"):
+            lines.append(f"    预付／溢缴退回 {_fmt(row['credit_returns'])} {row['commodity']}（不记收入或冲减消费）")
     lines.append("区间专题（原币；专题可能重叠，不可相加）：")
     lines.extend(f"  {row['topic']}：支出 {_fmt(row['spent'])}，退回 {_fmt(row['returned'])}，净额 {_fmt(row['net'])} {row['commodity']}"
                  for row in report["tracking"])
@@ -384,7 +388,7 @@ def csv_rows(outcome: dict) -> list[dict]:
         if flows is None:
             add(scope, label, "default_outflows", "status", status="NOT_CONFIGURED")
         for row in flows or []:
-            for metric in OUTFLOW_METRICS:
+            for metric in (*OUTFLOW_METRICS, *(("credit_returns",) if "credit_returns" in row else ())):
                 add(scope, label, "default_outflows", metric, row[metric], commodity=row["commodity"])
     last = report["closing"]
     for metric in ("actual_spendable", "max_spendable"):

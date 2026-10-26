@@ -9,6 +9,9 @@ from .facts import FactIndex
 
 
 MESSAGES = {
+    "LIABILITY_CREDIT_PURPOSE_PENDING": "本次是预付／溢缴余额退回，原资金用途未能唯一确定；在收款资产腿明确 fund，不能把它当成新收入或自动挑一份用途。",
+    "LIABILITY_CREDIT_MIXED_UNSUPPORTED": "同笔既退回预付／溢缴余额，又包含新增借款、个人收入或其他清算类型；联合流量拆分尚未实现，不可用人工批准绕过。",
+    "LIABILITY_CREDIT_GROUP_UNSUPPORTED": "该退回涉及多账户混合预付的用途分配或后续来源约束，程序尚不能完整证明；不能凭收款 fund 覆盖旧来源或要求人工批准绕过。",
     "LIABILITY_RULE_BALANCE_INVALID": "负债账户规则与余额不符：应收账户不能自动形成应付款，带成本批次也不能按普通现金负债清算；核对账户 role、原分录或拆分往来对象。",
     "LIABILITY_RULE_OWNER_CONFLICT": "账户规则的单一责任用途与已有逐笔审阅不同；请核对 config 的 purpose，不能自动覆盖不同用途。",
     "LIABILITY_RULE_PURPOSE_MISMATCH": "该应收账户声明的原资金用途与实际付款／收款 fund 不一致，不能自动把报销划给另一用途；请核对 config 的 purpose 或明确拆分往来。",
@@ -67,6 +70,8 @@ MESSAGES = {
     "NAMED_H_EVENT_UNSUPPORTED": "用途已声明，但当前资金事件没有可编译的用途协议；需要补程序支持，不能靠重复填写 fund 消除。",
 }
 IMPLEMENTATION_LIMITS = frozenset((
+    "LIABILITY_CREDIT_MIXED_UNSUPPORTED",
+    "LIABILITY_CREDIT_GROUP_UNSUPPORTED",
     "TRANSACTION_ORDER_UNSUPPORTED",
     "DEFAULT_OUTFLOW_EVENT_UNSUPPORTED",
     "SETTLEMENT_PATH_UNSUPPORTED",

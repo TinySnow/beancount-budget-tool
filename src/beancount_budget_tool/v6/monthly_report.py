@@ -516,6 +516,8 @@ def render_text(report: dict) -> str:
             lines.append(f"    消费实付 {amount(row['expenses_paid'])}，"
                          f"消费退款 {amount(row['expense_refunds'])}，还债 {amount(row['debt_payments'])}")
             lines.append(f"    代垫 {amount(row['advances_paid'])}，报销收回 {amount(row['advance_reimbursements'])}")
+            if row.get("credit_returns"):
+                lines.append(f"    预付／溢缴退回 {amount(row['credit_returns'])}（不记收入或冲减消费）")
             for position in row["accounts"]:
                 lines.append(f"    {position['account']}：净流出 {amount(position['net_outflow'])} {row['commodity']}")
         lines.append("  刷卡在实际还款时计入；资产搬移、购汇和申赎不计入。此处汇总资金流向，余额和预算差额各按原口径计算。")

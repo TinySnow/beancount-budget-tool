@@ -30,8 +30,10 @@ KINDS = {"payment": "debt_payments", "advance_outflow": "advances_paid",
 
 def _totals(amounts):
     result = {key: exact_text(amounts[key]) for key in FIELDS}
+    if amounts["credit_returns"]:
+        result["credit_returns"] = exact_text(amounts["credit_returns"])
     outflow = sum((amounts[key] for key in ("expenses_paid", "debt_payments", "advances_paid")), Fraction(0))
-    inflow = amounts["expense_refunds"] + amounts["advance_reimbursements"]
+    inflow = amounts["expense_refunds"] + amounts["advance_reimbursements"] + amounts["credit_returns"]
     return {**result, "gross_outflow": exact_text(outflow), "gross_inflow": exact_text(inflow),
             "net_outflow": exact_text(outflow - inflow)}
 
@@ -163,7 +165,8 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                     pending("OBLIGATION_EVENT_UNSUPPORTED", ref, posting.account)
                     continue
                 event = ruled[0]
-                kinds = {row["kind"] for row in ruled}
+                moving = [row for row in ruled if Fraction(row["signed_units"]) != 0]
+                kinds = {row["kind"] for row in moving or ruled}
                 counterparts = [row["liability_ref"] for row in ruled]
                 if kinds <= {"payable_receipt"}:
                     continue
@@ -173,15 +176,30 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                     kind = "expense_refunds"
                 elif kinds == {"advance_reimbursement"}:
                     kind = "advance_reimbursements"
+                elif kinds == {"credit_return"}:
+                    kind = "credit_returns"
                 elif kinds <= {"payment", "advance_outflow"}:
                     fees = sum((exact(p.units.number) for p in expense_legs), Fraction(0))
                     if len(kinds) == 1 and not fees:
                         kind = KINDS[next(iter(kinds))]
-                    elif len(assets) == 1 and units == exact(posting.units.number):
+                    elif len(assets) == 1:
                         components = defaultdict(Fraction)
-                        components["expenses_paid"] = fees
+                        advances = defaultdict(Fraction)
+                        principal = Fraction(0)
                         for row in ruled:
-                            components[KINDS[row["kind"]]] += Fraction(row["signed_units"])
+                            if row["kind"] == "advance_outflow":
+                                advances[row["owner_id"]] += Fraction(row["signed_units"])
+                            else:
+                                principal += Fraction(row["signed_units"])
+                        available = abs(units) - advances[owner]
+                        remaining = abs(exact(posting.units.number)) - sum(advances.values(), Fraction(0))
+                        if available < 0 or available > remaining or fees and principal and 0 < available < remaining:
+                            pending("DEFAULT_CASH_SPLIT_AMBIGUOUS", ref, posting.account,
+                                    "本金／利息的多用途现金分摊无法唯一确定；应收部分已按明确责任用途单独核对。")
+                            continue
+                        components["advances_paid"] = advances[owner]
+                        components["expenses_paid"] = min(available, fees) if not principal or available == remaining else Fraction(0)
+                        components["debt_payments"] = available - components["expenses_paid"]
                     else:
                         pending("DEFAULT_CASH_SPLIT_AMBIGUOUS" if len(assets) == 1 else "DEFAULT_OUTFLOW_EVENT_UNSUPPORTED",
                                 ref, posting.account,

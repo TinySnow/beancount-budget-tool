@@ -54,6 +54,15 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert liability_report["default_outflows"]["totals"][0]["expenses_paid"] == "10", automatic
         assert liability_report["default_outflows"]["totals"][0]["debt_payments"] == "320", automatic
         assert not (liabilities / ".budget-state").exists(), "Ordinary rules must not require saved per-event approvals"
+        liability_ledger = liabilities / "main.bean"
+        liability_ledger.write_text(liability_ledger.read_text(encoding="utf-8") +
+            '\n2026-09-07 * "prepay"\n  Assets:Bank -50 CNY\n  Liabilities:Card 50 CNY\n'
+            '2026-09-08 * "return credit"\n  Assets:Bank 50 CNY\n  Liabilities:Card -50 CNY\n', encoding="utf-8")
+        credit = document("--config", liabilities / "config.yml")
+        assert credit["report"]["actual_spendable"]["actual_spendable"] == "2150", credit
+        assert credit["report"]["max_spendable"]["max_spendable"] == "410", credit
+        assert credit["report"]["default_outflows"]["totals"][0]["credit_returns"] == "50", credit
+        assert credit["report"]["default_outflows"]["totals"][0]["net_outflow"] == "330", credit
         if os.name == "nt" and not onedir:
             # The bootloader must use its own per-user runtime base, even if
             # the caller's system TEMP settings cannot contain a directory.
