@@ -719,7 +719,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     footer = ("w 工资周期 p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
               "w 工资周期 p 区间 m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
     if listing and browser.view == "reviews":
-        footer = "↑↓ 选项 Enter 详情 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
+        footer = "↑↓ 选项 Enter 详情 e 审阅 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
     elif browser.detail:
         footer = "↑↓ 滚动 PgUp/PgDn 翻页 Esc 返回 ? 帮助 q 退出"
     if browser.error:
@@ -832,19 +832,23 @@ def _edit_review(stdscr, browser: ReportBrowser):
         return
     items = browser.reviews()
     item = browser.detail or items[max(0, min(browser.selected, len(items) - 1))]
+    debt_review = item.get("kind") == "booked_obligation"
+    if debt_review:
+        from .obligation_review import prepare_review, save_review, validate_decision
     output = browser.review_roots[browser.index] / (datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:12])
     try:
         _put(stdscr, max(0, stdscr.getmaxyx()[0] - 1), "正在核对所选来源及可选名称……")
         stdscr.refresh()
         prepared = prepare_review(browser.config, item)
         row = prepared.row
-        label = "预算类别（budget）" if row["kind"] == "classification" else "资产资金用途（fund）"
+        label = prepared.label if debt_review else "预算类别（budget）" if row["kind"] == "classification" else "资产资金用途（fund）"
         context = [f"日期：{row['date']}  {row['payee'] or ''}  {row['narration']}",
                    f"账户：{row['account']}", f"原币分录：{row['signed_units']} {row['commodity']}",
                    f"来源：{row['source']}", f"填写：{label}",
-                   "可选名称／别名（- 表示预算外）：", *prepared.names,
-                   "单一名称覆盖整笔；多项如：保险200，旅游900。合计须等于分录绝对金额，不填负金额。"]
-        decision, reason = "", ""
+                   "可选责任／用途：" if debt_review else "可选名称／别名（- 表示预算外）：",
+                   *(prepared.choice_labels if debt_review else prepared.names),
+                   prepared.guidance if debt_review else "单一名称覆盖整笔；多项如：保险200，旅游900。合计须等于分录绝对金额，不填负金额。"]
+        decision, reason = prepared.initial if debt_review else "", ""
         while True:
             decision = _read_field(stdscr, "填写一项审阅决定", context, f"{label}：", decision)
             if decision is None:

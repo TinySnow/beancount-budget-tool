@@ -1,7 +1,7 @@
 """Source-bound replay of simple booked obligations and clearing advances.
 
 This contract covers a card purchase (including native expenses jointly paid
-by cash and one card) and later single asset/card payments.
+by cash and one or several cards) and later single asset/card payments.
 A separately reviewed asset-outflow / asset-inflow pair
 can settle a third-party advance recorded in a liability account without
 creating a personal consumption obligation.
@@ -39,7 +39,7 @@ ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 @shared_audit
 def audit_simple_obligations(root: Path, cutover: date,
                              declarations: Path | None = None,
-                             as_of: date | None = None) -> dict:
+                             as_of: date | None = None, *, before_ref: str | None = None) -> dict:
     """Replay reviewed purchases and payments, keeping all other debt pending.
 
     A certified event is a source and responsibility match, not a complete
@@ -58,6 +58,7 @@ def audit_simple_obligations(root: Path, cutover: date,
     opening = defaultdict(Fraction)
     historical_sources = {}
     candidates = {}
+    candidate_transactions = {}
     payable_receipts = {}
     order = []
     for entry in fin.entries:
@@ -129,6 +130,8 @@ def audit_simple_obligations(root: Path, cutover: date,
                                  payable_received=exact_text(receipt.payable),
                                  proof="native_income_payable_v1")
             candidates[key] = candidate
+            if before_ref is not None:
+                candidate_transactions[key] = id(entry)
             order.append(key)
 
     claims, claim_locations = {}, {}
@@ -242,12 +245,17 @@ def audit_simple_obligations(root: Path, cutover: date,
             claim_locations[key] = location
 
     opening_audit = compile_obligation_opening(opening, historical_sources, opening_rows, owners, declarations)
+    require(before_ref is None or type(before_ref) is str and before_ref in candidates and
+            (as_of is None or candidates[before_ref]["date"] <= as_of.isoformat()),
+            "OBLIGATION_REF_INVALID", "责任重放截止来源不存在或不在当前范围", str(root))
     balances = opening_audit["debts"]
     advances = opening_audit["advances"]
     opening_pending = opening_audit["pending"]
     pending_coordinates = {(row["account"], row["commodity"], row["lot"]) for row in opening_pending}
     events = []
     for key in order:
+        if before_ref is not None and candidate_transactions[key] == candidate_transactions[before_ref]:
+            break
         candidate = candidates[key]
         if as_of is not None and date.fromisoformat(candidate["date"]) > as_of:
             continue
@@ -342,6 +350,7 @@ def audit_simple_obligations(root: Path, cutover: date,
                          "outflow_ref": item["outflow_ref"]}
                         for ident, item in sorted(advances.items())]
     return {"mode": "v6_simple_booked_obligation_audit", "cutover": cutover.isoformat(),
+            **({"before_liability_ref": candidates[before_ref]["liability_ref"]} if before_ref is not None else {}),
             "as_of": as_of.isoformat() if as_of is not None else None,
             "ledger_snapshot": fin.digest, "review_sha256": review_sha,
             "review_state": "complete" if declarations is not None and not opening_pending and all(
