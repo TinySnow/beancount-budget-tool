@@ -44,6 +44,16 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             return json.loads(run(*args, "--format", "json")[0])
 
         run("--version")
+        liabilities = directory / "负债自动清算"
+        shutil.copytree(source / "liabilities", liabilities)
+        automatic = document("--config", liabilities / "config.yml", "--transactions")
+        assert automatic["status"] == "CERTIFIED_SCOPED", automatic
+        liability_report = automatic["report"]
+        assert liability_report["actual_spendable"]["actual_spendable"] == "2150", automatic
+        assert liability_report["max_spendable"]["max_spendable"] == "410", automatic
+        assert liability_report["default_outflows"]["totals"][0]["expenses_paid"] == "10", automatic
+        assert liability_report["default_outflows"]["totals"][0]["debt_payments"] == "320", automatic
+        assert not (liabilities / ".budget-state").exists(), "Ordinary rules must not require saved per-event approvals"
         if os.name == "nt" and not onedir:
             # The bootloader must use its own per-user runtime base, even if
             # the caller's system TEMP settings cannot contain a directory.

@@ -17,6 +17,8 @@ from ..financial import booked_through, frozen_financial, load_financial, financ
 from ..yamlstrict import load_yaml, yaml_key_location
 from .actual_snapshot import audit_actual_snapshot
 from .default_outflows import audit_default_outflows
+from .liability_rules import activity_report
+from .obligations import audit_simple_obligations
 from .classification import _key
 from .facts import frozen_fact_indices
 from .holdings import audit_h_holdings
@@ -210,7 +212,9 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
         details["salary_cycle"] = salary
     else:
         max_spendable = summarize_max_spendable(actual, expense)
-    return {**details, "mode": "v6_reviewed_month", "month": month, "as_of": as_of.isoformat(),
+    activity = activity_report(audit_simple_obligations(root, cutover, obligations, as_of), month)
+    return {**details, **({"liability_activity": activity} if activity is not None else {}),
+            "mode": "v6_reviewed_month", "month": month, "as_of": as_of.isoformat(),
             "report_currency": currency, "ledger_snapshot": actual["ledger_snapshot"],
             "owner_names": owner_names,
             "actual_spendable": actual,
@@ -425,17 +429,21 @@ def render_text(report: dict) -> str:
                         f"净消费 {amount(row['net_spent'])}，剩余 {amount(row['remaining']) if row['remaining'] is not None else '不计算'} {currency}")
         lines[2:2] = [*rows, ""]
     if actual["status"] == "CERTIFIED" and actual.get("clearing_receivables"):
-        lines[2:2] = ["待报销代垫（应收原币；未到账，不计入可花现金）", *(
-            f"  {row['clearing_id']}：待收 {amount(row['remaining_native'])} "
-            f"{row['commodity']}，{row['account']}" +
+        ruled_credit = any(row.get("origin") == "account_rule" for row in actual["clearing_receivables"])
+        lines[2:2] = ["应收／预付余额（原币；不计入可支付现金）" if ruled_credit else "待报销代垫（应收原币；未到账，不计入可花现金）", *(
+            f"  {row['account'] if row.get('origin') == 'account_rule' else row['clearing_id']}："
+            f"{'待收／预付' if row.get('origin') == 'account_rule' else '待收'} {amount(row['remaining_native'])} "
+            f"{row['commodity']}" + ("" if row.get("origin") == "account_rule" else f"，{row['account']}") +
             ("（期初结转）" if row.get("origin") == "opening" else "") + f" [{row['source']}]"
             for row in actual["clearing_receivables"]), ""]
     if actual["status"] == "CERTIFIED" and actual.get("booked_debts"):
         coverage = {row["obligation_id"]: row for row in actual.get("obligation_coverage") or []}
         settlements = {row["obligation_id"]: row for row in actual.get("settlement_allocations") or []}
-        lines[2:2] = ["未清已记消费责任（未覆盖部分占用实际可花）", *(
-            f"  {row['obligation_id']}：{amount(row['remaining_native'])} "
-            f"{row['commodity']}，{row['account']}" +
+        has_loan = any("debt_kind" in row for row in actual["booked_debts"])
+        lines[2:2] = ["未清已记责任（消费全额；贷款按到期范围计入）" if has_loan else "未清已记消费责任（未覆盖部分占用实际可花）", *(
+            f"  {row['account'] if row.get('origin') == 'account_rule' else row['obligation_id']}：{amount(row['remaining_native'])} "
+            f"{row['commodity']}" + ("" if row.get("origin") == "account_rule" else f"，{row['account']}") +
+            (f"；本金到期 {row['due_on']}" if "due_on" in row else "") +
             ("（期初结转）" if row.get("origin") == "opening" else "") +
             (f"；锁定清偿 {amount(settlements[row['obligation_id']]['report_amount'])} {currency}"
              f"（账单 {settlements[row['obligation_id']]['statement_id']}）"
@@ -482,6 +490,22 @@ def render_text(report: dict) -> str:
         shown += 1
     if not shown:
         lines.append("  无已声明的消费目标")
+    activity = report.get("liability_activity")
+    if activity:
+        from .transaction_details import DEBT_NAMES
+        lines += ["", "负债变动分类（不重复计入消费上限）"]
+        for row in activity["budget_totals"]:
+            lines.append(f"  {DEBT_NAMES.get(row['kind'], row['kind'])} · {row['category']}："
+                         f"负债分录净额 {amount(row['signed_liability_units'])} {row['commodity']}")
+        lines.append("  " + activity["note"])
+        managed = sorted({(row["account"], row["account_role"]) for row in activity["events"]
+                          if row.get("claim_origin") == "account_rule"})
+        for account, role in managed:
+            lines.append(f"  自动清算账户：{account}（{role}；单一用途清算池）")
+    if actual.get("future_loan_principal"):
+        lines += ["", "未来到期贷款本金（已记负债；本月未到期部分不扣本月实际可花）"]
+        for row in actual["future_loan_principal"]:
+            lines.append(f"  {row['account']}：{amount(row['remaining_native'])} {row['commodity']}，到期 {row['due_on']}")
     outflows = report.get("default_outflows", {})
     if outflows.get("status") == "CERTIFIED":
         name = owner_names.get(outflows["owner_id"], outflows["owner_id"])

@@ -24,6 +24,7 @@ from .accounts import _lot, audit_accounts
 from .classification import _key
 from .facts import FactIndex, GeneratedPostingRef, future_posting_refs, future_transactions
 from .inline_amounts import parse_inline_amounts
+from .liability_rules import validate_rules, native_rule_flow, cash_owner_parts
 from .initialization import initial_pad_postings
 from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt, native_group_payment
 from .opening import audit_opening
@@ -150,10 +151,11 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     claims = {}
     defaults = None
     transfer_orders = {}
+    liability_rules = {}
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
-        unknown_fields = set(document) - required - {"defaults", "transfer_orders"} if type(document) is dict else set()
+        unknown_fields = set(document) - required - {"defaults", "transfer_orders", "account_rules", "account_rule_assets"} if type(document) is dict else set()
         require_yaml(type(document) is dict and required <= set(document) and not unknown_fields,
             "OWNERSHIP_DECLARATION_INVALID", "归属声明字段不完整或含未知字段", declarations,
             (sorted(unknown_fields, key=str)[0],) if unknown_fields else ())
@@ -169,6 +171,8 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
         names = _owners(document["owners"], source=declarations)
         owner_names.update({row["id"]: row["name"] for row in document["owners"]})
         ids = set(names.values())
+        liability_rules = validate_rules(document.get("account_rules", {}), ids, declarations,
+                                         liability_root=fin.options["name_liabilities"])
         if "defaults" in document:
             defaults = document["defaults"]
             require(type(defaults) is dict and set(defaults) == {
@@ -333,7 +337,15 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             card_purchase = native_card_purchase(fin, entry, semantics)
             receipt = native_payable_receipt(fin, entry, semantics)
             payment = native_group_payment(fin, entry, semantics)
-            if receipt is not None or native is not None or card_purchase is not None or payment is not None or len(h_legs) == 1 and len(entry.postings) == 2:
+            rule_flow = native_rule_flow(fin, entry, liability_rules,
+                                        {account for account, mode in semantics.items() if mode == "H"})
+            if rule_flow is not None:
+                default = defaults["income_owner_id"] if rule_flow == "receipt" else defaults["expense_owner_id"]
+                owner = cash_owner_parts(fin, entry, rule_flow, liability_rules, default)
+                for key in missing_keys:
+                    if owner is not None:
+                        inferred(key, [(owner, exact(leg_keys[key].units.number))], "config 负债账户规则的现金用途；借入资金沿默认收入用途")
+            elif receipt is not None or native is not None or card_purchase is not None or payment is not None or len(h_legs) == 1 and len(entry.postings) == 2:
                 # Defaults select each asset's owner, not an allocation of
                 # payments to individual expense/income counterparts.
                 for key in missing_keys:

@@ -76,7 +76,7 @@ def _inspect(fin, cutover: date, income: str, expense: str, category: str):
         for posting in entry.postings:
             root = posting.account.split(":", 1)[0]
             key = "fund" if root == fin.options["name_assets"] else "budget"
-            if key == "budget" and root not in (fin.options["name_income"], fin.options["name_expenses"]):
+            if key == "budget" and root not in (fin.options["name_income"], fin.options["name_expenses"], fin.options["name_liabilities"]):
                 continue
             raw = (posting.meta or {}).get(key)
             if not isinstance(raw, str):

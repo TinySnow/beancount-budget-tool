@@ -78,7 +78,9 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                              "owner_id": row["owner_id"], "remaining_native": row["remaining_native"],
                              "origin": row["origin"],
                              "purchase_date": row["purchase_date"],
-                             "purchase_ref": row["purchase_ref"]})
+                             "purchase_ref": row["purchase_ref"],
+                             **({"debt_kind": row["debt_kind"], "due_on": row["due_on"]}
+                                if "debt_kind" in row else {})})
     for row in unresolved_clearings:
         advance_by_coordinate[(row["account"], row["commodity"], row["lot"])] += Fraction(
             row["remaining_native"])
@@ -87,8 +89,12 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         balances[coordinate] == advance_by_coordinate[coordinate] - obligation_by_coordinate[coordinate]
         for coordinate in coordinates)
     coverage_audit = None
+    from calendar import monthrange
+    month_end = date(as_of.year, as_of.month, monthrange(as_of.year, as_of.month)[1]).isoformat()
+    future_loans = [row for row in booked_debts if row.get("debt_kind") == "nonconsumer" and row["due_on"] > month_end]
+    due_debts = [row for row in booked_debts if row not in future_loans]
     settlement_audit = audit_debt_settlements(
-        booked_debts, cutover, as_of, cash["report_currency"], sources, debt_settlements)
+        due_debts, cutover, as_of, cash["report_currency"], sources, debt_settlements)
     if cash["review_state"] == debt["review_state"] == settlement_audit["review_state"] == "complete" and liability_matches:
         coverage_audit = audit_debt_coverage(cash, settlement_audit["valued_debts"], cutover, as_of, sources, debt_coverage)
 
@@ -196,8 +202,8 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         obligations_input = tuple(
             Obligation(id=row["obligation_id"],
                        remaining=Fraction(row["remaining_native"]),
-                       currency=row["commodity"], kind="consumer",
-                       owner=row["owner_id"], due_on=None,
+                       currency=row["commodity"], kind=row.get("debt_kind", "consumer"),
+                       owner=row["owner_id"], due_on=date.fromisoformat(row["due_on"]) if "due_on" in row else None,
                        evidence=f"booked:{fin.digest}:{row['obligation_id']};settlement:{settlement_audit['review_sha256']}",
                        settlement_amount=(Fraction(row["remaining_report"])
                                           if row["commodity"] != cash["report_currency"] else None),
@@ -224,6 +230,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                 if row.get("clearing_protocol") == "same_day_obligation_clearing_v1" and
                 row["date"][:7] == as_of.strftime("%Y-%m") and row["status"] == "CERTIFIED"]
     return {"mode": "v6_actual_simple_booked_debt_snapshot",
+            **({"future_loan_principal": future_loans} if future_loans else {}),
             **({"same_day_clearings": same_day} if actual is not None and same_day else {}),
             "cutover": cutover.isoformat(), "as_of": as_of.isoformat(),
             "ledger_snapshot": fin.digest, "completeness_sha256": declaration_sha,

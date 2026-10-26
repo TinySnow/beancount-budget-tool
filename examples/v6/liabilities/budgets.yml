@@ -1,0 +1,6 @@
+schema: 1
+months:
+  '2026-09':
+    completeness_confirmed: true
+    expense_targets:
+      生活开销: '500'

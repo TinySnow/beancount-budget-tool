@@ -93,6 +93,10 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
     # Even without a declaration file, recognize supported shapes as data
     # awaiting review rather than labelling their cash share unsupported.
     debt = audit_simple_obligations(root, cutover, obligations, last)
+    configured = defaultdict(list)
+    for row in debt["events"]:
+        if row.get("claim_origin") == "account_rule":
+            configured[_key(row["transaction_ref"])].append(row)
     payments = defaultdict(list)
     for row in debt["events"]:
         if row["counterpart_ref"] is not None:
@@ -152,8 +156,42 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                     any(p.account.split(":", 1)[0] == fin.options["name_income"] for p in entry.postings) and all(
                     exact(p.units.number) >= 0 for p in expense_legs)):
                 continue
-            kind, event = None, None
-            if native is not None and native.kind == "expense":
+            kind, event, components = None, None, None
+            ruled = configured.get(_key(facts.for_transaction(entry).as_dict()))
+            if ruled:
+                if any(row["status"] != "CERTIFIED" for row in ruled):
+                    pending("OBLIGATION_EVENT_UNSUPPORTED", ref, posting.account)
+                    continue
+                event = ruled[0]
+                kinds = {row["kind"] for row in ruled}
+                counterparts = [row["liability_ref"] for row in ruled]
+                if kinds <= {"payable_receipt"}:
+                    continue
+                if kinds == {"consumer_purchase"}:
+                    kind = "expenses_paid"
+                elif kinds == {"consumer_refund"}:
+                    kind = "expense_refunds"
+                elif kinds == {"advance_reimbursement"}:
+                    kind = "advance_reimbursements"
+                elif kinds <= {"payment", "advance_outflow"}:
+                    fees = sum((exact(p.units.number) for p in expense_legs), Fraction(0))
+                    if len(kinds) == 1 and not fees:
+                        kind = KINDS[next(iter(kinds))]
+                    elif len(assets) == 1 and units == exact(posting.units.number):
+                        components = defaultdict(Fraction)
+                        components["expenses_paid"] = fees
+                        for row in ruled:
+                            components[KINDS[row["kind"]]] += Fraction(row["signed_units"])
+                    else:
+                        pending("DEFAULT_CASH_SPLIT_AMBIGUOUS" if len(assets) == 1 else "DEFAULT_OUTFLOW_EVENT_UNSUPPORTED",
+                                ref, posting.account,
+                                "同笔本金／利息使用多用途资金，尚不能确定各用途承担的部分。" if len(assets) == 1 else
+                                "同笔多个现金账户支付本金／利息的联合分类汇总尚未实现；不能用逐笔审阅代替程序支持。")
+                        continue
+                else:
+                    pending("DEFAULT_OUTFLOW_EVENT_UNSUPPORTED", ref, posting.account)
+                    continue
+            elif native is not None and native.kind == "expense":
                 kind = "expenses_paid" if units < 0 else "expense_refunds"
                 counterparts = [facts.for_posting(p).as_dict() for p in native.counterparts]
             elif (len(assets) == 1 and len(entry.postings) == 1 + len(expense_legs) and expense_legs
@@ -192,16 +230,19 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
             else:
                 pending("DEFAULT_OUTFLOW_EVENT_UNSUPPORTED", ref, posting.account)
                 continue
-            amount = abs(units)
-            by_currency[posting.units.currency][kind] += amount
-            by_account[(posting.units.currency, posting.account)][kind] += amount
-            result["events"].append({"date": entry.date.isoformat(), "narration": entry.narration,
-                "account": posting.account, "commodity": posting.units.currency, "owner_id": owner,
-                "kind": kind, "amount": exact_text(amount), "signed_owner_units": exact_text(units),
-                "asset_ref": ref, "counterpart_refs": counterparts, "source": sources[_key(ref)],
-                **({"obligation_ids": event["obligation_ids"]} if event and "obligation_ids" in event else
-                   {"obligation_id": event["obligation_id"], "clearing_id": event["clearing_id"]}
-                   if event else {})})
+            for component, amount in (components or {kind: abs(units)}).items():
+                if not amount:
+                    continue
+                by_currency[posting.units.currency][component] += amount
+                by_account[(posting.units.currency, posting.account)][component] += amount
+                result["events"].append({"date": entry.date.isoformat(), "narration": entry.narration,
+                    "account": posting.account, "commodity": posting.units.currency, "owner_id": owner,
+                    "kind": component, "amount": exact_text(amount),
+                    "signed_owner_units": exact_text(-amount if units < 0 else amount),
+                    "asset_ref": ref, "counterpart_refs": counterparts, "source": sources[_key(ref)],
+                    **({"obligation_ids": event["obligation_ids"]} if event and "obligation_ids" in event else
+                       {"obligation_id": event["obligation_id"], "clearing_id": event["clearing_id"]}
+                       if event else {})})
     if result["review_items"]:
         return {**result, "status": "NEEDS_REVIEW", "events": [],
                 "reason_codes": sorted({item["reason_code"] for item in result["review_items"]})}

@@ -30,11 +30,33 @@ from .obligation_opening import compile_obligation_opening, opening_source, pair
 from .ownership import _owners
 from .native_flows import native_card_purchase, native_payable_receipt, native_group_payment
 from .inline_amounts import parse_inline_amounts
+from .liability_rules import validate_rules, audit_rule_accounts, liability_budget
 from .provenance import valid_digest
 from .source import _source, scan_v6_source
 
 
 ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
+
+
+def _declarations(path, cutover, fin):
+    if path is None:
+        return None, {}, None
+    document = load_yaml(path)
+    required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "events"}
+    optional = {"opening", "account_rules", "account_rule_assets", "account_rule_defaults", "budget_categories"}
+    unknown = set(document) - required - optional if type(document) is dict else set()
+    require_yaml(type(document) is dict and required <= set(document) and not unknown,
+                 "OBLIGATION_DECLARATION_INVALID", "责任侧文件字段不完整或含未知字段", path,
+                 (sorted(unknown, key=str)[0],) if unknown else ())
+    for field, valid in (
+        ("schema", type(document["schema"]) is int and document["schema"] == 6),
+        ("cutover", type(document["cutover"]) is str and document["cutover"] == cutover.isoformat()),
+        ("ledger_snapshot", valid_digest(document["ledger_snapshot"])),
+        ("loader_version", document["loader_version"] == fin.loader_version),
+        ("events", type(document["events"]) is list),
+    ):
+        require_yaml(valid, "OBLIGATION_DECLARATION_INVALID", "责任侧文件版本或原审快照格式不匹配", path, (field,))
+    return document, _owners(document["owners"], source=path), sha256(path.read_bytes()).hexdigest()
 
 
 @shared_audit
@@ -57,6 +79,22 @@ def audit_simple_obligations(root: Path, cutover: date,
     future_info = {}
     asset_root = fin.options["name_assets"]
     expense_root = fin.options["name_expenses"]
+    document, owner_names, review_sha = _declarations(declarations, cutover, fin)
+    configured = document.get("account_rules", {}) if type(document) is dict else {}
+    rule_owners = owner_names
+    configured = validate_rules(configured, set(rule_owners.values()), declarations, liability_root=liability_root)
+    rule_assets = document.get("account_rule_assets", []) if configured else []
+    rule_defaults = document.get("account_rule_defaults", {}) if configured else {}
+    require(not configured or type(rule_assets) is list and all(type(account) is str for account in rule_assets) and
+            type(rule_defaults) is dict and set(rule_defaults) == {"income_owner_id", "expense_owner_id"} and
+            all(owner in rule_owners.values() for owner in rule_defaults.values()),
+            "LIABILITY_RULE_INVALID", "账户规则须绑定 H 现金账户和明确的收入／支出默认用途", str(declarations))
+    budget_names = document.get("budget_categories") if type(document) is dict else None
+    require(budget_names is None or type(budget_names) is list and all(type(name) is str for name in budget_names),
+            "OBLIGATION_DECLARATION_INVALID", "budget_categories 须为类别名称列表", str(declarations))
+    ruled = audit_rule_accounts(fin, facts, cutover, as_of, configured,
+                               rule_assets, before_ref=before_ref, budget_names=budget_names,
+                               owner_names=rule_owners, default_expense_owner=rule_defaults.get("expense_owner_id")) if configured else None
     opening = defaultdict(Fraction)
     historical_sources = {}
     candidates = {}
@@ -68,6 +106,8 @@ def audit_simple_obligations(root: Path, cutover: date,
             continue
         for posting in entry.postings:
             if posting.account.split(":", 1)[0] != liability_root:
+                continue
+            if posting.account in configured:
                 continue
             coord = (posting.account, posting.units.currency, _lot(posting))
             amount = exact(posting.units.number)
@@ -109,6 +149,9 @@ def audit_simple_obligations(root: Path, cutover: date,
                          "account": posting.account, "commodity": posting.units.currency,
                          "lot": coord[2], "date": entry.date.isoformat(),
                          "signed_units": exact_text(amount), "shape": shape or "unsupported"}
+            labels = liability_budget(posting, budget_names)
+            if labels is not None:
+                candidate["budget_slices"] = labels
             if group is not None:
                 candidate.update(
                     counterpart_refs=[facts.for_posting(p).as_dict() for p in entry.postings if p is not posting],
@@ -152,29 +195,17 @@ def audit_simple_obligations(root: Path, cutover: date,
         if not condition:
             require(False, code, message, yaml_path_location(declarations, location))
 
-    review_sha = None
     opening_rows, owners = [], set()
-    owner_names = {}
     if declarations is not None:
-        document = load_yaml(declarations)
-        required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "events"}
-        unknown = set(document) - required - {"opening"} if type(document) is dict else set()
-        require_yaml(type(document) is dict and required <= set(document) and not unknown,
-            "OBLIGATION_DECLARATION_INVALID", "责任侧文件字段不完整或含未知字段", declarations,
-            (sorted(unknown, key=str)[0],) if unknown else ())
-        for field, valid in (
-            ("schema", type(document["schema"]) is int and document["schema"] == 6),
-            ("cutover", type(document["cutover"]) is str and document["cutover"] == cutover.isoformat()),
-            ("ledger_snapshot", valid_digest(document["ledger_snapshot"])),
-            ("loader_version", document["loader_version"] == fin.loader_version),
-            ("events", type(document["events"]) is list),
-        ):
-            require_yaml(valid, "OBLIGATION_DECLARATION_INVALID", "责任侧文件版本或原审快照格式不匹配",
-                         declarations, (field,))
-        owner_names = _owners(document["owners"], source=declarations)
         owners = set(owner_names.values())
         opening_rows = document.get("opening", [])
-        review_sha = sha256(declarations.read_bytes()).hexdigest()
+        if ruled is not None and type(opening_rows) is list:
+            for index, row in enumerate(opening_rows):
+                if type(row) is dict and _key(row.get("liability_ref", {})) in ruled["keys"] and "owner_id" in row:
+                    check_event(row["owner_id"] == ruled["rules_by_ref"][_key(row["liability_ref"])]["owner_id"],
+                                "LIABILITY_RULE_OWNER_CONFLICT", "账户规则用途与原期初审阅不同；核对 config 的 purpose", ("opening", index))
+            opening_rows = [row for row in opening_rows if type(row) is not dict or
+                            _key(row.get("liability_ref", {})) not in ruled["keys"]]
         for row_index, row in enumerate(document["events"]):
             location = ("events", row_index)
             check_event(type(row) is dict and (set(row) - ({"same_day_source_ref"} if row.get("kind") == "payment" else set())) in ({
@@ -202,6 +233,13 @@ def audit_simple_obligations(root: Path, cutover: date,
                 check_event(False, "OBLIGATION_CLAIM_INVALID", "责任来源须为可序列化的完整引用", location)
             check_event(len(set(ref_keys)) == len(ref_keys), "OBLIGATION_COUNTERPART_INVALID",
                         "负债对手来源不得重复", (*location, ref_field))
+            if ruled is not None and key in ruled["keys"]:
+                # Opting into a single-purpose account rule replaces matching
+                # per-event clearing choices, but never silently changes an
+                # explicitly approved responsibility purpose.
+                check_event("owner_id" not in row or row["owner_id"] == ruled["rules_by_ref"][key]["owner_id"],
+                            "LIABILITY_RULE_OWNER_CONFLICT", "账户规则用途与既有逐笔审阅不同；核对 config 的 purpose", location)
+                continue
             if key not in candidates or as_of is not None and candidates[key]["date"] > as_of.isoformat():
                 if future_pairs is None:
                     reference_fin = reference_financial(fin)
@@ -298,8 +336,9 @@ def audit_simple_obligations(root: Path, cutover: date,
         same_day_targets[key] = target
 
     opening_audit = compile_obligation_opening(opening, historical_sources, opening_rows, owners, declarations)
-    require(before_ref is None or type(before_ref) is str and before_ref in candidates and
-            (as_of is None or candidates[before_ref]["date"] <= as_of.isoformat()),
+    require(before_ref is None or type(before_ref) is str and (
+            before_ref in candidates and (as_of is None or candidates[before_ref]["date"] <= as_of.isoformat()) or
+            ruled is not None and ruled["before_entry"] is not None),
             "OBLIGATION_REF_INVALID", "责任重放截止来源不存在或不在当前范围", str(root))
     balances = opening_audit["debts"]
     advances = opening_audit["advances"]
@@ -308,7 +347,8 @@ def audit_simple_obligations(root: Path, cutover: date,
     prepaid = defaultdict(Fraction)
     events = []
     for key in order:
-        if before_ref is not None and candidate_transactions[key] == candidate_transactions[before_ref]:
+        if before_ref is not None and candidate_transactions[key] == (
+                candidate_transactions[before_ref] if before_ref in candidate_transactions else id(ruled["before_entry"])):
             break
         candidate = candidates[key]
         if as_of is not None and date.fromisoformat(candidate["date"]) > as_of:
@@ -418,8 +458,17 @@ def audit_simple_obligations(root: Path, cutover: date,
                          "origin": item.get("origin", "current_period"),
                          "outflow_ref": item["outflow_ref"]}
                         for ident, item in sorted(advances.items())]
+    opening_declarations = opening_audit["declarations"]
+    if ruled is not None:
+        events.extend(ruled["events"])
+        remaining.extend(ruled["obligations"])
+        pending_advances.extend(ruled["clearing_advances"])
+        opening_pending.extend(ruled["opening_pending"])
+        opening_declarations = opening_declarations + ruled["opening_declarations"]
     return {"mode": "v6_simple_booked_obligation_audit", "cutover": cutover.isoformat(),
-            **({"before_liability_ref": candidates[before_ref]["liability_ref"],
+            **({"before_liability_ref": candidates[before_ref]["liability_ref"] if before_ref in candidates else
+                next(facts.for_posting(p).as_dict() for p in ruled["before_entry"].postings
+                     if _key(facts.for_posting(p).as_dict()) == before_ref),
                 **({"pending_same_day_prepayments": {ident: exact_text(value) for ident, value in prepaid.items()}}
                    if prepaid else {})} if before_ref is not None else {}),
             "as_of": as_of.isoformat() if as_of is not None else None,
@@ -427,7 +476,7 @@ def audit_simple_obligations(root: Path, cutover: date,
             "review_state": "complete" if declarations is not None and not opening_pending and not prepaid and all(
                 row["status"] == "CERTIFIED" for row in events) else "pending",
             "opening_pending": opening_pending,
-            "opening_declarations": opening_audit["declarations"],
+            "opening_declarations": opening_declarations,
             "certified_events": sum(row["status"] == "CERTIFIED" for row in events),
             "pending_events": sum(row["status"] == "NEEDS_REVIEW" for row in events),
             "unsupported_events": sum(row["status"] == "UNSUPPORTED" for row in events),

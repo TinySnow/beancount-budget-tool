@@ -42,6 +42,65 @@ accounts:
 | `spendable_cap_category` | 否 | 用哪个费用类别及其子类的目标差限制最多能花；默认 expense_category。`null` 关闭此指标，不按现金假算上限 |
 | `classification_defaults` | 否 | 默认 `true`；`false` 禁用未写 budget 的默认分类。某些旧配置迁移后会保留 false，不影响资产默认 fund 用途 |
 | `expense_budget_basis` | 否 | 默认 `calendar_month` 沿用自然月消费上限；`salary_cycle` 改为按当前发薪周期剩余额度限制最多能花。账务审核和资金快照仍按自然月 |
+| `liabilities` | 否 | 普通负债账户的类型、单一责任用途和清算规则，见下节；不配置的账户继续沿用逐笔审阅 |
+
+### 普通负债：配置一次，自动计算
+
+信用卡、应付款、代垫应收可以在 **config.yml 顶层**声明：
+
+```yaml
+liabilities:
+  Liabilities:CreditCard:ICBC:
+    role: credit_card
+    purpose: 生活费
+  Liabilities:Payable:Colleague:
+    role: payable
+    purpose: 生活费
+  Liabilities:Receivable:Employer:
+    role: receivable
+    purpose: 生活费
+```
+
+账户名换成你的完整会计科目名。`purpose` 是谁承担债务／谁拥有应收款，不是费用预算类别；新名称会自动登记。**这一声明表示该账户、每个币种分别是单一用途、允许按账户余额清算的资金池。** 信用卡不用逐笔挑选消费来还款；部分还款和跨月余额也自动结转。
+
+| role | 含义 |
+|---|---|
+| `credit_card` | 信用卡消费责任；未偿额全额占用实际可花。退款减少费用和欠款；溢缴款只作应收／预付，不当银行卡现金 |
+| `payable` | 借入或代收后需要归还的钱、应付款；未偿额全额占用。可识别同笔个人收入＋代收款，只有 Income 部分是收入 |
+| `receivable` | 先代垫、以后收回的钱；未收回不增加可花现金，收回恢复原用途。不能自动把负余额当成自己欠别人的钱 |
+| `loan` | **到期一次还本**的简单非消费贷款，另填 `due_on: '2027-06-30'`。未来本金列示但不提前全扣；本月到期及逾期剩余本金计入责任。分期贷款不能填最后到期日来省略中间应还款，当前须另行表达到期份额 |
+
+多人应收、应付混在“其他”账户时，账面净额可能掩盖仍欠某人的钱；这种账户不要直接声明为清算池，应拆会计子账户或继续明确关联来源。一个账户混用多种责任用途时，也不能用一个 purpose 代替拆分。
+
+资金用途仍由 **资产腿 fund** 决定。省略时，普通付款使用默认支出用途；借入／代收到账使用默认收入用途，且不记个人收入或用途净划拨 G；应收报销恢复声明的原用途。应收账户的原付款、收款 fund 与 purpose 不一致时待审，不暗中改用途。既有逐笔审阅与规则用途相同可转用规则，原记录保留；不同则报冲突。
+
+规则直接读取账本、保持原顺序；同日先付款可以形成真实预付，不要求编造 `budget-order`。cutover 前的未结余额按配置用途结转，不把旧消费再算一次。删除 config 中的规则立即停止自动清算，不会从 `.budget-state` 偷偷恢复它。
+
+### Liabilities 上的 budget：可选分类，不增加消费
+
+```beancount
+2026-09-20 * "还本金及利息"
+  Assets:Bank -1010 CNY
+    fund: "生活费"
+  Liabilities:Loan 1000 CNY
+    budget: "偿债.甲600,偿债.乙400"
+  Expenses:Interest 10 CNY
+    budget: "生活开销"
+```
+
+本金和利息由分录区分：本笔消费 10、偿还本金 1000、现金流出 1010。负债 budget 可以省略、只写一个类别名，或沿用多类别金额写法；金额必须精确加回**这条负债分录**。`fund` 仍只能写在 Assets，不能写在 Liabilities。
+
+负债分类在月报「负债变动分类」、交易详情和 CSV 的 `liability_budget` 中单列，不并入 Expenses 的消费上限或工资周期额度。刷卡消费 100、还款 100，消费合计仍为 100；商家退款退到卡上不产生银行卡现金流；已支持的同类债务转移不记消费或现金付款。信用卡消费责任转成未来到期贷款还需专门协议，当前不会自动放行以释放额度。
+
+当前规则覆盖同币、无成本／价格的普通现金交易；跨币、价格、复杂混合交易仍须相应协议。无法判断的数据继续待审，未实现形状显示程序缺口。**加 budget 不等于批准责任，也不能用来改变交易性质。**
+
+完整可运行示例：[负债账本](../examples/v6/liabilities/main.bean)、[config.yml](../examples/v6/liabilities/config.yml)、[budgets.yml](../examples/v6/liabilities/budgets.yml)。在项目目录运行：
+
+```bash
+python -m beancount_budget_tool --config examples/v6/liabilities/config.yml --format tui
+```
+
+预期消费净额 90、实际可花 2150、最多能花 410 CNY；无需逐笔填写理由。
 
 ### 账户多时，按三组填写
 

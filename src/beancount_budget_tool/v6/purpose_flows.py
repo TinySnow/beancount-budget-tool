@@ -120,8 +120,21 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
         debt_by_ref = {_key(row["liability_ref"]): row for row in debt["events"]}
         used_purchase_groups = set()
         used_payment_groups = set()
+        used_rule_groups = set()
         for event in debt["events"]:
             if event["date"][:7] != month or event["status"] != "CERTIFIED":
+                continue
+            if event.get("proof") == "configured_liability_account_v1":
+                group = _key(event["transaction_ref"])
+                members = [debt_by_ref[_key(ref)] for ref in event["liability_refs"]]
+                if group in used_rule_groups or any(row["status"] != "CERTIFIED" for row in members):
+                    continue
+                used_rule_groups.add(group)
+                refs = event["asset_refs"]
+                if all(_key(ref) in claimed_h and all(part["role"] == "hold"
+                       for part in claimed[_key(ref)]["slices"]) for ref in refs):
+                    add("liability_" + event["kind"], event, refs, {},
+                        source_refs=event["liability_refs"] if not refs else None)
                 continue
             if event["kind"] == "payable_receipt":
                 refs = event["asset_refs"]

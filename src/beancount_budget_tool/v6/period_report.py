@@ -334,6 +334,10 @@ def csv_rows(outcome: dict) -> list[dict]:
     currency = report["report_currency"]
     for month, source in zip(report["monthly_reports"], outcome["months"]):
         label, config = month["month"], source["config"]
+        for row in month.get("liability_activity", {}).get("budget_totals", []):
+            add("month", label, "liability_budget", "signed_liability_units", row["signed_liability_units"],
+                name=row["category"], commodity=row["commodity"], source=config,
+                detail=f"{row['kind']}；负债分类，不增加消费。")
         if month.get("salary_cycle", {}).get("status") == "NOT_STARTED":
             add("month_end", label, "salary_cycle", "not_started", None, commodity=currency,
                 source=config, status="NOT_STARTED", detail=f"首个已配置发薪日：{month['salary_cycle']['first_payday']}；此前不套用周期目标。")

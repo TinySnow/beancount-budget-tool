@@ -58,6 +58,7 @@ python3 -m venv .venv
 - 每个账户的 `semantics` 选 `H`（账本数量代表真实余额）或 `K`（只有累计申赎，不能当持仓）。账户很多时可用[三组简写](docs/CONFIGURATION.md#账户多时按三组填写)，不用反复写相同属性。
 - `payment_scope` 每个币种选 `payable`（可以直接支付）、`excluded`（不能直接支付）；不确定可保留 `null`／`pending`，程序会列待审。
 - cutover 前有余额时，才需要 `opening` 的用途拆分。首次正数 Assets／Equity pad 初始化自动归默认收入用途，不算当月收入或正式划拨。
+- 有信用卡、应付款或单位代垫时，可在 config 顶层填写[负债账户规则](docs/CONFIGURATION.md#普通负债配置一次自动计算)，普通交易自动冲账，不必每笔选择责任 ID、写理由。只有确定该账户是单一用途的清算池才声明，混合往来继续拆分或审阅。Liabilities 可以写可选的 budget 分类；本金与利息用分录区分，还款不会重复计入消费额度。
 
 打开 `budgets.yml`，按月份填写目标。例如：
 

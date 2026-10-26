@@ -141,7 +141,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                 kind = posting.account.split(":", 1)[0]
                 for tag in ("fund", "budget"):
                     if tag not in (posting.meta or {}) or (tag == "fund" and kind != asset_root) or (
-                            tag == "budget" and kind not in (fin.options["name_income"], fin.options["name_expenses"])):
+                            tag == "budget" and kind not in (fin.options["name_income"], fin.options["name_expenses"], liability_root)):
                         continue  # Misplaced metadata is rejected by the source gate.
                     code = "FUND_GRAMMAR" if tag == "fund" else "TAG_SYNTAX_INVALID"
                     raw = posting.meta[tag]

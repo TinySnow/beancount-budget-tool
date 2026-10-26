@@ -22,9 +22,10 @@ from tempfile import TemporaryDirectory, mkdtemp
 from uuid import uuid4
 
 import yaml
+from beancount.core import data
 
 from ..errors import BudgetError, require
-from ..financial import financial_session
+from ..financial import financial_session, load_financial
 from .facts import frozen_fact_indices
 from ..console import configure_output
 from ..yamlstrict import config_path, load_yaml, require_yaml, yaml_path_location
@@ -93,7 +94,7 @@ def _documents(config: Path, inputs: dict | None = None):
     inputs.setdefault(config, config.read_bytes())
     doc = load_yaml(config)
     fields = {"schema", "ledger", "budgets", "cutover", "month", "report_currency", "defaults"}
-    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"accounts", "account_groups", "account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis"},
+    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"accounts", "account_groups", "account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis", "liabilities"},
                  "SIMPLE_CONFIG_INVALID", "config.yml 须含 schema: 1、ledger、budgets、cutover、month、report_currency、defaults，以及 accounts 或 account_groups", config)
     for key in ("ledger", "budgets", "cutover", "month", "report_currency"):
         require_yaml(type(doc[key]) is str and bool(doc[key].strip()), "SIMPLE_CONFIG_INVALID",
@@ -333,7 +334,15 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
     # This flag only lets the input compiler run. The final completeness
     # declaration is removed unless the user actually confirmed this month.
     filled["completeness_confirmed"] = True
-    owners = set(filled["allocation_targets"]) | set(plans.get("purposes", []))
+    from .liability_rules import validate_rules
+    liability_rules = doc.get("liabilities", {})
+    # Validate before reading names out of an arbitrary YAML value.
+    require_yaml(type(liability_rules) is dict and all(type(row) is dict for row in liability_rules.values()),
+                 "LIABILITY_RULE_INVALID", "liabilities 须为负债账户到规则的映射", config, ("liabilities",))
+    rule_purposes = {row.get("purpose") for row in liability_rules.values() if type(row.get("purpose")) is str}
+    fin = load_financial(root)
+    validate_rules(liability_rules, rule_purposes, config, public=True, liability_root=fin.options["name_liabilities"])
+    owners = set(filled["allocation_targets"]) | set(plans.get("purposes", [])) | rule_purposes
     owners.update(row["name"] for row in state.get("ownership", {}).get("owners", []))
     filled["allocation_targets"] = {name: goals["allocation_targets"].get(name, "not_assessed")
                                      for name in owners | set(goals["allocation_targets"])}
@@ -435,6 +444,24 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
         if key in state:
             generated[key] = deepcopy(state[key])
     generated["obligations"]["owners"] = owner_rows
+    # These settings are authoritative in config.yml, never sticky approvals
+    # recovered from .budget-state after a user removes a rule.
+    for key in ("account_rules", "account_rule_assets", "account_rule_defaults", "budget_categories"):
+        generated["obligations"].pop(key, None)
+    if liability_rules:
+        compiled_rules = {account: {"role": rule["role"], "owner_id": owner_names[rule["purpose"]],
+                                    **({"due_on": rule["due_on"]} if "due_on" in rule else {})}
+                          for account, rule in liability_rules.items()}
+        cash_accounts = [row["account"] for row in generated["accounts"]["accounts"] if row["semantics"] == "H"]
+        for document in (generated["obligations"], ownership):
+            document["account_rules"] = compiled_rules
+            document["account_rule_assets"] = cash_accounts
+        generated["obligations"]["account_rule_defaults"] = deepcopy(ownership["defaults"])
+    # Liability labels have their own projection, never consumption totals.
+    if liability_rules or any(isinstance(entry, data.Transaction) and entry.date >= cutover and
+            any(posting.account.split(":", 1)[0] == fin.options["name_liabilities"] and
+                "budget" in (posting.meta or {}) for posting in entry.postings) for entry in fin.entries):
+        generated["obligations"]["budget_categories"] = sorted(category_names)
     allocations = {row["id"]: "not_assessed" for row in owner_rows}
     declared_allocations = set()
     for name, value in goals["allocation_targets"].items():
@@ -584,6 +611,10 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
             accounts[row["account"]] = account
         public = {"schema": 1, "ledger": relative_reference(ledger.resolve(), output), "budgets": "budgets.yml",
                   "cutover": cutover, "month": month, "report_currency": currency, "defaults": names, "accounts": accounts}
+        if state.get("obligations", {}).get("account_rules"):
+            public["liabilities"] = {account: {"role": rule["role"], "purpose": owner_names[rule["owner_id"]],
+                                              **({"due_on": rule["due_on"]} if "due_on" in rule else {})}
+                                     for account, rule in state["obligations"]["account_rules"].items()}
         if old_config:
             if "defaults" not in state["classifications"]:
                 public["classification_defaults"] = False

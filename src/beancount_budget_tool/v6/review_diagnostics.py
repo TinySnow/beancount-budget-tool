@@ -9,6 +9,10 @@ from .facts import FactIndex
 
 
 MESSAGES = {
+    "LIABILITY_RULE_BALANCE_INVALID": "负债账户规则与余额不符：应收账户不能自动形成应付款，带成本批次也不能按普通现金负债清算；核对账户 role、原分录或拆分往来对象。",
+    "LIABILITY_RULE_OWNER_CONFLICT": "账户规则的单一责任用途与已有逐笔审阅不同；请核对 config 的 purpose，不能自动覆盖不同用途。",
+    "LIABILITY_RULE_PURPOSE_MISMATCH": "该应收账户声明的原资金用途与实际付款／收款 fund 不一致，不能自动把报销划给另一用途；请核对 config 的 purpose 或明确拆分往来。",
+    "DEFAULT_CASH_SPLIT_AMBIGUOUS": "同笔付款包含本金／利息或不同清算类型，且现金使用多份资金；不能猜每份资金支付哪部分，请明确拆分付款。",
     "DEFAULT_OUTFLOW_EVENT_UNSUPPORTED": "默认支出用途参与了复合收付，当前协议不能唯一分开消费、还债和资产搬移；需要补充流向编译协议。",
     "ACCOUNT_UNREVIEWED": "该资产账户尚未声明为 H 真实库存或 K 申赎累计账户。",
     "PAYMENT_SCOPE_PENDING": "该账户的此币种能否直接支付尚未确定；审定 payable 或 excluded。",

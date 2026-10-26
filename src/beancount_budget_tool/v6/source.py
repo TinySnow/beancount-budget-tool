@@ -33,7 +33,7 @@ class SourceAudit:
 
 def _root(account: str, options: Mapping[str, Any]) -> str:
     prefix = account.split(":", 1)[0]
-    for kind in ("assets", "expenses", "income"):
+    for kind in ("assets", "expenses", "income", "liabilities"):
         if prefix == options[f"name_{kind}"]:
             return kind
     return "other"
@@ -93,7 +93,7 @@ def collect_v6_source_issues(root: Path, cutover: date,
             pmeta = posting.meta or {}
             psource = _source(pmeta)
             kind = _root(posting.account, fin.options)
-            for key, valid in (("budget", kind in ("expenses", "income")),
+            for key, valid in (("budget", kind in ("expenses", "income", "liabilities")),
                                ("fund", kind == "assets")):
                 if key not in pmeta:
                     continue
@@ -148,8 +148,8 @@ def scan_v6_source(root: Path, cutover: date, through: Optional[date] = None) ->
             pmeta = posting.meta or {}
             psource = _source(pmeta)
             kind = _root(posting.account, fin.options)
-            require("budget" not in pmeta or kind in ("expenses", "income"),
-                    "TAG_LEVEL_FORBIDDEN", "budget 只能写在费用／收入 posting", psource)
+            require("budget" not in pmeta or kind in ("expenses", "income", "liabilities"),
+                    "TAG_LEVEL_FORBIDDEN", "budget 只能写在费用／收入／负债 posting；负债分类不新增消费", psource)
             require("fund" not in pmeta or kind == "assets",
                     "TAG_LEVEL_FORBIDDEN", "fund 只能写在资产 posting", psource)
             if "budget" in pmeta:
