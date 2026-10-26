@@ -47,15 +47,7 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
     owner_document = load_yaml(ownership)
     owner_ids = set(_owners(owner_document["owners"]).values())
     h_claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
-    future_pairs = {}
-    for entry, refs in future_transaction_refs(fin, cutover):
-        if len(entry.postings) != 2 or not all(
-                account_audit["declared_semantics"].get(p.account) == "H" for p in entry.postings):
-            continue
-        negatives = [index for index, p in enumerate(entry.postings) if exact(p.units.number) < 0]
-        positives = [index for index, p in enumerate(entry.postings) if exact(p.units.number) > 0]
-        if len(negatives) == len(positives) == 1:
-            future_pairs[_key(refs[negatives[0]])] = refs[positives[0]]
+    future_pairs = None
     candidates = {}
     order = []
     for entry in fin.entries:
@@ -109,11 +101,22 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
                 "H_TRANSFER_CLAIM_INVALID", "H 转账须有双方完整 booked 来源、理由和切片",
                 declarations, location)
             key = _key(row["from_ref"])
-            if key in future_pairs:
-                require_yaml(row["to_ref"] == future_pairs[key],
-                    "H_TRANSFER_TO_REF_INVALID", "未来 H 转入来源须为同一交易的完整对手",
-                    declarations, (*location, "to_ref"))
-                continue
+            if key not in candidates:
+                if future_pairs is None:
+                    future_pairs = {}
+                    for entry, refs in future_transaction_refs(fin, cutover):
+                        if len(entry.postings) != 2 or not all(
+                                account_audit["declared_semantics"].get(p.account) == "H" for p in entry.postings):
+                            continue
+                        negatives = [index for index, p in enumerate(entry.postings) if exact(p.units.number) < 0]
+                        positives = [index for index, p in enumerate(entry.postings) if exact(p.units.number) > 0]
+                        if len(negatives) == len(positives) == 1:
+                            future_pairs[_key(refs[negatives[0]])] = refs[positives[0]]
+                if key in future_pairs:
+                    require_yaml(row["to_ref"] == future_pairs[key],
+                        "H_TRANSFER_TO_REF_INVALID", "未来 H 转入来源须为同一交易的完整对手",
+                        declarations, (*location, "to_ref"))
+                    continue
             require_yaml(key in candidates,
                 "H_TRANSFER_REF_INVALID", "H 转出来源不存在或过期",
                 declarations, (*location, "from_ref"))

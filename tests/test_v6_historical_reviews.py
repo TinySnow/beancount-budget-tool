@@ -92,6 +92,24 @@ class HistoricalReviewTests(unittest.TestCase):
             for index, row in enumerate(owned["ownership"])]
         self.save(self.ownership, owners)
 
+    def test_current_decisions_do_not_construct_future_reference_maps(self):
+        from unittest.mock import patch
+        self.shared_claims()
+        for path, field in ((self.classifications, "classifications"), (self.ownership, "claims")):
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            document[field].pop()  # The last decision belongs to October.
+            self.save(path, document)
+        with booked_through(SEPTEMBER_END), patch(
+                "beancount_budget_tool.v6.classification.future_posting_refs",
+                side_effect=AssertionError("unneeded future index")), patch(
+                "beancount_budget_tool.v6.ownership.future_posting_refs",
+                side_effect=AssertionError("unneeded future index")):
+            classes = audit_classification(self.root, CUTOVER, self.classifications)
+            owned = audit_ownership(self.root, CUTOVER, self.accounts, self.ownership)
+        self.assertEqual(classes["claimed_postings"], 3)
+        self.assertEqual(owned["claimed_h_postings"], 3)
+        self.assertEqual((classes["review_state"], owned["review_state"]), ("complete", "complete"))
+
     def test_income_reversal_debits_income_default_and_preserves_expense_default(self):
         with booked_through(SEPTEMBER_END):
             owned = audit_ownership(self.root, CUTOVER, self.accounts, self.ownership)

@@ -11,7 +11,7 @@ import yaml
 
 from beancount_budget_tool.v6.classification import audit_classification
 from beancount_budget_tool.v6.benefits import audit_economic_benefits
-from beancount_budget_tool.financial import load_financial
+from beancount_budget_tool.financial import load_financial, booked_through
 from beancount_budget_tool.exact import amount_text
 from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
@@ -123,6 +123,25 @@ class MultilotSaleTests(unittest.TestCase):
 
     def audit(self, approved=None):
         return audit_economic_benefits(self.root, self.cutover, self.review, approved)
+
+    def test_future_sale_approval_is_checked_without_entering_current_benefits(self):
+        self.case()
+        income = self.audit()["proved"][0]["ref"]
+        approval = self.base / "approved.yml"
+        document = {"schema": 6, "cutover": self.cutover.isoformat(),
+                    "ledger_snapshot": load_financial(self.root).digest,
+                    "loader_version": BEANCOUNT_VERSION, "report_currency": "CNY",
+                    "approvals": [{"income_ref": income, "reason": "reviewed sale"}]}
+        self.save(approval, document)
+        with booked_through(date(2026, 1, 1)):
+            result = self.audit(approval)
+            self.assertEqual(result["proved_benefits"], 0)
+            self.assertEqual(result["review_state"], "complete")
+            document["approvals"][0]["income_ref"]["fact_sha256"] = "0" * 64
+            self.save(approval, document)
+            with self.assertRaises(BudgetError) as caught:
+                self.audit(approval)
+        self.assertEqual(caught.exception.code, "BENEFIT_GROUP_REF_INVALID")
 
     def test_multiple_lots_and_fee_legs_prove_one_income_without_manual_equation_approval(self):
         self.case()

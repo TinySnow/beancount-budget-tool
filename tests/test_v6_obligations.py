@@ -10,7 +10,7 @@ from beancount import __version__ as BEANCOUNT_VERSION
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.financial import load_financial
+from beancount_budget_tool.financial import load_financial, booked_through
 from beancount_budget_tool.v6.obligations import audit_simple_obligations
 
 
@@ -60,6 +60,20 @@ class SimpleObligationTests(unittest.TestCase):
     def audit(self, document):
         self.declarations.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
         return audit_simple_obligations(self.root, CUTOVER, self.declarations)
+
+    def test_future_payment_counterpart_is_checked_with_and_without_bounded_facts(self):
+        from contextlib import nullcontext
+        for bounded in (False, True):
+            with self.subTest(bounded=bounded), (booked_through(date(2026, 9, 2)) if bounded else nullcontext()):
+                document = self.document()
+                self.declarations.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
+                result = audit_simple_obligations(self.root, CUTOVER, self.declarations, date(2026, 9, 2))
+                self.assertEqual(result["obligations"][0]["remaining_native"], "300")
+                document["events"][1]["counterpart_ref"] = document["events"][2]["counterpart_ref"]
+                self.declarations.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
+                with self.assertRaises(BudgetError) as caught:
+                    audit_simple_obligations(self.root, CUTOVER, self.declarations, date(2026, 9, 2))
+                self.assertEqual(caught.exception.code, "OBLIGATION_COUNTERPART_INVALID")
 
     def test_purchase_then_partial_and_full_payment_replay(self):
         report = self.audit(self.document())

@@ -52,19 +52,7 @@ def audit_simple_obligations(root: Path, cutover: date,
     fin = load_financial(root)
     facts = FactIndex(fin)
     liability_root = fin.options["name_liabilities"]
-    reference_fin = reference_financial(fin)
-    visible = {id(entry) for entry in fin.entries}
-    future_entries = [entry
-        for entry in reference_fin.entries if isinstance(entry, data.Transaction) and
-        (id(entry) not in visible or as_of is not None and entry.date > as_of)]
-    future_pairs = {}
-    if any(p.account.split(":", 1)[0] == liability_root for e in future_entries for p in e.postings):
-        reference_facts = reference_fact_index(fin)
-        for entry in future_entries:
-            refs = [_key(reference_facts.for_posting(p).as_dict()) for p in entry.postings]
-            for index, posting in enumerate(entry.postings):
-                if posting.account.split(":", 1)[0] == liability_root:
-                    future_pairs[refs[index]] = set(refs[:index] + refs[index + 1:])
+    future_pairs = None
     asset_root = fin.options["name_assets"]
     expense_root = fin.options["name_expenses"]
     opening = defaultdict(Fraction)
@@ -188,11 +176,26 @@ def audit_simple_obligations(root: Path, cutover: date,
                 check_event(False, "OBLIGATION_CLAIM_INVALID", "责任来源须为可序列化的完整引用", location)
             check_event(len(set(ref_keys)) == len(ref_keys), "OBLIGATION_COUNTERPART_INVALID",
                         "负债对手来源不得重复", (*location, ref_field))
-            if key in future_pairs:
-                check_event(set(ref_keys) == future_pairs[key] if grouped else ref_keys[0] in future_pairs[key],
-                        "OBLIGATION_COUNTERPART_INVALID", "未来负债对手须为同一交易的完整来源组",
-                        (*location, ref_field))
-                continue  # Existing source after the report date; do not apply its claim.
+            if key not in candidates or as_of is not None and candidates[key]["date"] > as_of.isoformat():
+                if future_pairs is None:
+                    reference_fin = reference_financial(fin)
+                    visible = {id(entry) for entry in fin.entries}
+                    future_entries = [entry
+                        for entry in reference_fin.entries if isinstance(entry, data.Transaction) and
+                        (id(entry) not in visible or as_of is not None and entry.date > as_of)]
+                    future_pairs = {}
+                    if any(p.account.split(":", 1)[0] == liability_root for e in future_entries for p in e.postings):
+                        reference_facts = reference_fact_index(fin)
+                        for entry in future_entries:
+                            refs = [_key(reference_facts.for_posting(p).as_dict()) for p in entry.postings]
+                            for index, posting in enumerate(entry.postings):
+                                if posting.account.split(":", 1)[0] == liability_root:
+                                    future_pairs[refs[index]] = set(refs[:index] + refs[index + 1:])
+                if key in future_pairs:
+                    check_event(set(ref_keys) == future_pairs[key] if grouped else ref_keys[0] in future_pairs[key],
+                            "OBLIGATION_COUNTERPART_INVALID", "未来负债对手须为同一交易的完整来源组",
+                            (*location, ref_field))
+                    continue  # Existing source after the report date; do not apply its claim.
             check_event(key in candidates, "OBLIGATION_REF_INVALID", "负债来源不存在或过期",
                         (*location, "liability_ref"))
             check_event(key not in claims, "DUPLICATE_OBLIGATION_CLAIM", "负债腿被重复认领", location)

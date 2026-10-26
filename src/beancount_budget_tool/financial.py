@@ -96,7 +96,7 @@ class FinancialInput:
 
     @cached_property
     def _reference_tables(self) -> tuple[dict, dict]:
-        """Raw identities for this capture; scoped indices take their own subset."""
+        """Raw identities for this view; full views are indexed only on demand."""
         from .refs import ReferenceIndex
         index = ReferenceIndex(self)
         return index.by_transaction, index.by_posting

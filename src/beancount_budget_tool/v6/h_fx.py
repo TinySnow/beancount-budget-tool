@@ -49,18 +49,7 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
     modes = {row["account"]: row.get("semantics") for row in account_audit["accounts"]}
     owner_ids = set(_owners(load_yaml(ownership)["owners"]).values())
     h_claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
-    future_pairs = {}
-    for entry, refs in future_transaction_refs(fin, cutover):
-        if len(entry.postings) != 2 or not all(
-                account_audit["declared_semantics"].get(p.account) == "H" for p in entry.postings):
-            continue
-        if len({p.units.currency for p in entry.postings}) != 2:
-            continue
-        report_legs = [index for index, p in enumerate(entry.postings)
-                       if p.units.currency == report_currency]
-        if len(report_legs) == 1:
-            index = report_legs[0]
-            future_pairs[_key(refs[index])] = refs[1 - index]
+    future_pairs = None
     candidates = {}
     order = []
     for entry in fin.entries:
@@ -117,11 +106,25 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
                 "H_FX_CLAIM_INVALID", "H 外汇须有两侧完整 booked 引用、单一用途及人工理由",
                 declarations, location)
             key = _key(row["from_ref"])
-            if key in future_pairs:
-                require_yaml(row["to_ref"] == future_pairs[key],
-                    "H_FX_TO_REF_INVALID", "未来 H 外汇转入来源须为同一交易的完整对手",
-                    declarations, (*location, "to_ref"))
-                continue
+            if key not in candidates:
+                if future_pairs is None:
+                    future_pairs = {}
+                    for entry, refs in future_transaction_refs(fin, cutover):
+                        if len(entry.postings) != 2 or not all(
+                                account_audit["declared_semantics"].get(p.account) == "H" for p in entry.postings):
+                            continue
+                        if len({p.units.currency for p in entry.postings}) != 2:
+                            continue
+                        report_legs = [index for index, p in enumerate(entry.postings)
+                                       if p.units.currency == report_currency]
+                        if len(report_legs) == 1:
+                            index = report_legs[0]
+                            future_pairs[_key(refs[index])] = refs[1 - index]
+                if key in future_pairs:
+                    require_yaml(row["to_ref"] == future_pairs[key],
+                        "H_FX_TO_REF_INVALID", "未来 H 外汇转入来源须为同一交易的完整对手",
+                        declarations, (*location, "to_ref"))
+                    continue
             require_yaml(key in candidates,
                 "H_FX_REF_INVALID", "H 外汇转出来源不存在或过期",
                 declarations, (*location, "from_ref"))

@@ -108,8 +108,7 @@ def audit_classification(root: Path, cutover: date, declarations: Path | None = 
     facts = FactIndex(fin)
     expense_root = fin.options["name_expenses"]
     income_root = fin.options["name_income"]
-    future_keys = {_key(ref) for posting, ref in future_posting_refs(fin, cutover)
-                   if posting.account.split(":", 1)[0] in (expense_root, income_root)}
+    future_keys = None
     candidates: dict[str, tuple[data.Posting, dict]] = {}
     order: list[str] = []
     for entry in fin.entries:
@@ -163,8 +162,12 @@ def audit_classification(root: Path, cutover: date, declarations: Path | None = 
             require_yaml(type(row["claim"]) is dict, "CLAIM_REF_INVALID", "claim 必须是完整 booked 引用",
                          declarations, ("classifications", row_index, "claim"))
             key = _key(row["claim"])
-            if key in future_keys:
-                continue  # Retain the decision for its month, not this report.
+            if key not in candidates:
+                if future_keys is None:
+                    future_keys = {_key(ref) for posting, ref in future_posting_refs(fin, cutover)
+                                   if posting.account.split(":", 1)[0] in (expense_root, income_root)}
+                if key in future_keys:
+                    continue  # Retain the decision for its month, not this report.
             require(key in candidates, "CLAIM_REF_INVALID", "分类引用不存在、过期或不属费用／收入",
                     yaml_path_location(declarations, ("classifications", row_index, "claim")))
             require(key not in claims, "CLASSIFICATION_DOUBLE_CLAIM", "同一 posting 重复分类", key)

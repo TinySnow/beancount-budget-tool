@@ -60,12 +60,16 @@ def validate_same_day_settlements(fin: FinancialInput, facts: FactIndex,
     if not claims:
         return [], {}
     visible = {id(entry) for entry in fin.entries}
-    reference_fin = reference_financial(fin)
-    reference_facts = facts if reference_fin is fin else reference_fact_index(fin)
-    entries = [entry for entry in reference_fin.entries if isinstance(entry, data.Transaction)]
-    positions = {id(entry): index for index, entry in enumerate(entries)}
-    by_ref = {_key(reference_facts.for_posting(posting).as_dict()): (entry, posting)
-              for entry in entries for posting in entry.postings}
+
+    def source_rows(source_fin, source_facts):
+        entries = [entry for entry in source_fin.entries if isinstance(entry, data.Transaction)]
+        positions = {id(entry): index for index, entry in enumerate(entries)}
+        by_ref = {_key(source_facts.for_posting(posting).as_dict()): (entry, posting)
+                  for entry in entries for posting in entry.postings}
+        return entries, positions, by_ref
+
+    reference_fin = fin
+    entries, positions, by_ref = source_rows(fin, facts)
     used_refs: set[str] = set()
     result: list[SameDaySettlement] = []
     roles: dict[int, tuple[str, SameDaySettlement]] = {}
@@ -82,9 +86,14 @@ def validate_same_day_settlements(fin: FinancialInput, facts: FactIndex,
         refs = []
         for field in ("debit_ref", "liability_ref", "funding_ref"):
             ref = row[field]
-            require(type(ref) is dict and _key(ref) in by_ref,
+            require(type(ref) is dict,
                     "SETTLEMENT_SOURCE_INVALID", "结算来源未对应本快照的 booked posting", field)
             key = _key(ref)
+            if key not in by_ref and reference_fin is fin and fin.reference_entries is not None:
+                reference_fin = reference_financial(fin)
+                entries, positions, by_ref = source_rows(reference_fin, reference_fact_index(fin))
+            require(key in by_ref,
+                    "SETTLEMENT_SOURCE_INVALID", "结算来源未对应本快照的 booked posting", field)
             require(key not in used_refs, "SETTLEMENT_SOURCE_REUSED", "结算来源被重复认领", field)
             used_refs.add(key)
             refs.append(by_ref[key])

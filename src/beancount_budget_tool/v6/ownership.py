@@ -22,7 +22,7 @@ from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .accounts import _lot, audit_accounts
 from .classification import _key
-from .facts import FactIndex, GeneratedPostingRef, future_posting_refs
+from .facts import FactIndex, GeneratedPostingRef, future_posting_refs, future_transactions
 from .inline_amounts import parse_inline_amounts
 from .initialization import initial_pad_postings
 from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt
@@ -106,13 +106,11 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     fin = load_financial(root)
     facts = FactIndex(fin)
     assets = fin.options["name_assets"]
-    future_postings = list(future_posting_refs(fin, cutover))
-    future_keys = {_key(ref) for posting, ref in future_postings
-                   if posting.account.split(":", 1)[0] == assets
-                   and account_audit["declared_semantics"].get(posting.account) == "H"}
+    future_keys = None
     known_coordinates = {(row["account"], commodity) for row in account_audit["accounts"]
                          for commodity in row["commodities"]}
-    known_coordinates.update((posting.account, posting.units.currency) for posting, _ in future_postings)
+    known_coordinates.update((posting.account, posting.units.currency)
+                             for entry in future_transactions(fin, cutover) for posting in entry.postings)
     h_candidates = {}
     unknown = []
     k_postings = []
@@ -204,8 +202,13 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     bool(row["reason"].strip()) and type(row["slices"]) is list and row["slices"],
                     "OWNERSHIP_CLAIM_INVALID", "归属 claim 须有完整引用、理由和切片")
             key = _key(row["claim"])
-            if key in future_keys:
-                continue  # No future slices or balances enter a historical report.
+            if key not in h_candidates:
+                if future_keys is None:
+                    future_keys = {_key(ref) for posting, ref in future_posting_refs(fin, cutover)
+                                   if posting.account.split(":", 1)[0] == assets
+                                   and account_audit["declared_semantics"].get(posting.account) == "H"}
+                if key in future_keys:
+                    continue  # No future slices or balances enter a historical report.
             require(key in h_candidates, "OWNERSHIP_REF_INVALID",
                     "归属引用不存在、过期或不是已审 H 资产腿",
                     yaml_path_location(declarations, ("claims", row_index, "claim")))

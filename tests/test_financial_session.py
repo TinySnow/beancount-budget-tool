@@ -54,6 +54,7 @@ class FrozenFinancialTests(unittest.TestCase):
                 with financial_session(), frozen_fact_indices():
                     with booked_through(date(2023, 7, 31)), frozen_financial(root) as july:
                         july_index = FactIndex(july)
+                        self.assertEqual(raw.call_count, 1)  # Only the July view is indexed so far.
                         complete = reference_financial(july)
                         august_transaction = next(entry for entry in complete.entries if isinstance(entry, data.Transaction)
                                                   and entry.date.month == 8)
@@ -70,7 +71,7 @@ class FrozenFinancialTests(unittest.TestCase):
                         self.assertEqual(august_index.for_posting(august_transaction.postings[0]), future_ref)
                         self.assertEqual(len(august_index.posting_refs), 4)
                     self.assertEqual(load.call_count, 1)
-                    self.assertEqual(raw.call_count, 1)
+                    self.assertEqual(raw.call_count, 2)  # July plus the explicitly requested full table.
                     with self.assertRaises(BudgetError):
                         july_index.for_posting(august_transaction.postings[0])
                 self.assertEqual(load.call_count, 1)

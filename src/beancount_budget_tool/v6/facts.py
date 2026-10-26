@@ -129,7 +129,11 @@ class FactIndex:
     def __init__(self, fin: FinancialInput) -> None:
         if getattr(self, "_initialized", False):
             return
-        raw_transactions, raw_postings = reference_financial(fin)._reference_tables
+        complete = reference_financial(fin)
+        # Reuse an already requested complete table; otherwise index only the
+        # visible view. Future decisions explicitly request the full index.
+        raw_transactions, raw_postings = (
+            complete if "_reference_tables" in complete.__dict__ else fin)._reference_tables
         visible = [entry for entry in fin.entries if isinstance(entry, data.Transaction)]
         self.transaction_refs: Dict[int, TransactionIdentity] = {
             id(entry): raw_transactions[id(entry)] for entry in visible if id(entry) in raw_transactions}

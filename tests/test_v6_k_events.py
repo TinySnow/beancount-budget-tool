@@ -10,7 +10,7 @@ from beancount import __version__ as BEANCOUNT_VERSION
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.financial import load_financial
+from beancount_budget_tool.financial import load_financial, booked_through
 from beancount_budget_tool.v6.k_events import audit_k_events
 from beancount_budget_tool.v6.k_book_purposes import audit_k_book_purposes
 from beancount_budget_tool.v6.ownership import audit_ownership
@@ -85,6 +85,16 @@ class KEventTests(unittest.TestCase):
     def audit(self, document):
         self.events.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
         return audit_k_events(self.root, CUTOVER, self.accounts, self.ownership, self.events)
+
+    def test_future_decision_keeps_exact_counterpart_validation(self):
+        document = self.declaration()
+        with booked_through(date(2026, 9, 1)):
+            result = self.audit(document)
+            self.assertEqual(result["events"], [])
+            document["events"][0]["cash_ref"]["fact_sha256"] = "0" * 64
+            with self.assertRaises(BudgetError) as caught:
+                self.audit(document)
+        self.assertEqual(caught.exception.code, "K_EVENT_CASH_REF_INVALID")
 
     def test_mixed_subscription_matches_two_h_cash_owner_slices(self):
         report = self.audit(self.declaration())

@@ -186,13 +186,7 @@ def audit_economic_benefits(root: Path, cutover: date,
             proved.append({**record, "evidence_ref": facts.for_posting(counterpart).as_dict(),
                           "proof": "unique_same_transaction_booked_counterpart"})
     if approved_groups is not None:
-        future_groups = {_key(ref): (entry, posting)
-                         for entry, refs in future_transaction_refs(fin, cutover)
-                         if len(entry.postings) > 2
-                         for posting, ref in zip(entry.postings, refs)
-                         if posting.account.split(":", 1)[0] == income_root}
-        reference_fin = reference_financial(fin)
-        reference_facts = reference_fact_index(fin) if future_groups else facts
+        future_groups = None
         document = load_yaml(approved_groups)
         fields = {
             "schema", "cutover", "ledger_snapshot", "loader_version",
@@ -231,12 +225,21 @@ def audit_economic_benefits(root: Path, cutover: date,
                 raise BudgetError("BENEFIT_GROUP_REF_INVALID", "收入引用格式无效；请重新导出完整引用", location) from exc
             require(key not in seen, "BENEFIT_GROUP_DUPLICATE", "同一收入重复认领经济组", location)
             seen.add(key)
-            if key in future_groups:
-                entry, posting = future_groups[key]
-                require(costed_sale_candidate(entry, posting, reference_fin, reference_facts, currency)
-                        is not None, "BENEFIT_GROUP_UNPROVED",
-                        "未来证券成本、到账、收益与费用未构成唯一守恒组", location)
-                continue
+            if key not in complex_context:
+                if future_groups is None:
+                    future_groups = {_key(ref): (entry, posting)
+                                     for entry, refs in future_transaction_refs(fin, cutover)
+                                     if len(entry.postings) > 2
+                                     for posting, ref in zip(entry.postings, refs)
+                                     if posting.account.split(":", 1)[0] == income_root}
+                    reference_fin = reference_financial(fin)
+                    reference_facts = reference_fact_index(fin) if future_groups else facts
+                if key in future_groups:
+                    entry, posting = future_groups[key]
+                    require(costed_sale_candidate(entry, posting, reference_fin, reference_facts, currency)
+                            is not None, "BENEFIT_GROUP_UNPROVED",
+                            "未来证券成本、到账、收益与费用未构成唯一守恒组", location)
+                    continue
             require(key in complex_context, "BENEFIT_GROUP_REF_INVALID",
                     "经济组收入引用不存在、过期或无需复杂分摊", location)
             entry, posting = complex_context[key]

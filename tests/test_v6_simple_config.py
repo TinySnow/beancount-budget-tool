@@ -51,6 +51,27 @@ class SimpleConfigTests(unittest.TestCase):
         self.budgets = Path(result["budgets"])
         return result
 
+    def test_daily_month_indexes_only_visible_facts_even_with_future_card_transactions(self):
+        from datetime import date
+        from beancount.core import data
+        from beancount_budget_tool.refs import ReferenceIndex
+        self.migrate()
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
+            '\n2026-10-01 open Liabilities:Card\n'
+            '2026-10-02 * "future card purchase"\n'
+            '  Expenses:Food 3 CNY\n  Liabilities:Card -3 CNY\n', encoding="utf-8")
+        captured = []
+        def index(fin):
+            captured.append(fin)
+            return ReferenceIndex(fin)
+        with patch("beancount_budget_tool.refs.ReferenceIndex", side_effect=index):
+            result = audit_simple(self.config, include_transactions=True)
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(result["report"]["max_spendable"]["max_spendable"], "190")
+        self.assertTrue(captured)
+        self.assertTrue(all(entry.date <= date(2026, 9, 30) for fin in captured for entry in fin.entries))
+        self.assertTrue(any(isinstance(entry, data.Transaction) for fin in captured for entry in fin.entries))
+
     def test_daily_review_completes_without_importing_migration_commands(self):
         self.migrate()
         script = """

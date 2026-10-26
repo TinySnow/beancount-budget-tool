@@ -10,7 +10,7 @@ from beancount import __version__ as BEANCOUNT_VERSION
 from beancount.core import data
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.financial import load_financial
+from beancount_budget_tool.financial import load_financial, booked_through
 from beancount_budget_tool.v6.accounts import audit_accounts
 from beancount_budget_tool.v6.facts import FactIndex
 from beancount_budget_tool.v6.holdings import audit_h_holdings
@@ -78,6 +78,27 @@ class SameDaySettlementTests(unittest.TestCase):
     def audit(self, document):
         self.review.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
         return audit_accounts(self.root, CUTOVER, self.review)
+
+    def test_current_settlement_uses_visible_sources_without_a_complete_index(self):
+        from unittest.mock import patch
+        document = self.declaration()
+        self.root.write_text(LEDGER + '2026-11-02 * "future refund"\n'
+                             '  Assets:Bank 1 CNY\n  Expenses:Education -1 CNY\n', encoding="utf-8")
+        with booked_through(date(2026, 10, 31)), patch(
+                "beancount_budget_tool.v6.settlements.reference_fact_index",
+                side_effect=AssertionError("unneeded future index")):
+            result = self.audit(document)
+        self.assertEqual(len(result["same_day_settlements"]), 1)
+
+    def test_future_settlement_is_checked_but_cannot_enable_a_current_exception(self):
+        document = self.declaration()
+        with booked_through(date(2026, 10, 1)):
+            result = self.audit(document)
+            self.assertEqual(result["same_day_settlements"], [])
+            document["same_day_settlements"][0]["funding_ref"]["fact_sha256"] = "0" * 64
+            with self.assertRaises(BudgetError) as caught:
+                self.audit(document)
+        self.assertEqual(caught.exception.code, "SETTLEMENT_SOURCE_INVALID")
 
     def test_exact_whitelisted_card_bridge_closes_at_day_end(self):
         result = self.audit(self.declaration())

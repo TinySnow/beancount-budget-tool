@@ -93,19 +93,7 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
     names = _owners(owner_document["owners"])
     owner_ids = set(names.values())
     cash_claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
-    future_pairs = {}
-    for entry, refs in future_transaction_refs(fin, cutover):
-        redemption = native_book_redemption(fin, entry, account_audit["declared_semantics"])
-        if redemption is not None:
-            future_pairs[_key(refs[entry.postings.index(redemption.book)])] = (
-                refs[entry.postings.index(redemption.cash)])
-            continue
-        if len(entry.postings) != 2:
-            continue
-        modes_future = [account_audit["declared_semantics"].get(p.account) for p in entry.postings]
-        if set(modes_future) == {"H", "K"}:
-            index = modes_future.index("K")
-            future_pairs[_key(refs[index])] = refs[1 - index]
+    future_pairs = None
     candidates = {}
     source_locations = {}
     inline_funds = {}
@@ -201,11 +189,26 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
                 "K_EVENT_CLAIM_INVALID", "K 事件必须绑定完整 booked 引用",
                 declarations, location)
             key = _key(row["k_ref"])
-            if key in future_pairs:
-                require_yaml(row["cash_ref"] == future_pairs[key],
-                    "K_EVENT_CASH_REF_INVALID", "未来 K 现金来源须为同一交易的完整 H 对手",
-                    declarations, (*location, "cash_ref"))
-                continue
+            if key not in candidates:
+                if future_pairs is None:
+                    future_pairs = {}
+                    for entry, refs in future_transaction_refs(fin, cutover):
+                        redemption = native_book_redemption(fin, entry, account_audit["declared_semantics"])
+                        if redemption is not None:
+                            future_pairs[_key(refs[entry.postings.index(redemption.book)])] = (
+                                refs[entry.postings.index(redemption.cash)])
+                            continue
+                        if len(entry.postings) != 2:
+                            continue
+                        modes_future = [account_audit["declared_semantics"].get(p.account) for p in entry.postings]
+                        if set(modes_future) == {"H", "K"}:
+                            index = modes_future.index("K")
+                            future_pairs[_key(refs[index])] = refs[1 - index]
+                if key in future_pairs:
+                    require_yaml(row["cash_ref"] == future_pairs[key],
+                        "K_EVENT_CASH_REF_INVALID", "未来 K 现金来源须为同一交易的完整 H 对手",
+                        declarations, (*location, "cash_ref"))
+                    continue
             require_yaml(key in candidates,
                 "K_EVENT_REF_INVALID", "K 来源不存在或过期",
                 declarations, (*location, "k_ref"))
