@@ -5,7 +5,8 @@ the lexical evidence that Beancount's booked AST may normalize away.
 """
 
 from calendar import monthrange
-from dataclasses import dataclass, replace
+from collections import deque
+from dataclasses import dataclass, field, replace
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
@@ -14,6 +15,8 @@ from functools import cached_property, wraps
 from hashlib import sha256
 from inspect import signature
 import json
+import glob
+import os
 from pathlib import Path
 import re
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -50,12 +53,19 @@ class SourceFile:
         return tuple(self.text.splitlines())
 
     @cached_property
+    def _syntax(self) -> tuple:
+        """Keep only official positions/include directives, not another full AST."""
+        entries, errors, options = parser.parse_string(self.text, report_filename=str(self.path))
+        positions = {entry.meta["lineno"]: tuple(posting.meta["lineno"] for posting in entry.postings)
+                     for entry in entries if isinstance(entry, data.Transaction)}
+        return positions, tuple(options["include"]), errors
+
+    @cached_property
     def _posting_lines(self) -> Dict[int, Tuple[int, ...]]:
         """Official raw syntax positions shared by views of this frozen text."""
-        entries, errors, _ = parser.parse_string(self.text, report_filename=str(self.path))
+        positions, _, errors = self._syntax
         require(not errors, "CLAIM_REF_INVALID", "来源文件无法由官方 parser 唯一识别", str(self.path))
-        return {entry.meta["lineno"]: tuple(posting.meta["lineno"] for posting in entry.postings)
-                for entry in entries if isinstance(entry, data.Transaction)}
+        return positions
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,8 @@ class FinancialInput:
     digest: str
     loader_version: str
     reference_entries: Optional[Tuple[Any, ...]] = None
+    source_names: Mapping[str, Path] = field(default_factory=dict)
+    include_globs: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
 
     @cached_property
     def _sources_by_filename(self) -> Mapping[str, SourceFile]:
@@ -136,18 +148,54 @@ class FinancialInput:
         return "\n".join(selected).rstrip()
 
 
-def _sources(root: Path, options: Mapping[str, Any]) -> Dict[Path, SourceFile]:
-    names = {root.resolve()}
-    names.update(Path(name).resolve() for name in options.get("include", []))
-    result = {}
-    for path in sorted(names):
-        try:
-            raw = path.read_bytes()
-            content = raw.decode("utf-8-sig")
-        except (OSError, UnicodeError) as exc:
-            raise BudgetError("SOURCE_MISSING", str(exc), str(path)) from exc
-        result[path] = SourceFile(path, content, sha256(raw).hexdigest())
-    return result
+def _glob_matches(pattern: str) -> Tuple[str, ...]:
+    # Match the official loader's recursive glob and relative-path semantics.
+    return tuple(os.path.normpath(name) for name in glob.glob(pattern, recursive=True))
+
+
+def _check_loader_errors(errors, root: Path) -> None:
+    if errors:
+        code = "DUPLICATE_METADATA_KEY" if "Duplicate" in str(errors[0]) and "metadata field" in str(errors[0]) else "LOADER_ERROR"
+        raise BudgetError(code, f"Beancount 加载失败：{errors[0]}", str(root))
+
+
+def _capture_sources(root: Path) -> tuple[dict, dict, dict]:
+    sources, names, includes = {}, {}, {}
+    pending = deque([str(root)])
+    while pending:
+        name = pending.popleft()
+        if name in names:
+            continue  # The official loader still diagnoses duplicate includes.
+        path = Path(name).resolve()
+        names[name] = path
+        if path not in sources:
+            try:
+                raw = Path(name).read_bytes()
+                sources[path] = SourceFile(path, raw.decode("utf-8-sig"), sha256(raw).hexdigest())
+            except (OSError, UnicodeError) as exc:
+                raise BudgetError("SOURCE_MISSING", str(exc), name) from exc
+        source = sources[path]
+        _, patterns, errors = source._syntax
+        _check_loader_errors(errors, root)
+        for pattern in patterns:
+            search = pattern if os.path.isabs(pattern) else os.path.join(os.path.dirname(name), pattern)
+            matches = _glob_matches(search)
+            require(bool(matches), "LOADER_ERROR", f'Beancount include 没有匹配文件：{pattern}', name)
+            includes[search] = matches
+            pending.extend(matches)
+    return sources, names, includes
+
+
+def _verify_financial(fin: FinancialInput, message: str = "报表运行期间根账本或 include 来源发生变化") -> None:
+    """Verify frozen bytes, aliases and glob membership without redoing booking."""
+    try:
+        unchanged = (all(Path(name).resolve() == path for name, path in fin.source_names.items()) and
+                     all(sha256(path.read_bytes()).hexdigest() == source.sha256
+                         for path, source in fin.sources.items()) and
+                     all(_glob_matches(pattern) == matches for pattern, matches in fin.include_globs.items()))
+    except OSError:
+        unchanged = False
+    require(unchanged, "INPUT_CHANGED", message, str(fin.root))
 
 
 def _digest(sources: Mapping[Path, SourceFile], root: Path) -> str:
@@ -210,26 +258,21 @@ def _load_financial_uncached(root: Path) -> FinancialInput:
     # version of the loader. Its timestamp check is not a source digest check,
     # and a stale cache can return different booked options for identical
     # independent copies. v6 must always parse the frozen source itself.
-    first_entries, first_errors, first_options = loader._uncached_load_file(
+    sources, names, includes = _capture_sources(root)
+    entries, errors, options = loader._uncached_load_file(
         str(root), None, None, None)
-    if first_errors:
-        code = "DUPLICATE_METADATA_KEY" if "Duplicate" in str(first_errors[0]) and "metadata field" in str(first_errors[0]) else "LOADER_ERROR"
-        raise BudgetError(code, f"Beancount 加载失败：{first_errors[0]}", str(root))
-    require(not first_options.get("plugin"), "PLUGIN_UNSUPPORTED", "首个实现阶段暂不认证外部插件代码", str(root))
-    before = _sources(root, first_options)
-    for path, source in before.items():
+    _check_loader_errors(errors, root)
+    require(not options.get("plugin"), "PLUGIN_UNSUPPORTED", "首个实现阶段暂不认证外部插件代码", str(root))
+    require(set(options["include"]) == set(names), "INPUT_CHANGED",
+            "加载期间 include 来源集合发生变化", str(root))
+    for path, source in sources.items():
         for lineno, line in enumerate(source.lines, 1):
             require(not RESERVED_PUSHMETA.match(line), "META_INJECTION", "禁止用 pushmeta 注入预算保留键", f"{path}:{lineno}")
-    second_entries, second_errors, second_options = loader._uncached_load_file(
-        str(root), None, None, None)
-    if second_errors:
-        raise BudgetError("LOADER_ERROR", f"Beancount 再次加载失败：{second_errors[0]}", str(root))
-    after = _sources(root, second_options)
-    require({p: s.sha256 for p, s in before.items()} == {p: s.sha256 for p, s in after.items()},
-            "INPUT_CHANGED", "加载期间根账本或 include 文件发生变化", str(root))
-    require(len(first_entries) == len(second_entries), "INPUT_CHANGED", "加载期间财务指令集合发生变化", str(root))
     from .chronology import order_entries
-    return FinancialInput(root, tuple(order_entries(second_entries)), second_options, after, _digest(after, root), BEANCOUNT_VERSION)
+    fin = FinancialInput(root, tuple(order_entries(entries)), options, sources, _digest(sources, root),
+                         BEANCOUNT_VERSION, source_names=names, include_globs=includes)
+    _verify_financial(fin, "加载期间根账本或 include 来源发生变化")
+    return fin
 
 
 @contextmanager
@@ -237,7 +280,7 @@ def financial_session():
     """Share source inputs across the sequential stages of one report.
 
     Each root is captured once, with independent cutoff views and base-audit
-    results. Nested stages join the owner, which re-loads each root at exit.
+    results. Nested stages join the owner, which verifies each source at exit.
     Nothing survives a reload, and standalone audits keep their existing checks.
     """
     if _REPORT_INPUTS.get() is not None:
@@ -252,9 +295,7 @@ def financial_session():
         for (root, through), fin in inputs.items():
             if through is not None:
                 continue  # These views all derive from the same complete capture.
-            after = _load_financial_uncached(root)
-            require(after.digest == fin.digest, "INPUT_CHANGED",
-                    "报表运行期间根账本或 include 来源发生变化", str(root))
+            _verify_financial(fin)
 
 
 def _session_input(root: Path) -> FinancialInput:
@@ -328,8 +369,8 @@ def shared_audit(audit):
 def frozen_financial(root: Path):
     """Share one booked source within a report, then verify it did not change.
 
-    Re-loading at exit detects edited source files, newly matched includes and
-    loader changes. Within a report session its owner performs that final check.
+    Content and include-graph checks at exit detect edited sources and newly
+    matched files. Within a report session its owner performs that final check.
     """
     frozen = _FROZEN_FINANCIAL.get()
     if (frozen is not None and frozen.root == root.resolve() and
@@ -347,6 +388,4 @@ def frozen_financial(root: Path):
         _FROZEN_THROUGH.reset(through_token)
         _FROZEN_FINANCIAL.reset(token)
         if _REPORT_INPUTS.get() is None:
-            after = _load_financial_uncached(root)
-            require(after.digest == fin.digest, "INPUT_CHANGED",
-                    "报表运行期间根账本或 include 来源发生变化", str(root))
+            _verify_financial(fin)

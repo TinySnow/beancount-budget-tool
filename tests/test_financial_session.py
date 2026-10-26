@@ -38,10 +38,10 @@ class FrozenFinancialTests(unittest.TestCase):
                         self.assertIs(FactIndex(second), index)
                     self.assertIs(load_financial(root), first)
                     self.assertEqual(load.call_count, 1)
-                self.assertEqual(load.call_count, 2)  # One capture and one final source verification.
+                self.assertEqual(load.call_count, 1)  # Final verification checks bytes, not booking again.
                 with financial_session(), frozen_financial(root) as fresh:
                     self.assertIsNot(fresh, first)
-                self.assertEqual(load.call_count, 4)
+                self.assertEqual(load.call_count, 2)
 
     def test_multiple_cutoffs_share_capture_and_raw_identities_without_future_leakage(self):
         with TemporaryDirectory() as folder:
@@ -73,7 +73,7 @@ class FrozenFinancialTests(unittest.TestCase):
                     self.assertEqual(raw.call_count, 1)
                     with self.assertRaises(BudgetError):
                         july_index.for_posting(august_transaction.postings[0])
-                self.assertEqual(load.call_count, 2)
+                self.assertEqual(load.call_count, 1)
 
     def test_edit_between_cutoff_views_rejects_the_whole_query_and_reload_sees_it(self):
         with TemporaryDirectory() as folder:
@@ -126,7 +126,7 @@ class FrozenFinancialTests(unittest.TestCase):
                     self.assertNotEqual(separate.digest, july.digest)
                 with booked_through(date(2023, 7, 31)), frozen_financial(root) as repeated:
                     self.assertIs(repeated, july)
-            self.assertEqual(load.call_count, 4)  # Two independent roots, two cutoffs for the first.
+            self.assertEqual(load.call_count, 2)  # Two independent roots, two cutoffs for the first.
 
     def test_session_rejects_same_size_source_edit_after_an_earlier_stage(self):
         with TemporaryDirectory() as folder:
@@ -191,7 +191,7 @@ class FrozenFinancialTests(unittest.TestCase):
                         self.assertEqual(len(later.entries), 2)
                     self.assertIs(load_financial(root), outer)
                     self.assertEqual(len(outer.entries), 1)
-                self.assertEqual(load.call_count, 4)  # One enter/exit verification per distinct scope.
+                self.assertEqual(load.call_count, 2)  # One capture per distinct scope, byte checks at exit.
 
     def test_nested_different_root_does_not_reuse_the_outer_input(self):
         with TemporaryDirectory() as folder:

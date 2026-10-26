@@ -159,10 +159,10 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         with patch.object(financial, "_load_financial_uncached", wraps=financial._load_financial_uncached) as load:
             browser.refresh()
             self.assertIsNone(browser.error)
-            self.assertEqual(load.call_count, 2)
+            self.assertEqual(load.call_count, 1)
             browser.refresh()
             self.assertIsNone(browser.error)
-            self.assertEqual(load.call_count, 4)
+            self.assertEqual(load.call_count, 2)
 
     def test_terminal_final_source_failure_clears_the_previously_displayed_report(self):
         from beancount_budget_tool.v6.review_queue import audit_review_queue
@@ -193,7 +193,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
             first = audit_simple(self.config, include_transactions=True)
         source_paths.assert_not_called()  # Canonical source locations come from the frozen input.
         self.assertEqual(first["status"], "CERTIFIED_SCOPED")
-        self.assertEqual(load.call_count, 2)
+        self.assertEqual(load.call_count, 1)
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
             '\n2026-09-21 * "new expense"\n'
             '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")

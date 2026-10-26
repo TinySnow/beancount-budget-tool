@@ -64,8 +64,8 @@ class FinancialLexicalCacheTests(unittest.TestCase):
         with TemporaryDirectory() as folder:
             root = Path(folder) / "main.bean"
             root.write_text(LEDGER.replace("exchange", "换汇").replace("\n", "\r\n"), encoding="utf-8")
-            fin = load_financial(root)
             with patch("beancount_budget_tool.financial.parser.parse_string", wraps=parser.parse_string) as parse:
+                fin = load_financial(root)
                 ReferenceIndex(fin)
                 ReferenceIndex(replace(fin, entries=fin.entries[:2], reference_entries=fin.entries))
             self.assertEqual(parse.call_count, len(fin.sources))
