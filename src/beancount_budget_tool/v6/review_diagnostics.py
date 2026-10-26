@@ -50,7 +50,7 @@ MESSAGES = {
     "OWNERSHIP_PENDING": "这条资产分录的资金用途尚未认领。",
     "K_BOOK_PURPOSE_PENDING": "K 账户的期初账面数或申赎用途尚未审定。",
     "K_EVENT_SHAPE_UNSUPPORTED": "该复合申赎交易不符合当前支持的简单现金对手协议，需补程序实现。",
-    "K_REDEMPTION_PURPOSE_UNSUPPORTED": "带损益的 K 赎回目前仅支持本金与实收现金归同一用途；混合用途或赎回同时改用途需要补充损益归属协议。",
+    "K_REDEMPTION_PURPOSE_UNSUPPORTED": "带损益或内扣费用的 K 赎回目前仅支持本金与实收现金归同一用途；混合用途或赎回同时改用途需要补充损益归属协议。",
     "K_CASH_OWNER_PENDING": "基金申赎的现金对手用途尚未审定。",
     "K_EVENT_PENDING": "这笔基金申赎尚未由行内用途或审阅侧文件认领。",
     "PURPOSE_POOL_PENDING": "证券资金池的用途账面分配尚未审定。",

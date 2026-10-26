@@ -65,7 +65,10 @@ def _redemption_claim(candidate: dict, raw_fund: str, cash_claim: dict,
     if len(k_owners) != 1 or k_owners != cash_owners:
         return None  # A source/destination remap needs a separate gain/loss policy.
     owner = next(iter(k_owners))
-    return {"reason": "同用途 K 赎回：实收现金＝账面本金＋Income 损益，损益不计正式划拨",
+    reason = ("同用途 K 赎回：实收现金＝账面本金＋Income 损益－Expenses 费用，损益和内扣费用不计正式划拨"
+              if candidate["shape"] == "book_redemption_costs" else
+              "同用途 K 赎回：实收现金＝账面本金＋Income 损益，损益不计正式划拨")
+    return {"reason": reason,
             "net_allocations": {}, "slices": [{
                 "id": "redemption_" + sha256(_key(candidate["k_ref"]).encode()).hexdigest()[:24],
                 "k_owner_id": owner, "cash_owner_id": owner,
@@ -147,6 +150,7 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
                                      reason is None else None,
                          "cash_account": cash.account if cash is not None and reason is None else None,
                          "shape": ("zero_record" if zero_record else
+                                   "book_redemption_costs" if redemption is not None and redemption.fees and reason is None else
                                    "book_redemption_income" if redemption is not None and reason is None else
                                    "simple_cash" if reason is None else "unsupported"),
                          "reason_code": reason}
@@ -155,14 +159,24 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
                                   "zero_refs": [facts.for_posting(p).as_dict() for p in entry.postings],
                                   "monetary_change": "0", "share_quantity": None, "market_value": None,
                                   "note": "零金额不代表基金份额或价值为零；实际份额和价值未记录"})
-            if candidate["shape"] == "book_redemption_income":
-                candidate.update({"income_ref": facts.for_posting(redemption.income).as_dict(),
+            if candidate["shape"] in ("book_redemption_income", "book_redemption_costs"):
+                candidate.update({"income_ref": facts.for_posting(redemption.income).as_dict()
+                                               if redemption.income is not None else None,
                                   "signed_income_units": exact_text(-redemption.gain),
                                   "signed_cash_units": exact_text(redemption.receipt),
                                   "principal_book_value": exact_text(redemption.principal),
                                   "income_value": exact_text(redemption.gain),
                                   "equation": "cash_receipt = book_principal + income",
                                   "protocol": "same_purpose_book_redemption_v1"})
+                if redemption.fees:
+                    candidate.update({"fee_refs": [facts.for_posting(p).as_dict() for p in redemption.fees],
+                                      "fee_components": [
+                                          {"ref": facts.for_posting(p).as_dict(), "account": p.account,
+                                           "signed_units": exact_text(exact(p.units.number))}
+                                          for p in redemption.fees],
+                                      "fee_value": exact_text(redemption.fee_total),
+                                      "equation": "cash_receipt = book_principal + income - fees",
+                                      "protocol": "same_purpose_book_redemption_costs_v1"})
             candidates[key] = candidate
             raw_fund = (posting.meta or {}).get("fund")
             if raw_fund is not None:
@@ -347,7 +361,7 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
         candidate = candidates[key]
         claim = claims.get(key)
         purpose_unsupported = False
-        if claim is None and key in inline_funds and candidate["shape"] == "book_redemption_income":
+        if claim is None and key in inline_funds and candidate["shape"] in ("book_redemption_income", "book_redemption_costs"):
             cash_claim = cash_claims.get(_key(candidate["cash_ref"]))
             if cash_claim is not None:
                 claim = _redemption_claim(candidate, inline_funds[key], cash_claim, names, source_locations[key])
@@ -359,7 +373,7 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
         if candidate["shape"] == "zero_record":
             claim = _zero_claim(candidate, inline_funds.get(key), names, source_locations[key])
             state, codes = "CERTIFIED", []
-        elif candidate["shape"] not in ("simple_cash", "book_redemption_income"):
+        elif candidate["shape"] not in ("simple_cash", "book_redemption_income", "book_redemption_costs"):
             state, codes = "UNSUPPORTED", ["K_EVENT_SHAPE_UNSUPPORTED"]
         elif purpose_unsupported:
             state, codes = "UNSUPPORTED", ["K_REDEMPTION_PURPOSE_UNSUPPORTED"]

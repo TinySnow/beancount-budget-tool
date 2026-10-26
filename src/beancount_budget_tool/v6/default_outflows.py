@@ -16,7 +16,7 @@ from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, frozen_fact_indices
 from .obligations import audit_simple_obligations
-from .native_flows import native_asset_flow, native_payable_receipt
+from .native_flows import native_asset_flow, native_book_redemption, native_payable_receipt
 from .ownership import audit_ownership
 from .purpose_pools import audit_purpose_pools
 from .review_diagnostics import posting_sources, review_item
@@ -117,6 +117,8 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
         native = native_asset_flow(fin, entry, modes)
         if native_payable_receipt(fin, entry, modes) is not None:
             continue  # A receipt is not a default-purpose payment or expense refund.
+        if native_book_redemption(fin, entry, modes) is not None:
+            continue  # Expenses netted from a K receipt are not another H cash debit.
         for posting in entry.postings:
             if posting.account.split(":", 1)[0] == fin.options["name_assets"] and modes.get(posting.account) is None:
                 pending("ACCOUNT_UNREVIEWED", facts.for_posting(posting).as_dict(),

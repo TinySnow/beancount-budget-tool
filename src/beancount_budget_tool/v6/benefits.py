@@ -159,14 +159,18 @@ def audit_economic_benefits(root: Path, cutover: date,
                     continue
                 redemption = native_book_redemption(fin, entry)
                 if redemption is not None and redemption.income is posting:
-                    proved.append({**record, "proof": "same_transaction_book_redemption_equation",
+                    proved.append({**record, "proof": "same_transaction_book_redemption_costs_equation"
+                                                      if redemption.fees else "same_transaction_book_redemption_equation",
                                    "cash_evidence_ref": facts.for_posting(redemption.cash).as_dict(),
                                    "book_evidence_ref": facts.for_posting(redemption.book).as_dict(),
                                    "principal_book_value": exact_text(redemption.principal),
                                    "income_report_value": exact_text(redemption.gain),
                                    "cash_receipt_report_value": exact_text(redemption.receipt),
                                    "principal_basis": "book_flow_not_cost_or_market_value",
-                                   "equation": "cash_receipt = book_principal + income"})
+                                   "equation": "cash_receipt = book_principal + income - fees"
+                                               if redemption.fees else "cash_receipt = book_principal + income",
+                                   **({"fee_evidence_refs": [facts.for_posting(p).as_dict() for p in redemption.fees],
+                                       "fee_report_value": exact_text(redemption.fee_total)} if redemption.fees else {})})
                     continue
                 candidate = costed_sale_candidate(entry, posting, fin, facts, posting.units.currency)
                 complex_context[_key(ref)] = (entry, posting)

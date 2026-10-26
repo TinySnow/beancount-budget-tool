@@ -223,11 +223,145 @@ class NativeFlowTests(unittest.TestCase):
                 finally:
                     self.base = original
 
-    def test_book_redemption_with_a_separate_fee_is_not_silently_net_combined(self):
-        self.configure(self.redemption("104", "-5", extra='  Expenses:Food 1 CNY\n'))
+    def test_book_redemption_with_separate_fee_proves_every_component_once(self):
+        report = self.report(self.redemption("104", "-5", extra='  Expenses:Food 1 CNY\n'))
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "154")
+        self.assertEqual(report["default_outflows"]["totals"][0]["expenses_paid"], "0")
+        self.assertEqual(self.income_total(), "5")
+        expense = next(row for row in report["expense_targets"]["categories"] if row["name"] == "生活开销")
+        self.assertEqual(expense["subtree_spent"], "1")
+        transaction = next(row for row in report["transactions"]["rows"] if row["narration"] == "redeem")
+        event = transaction["purpose_events"][0]["protocol"]
+        self.assertEqual(event["protocol"], "same_purpose_book_redemption_costs_v1")
+        self.assertEqual((event["principal_book_value"], event["income_value"], event["fee_value"],
+                          event["signed_cash_units"]), ("100", "5", "1", "104"))
+        fee = next(row for row in transaction["postings"] if row["account"] == "Expenses:Food")
+        self.assertEqual(event["fee_refs"], [fee["ref"]])
+        self.assertEqual(event["fee_components"][0]["signed_units"], "1")
+        income = next(row for row in transaction["postings"] if row["account"] == "Income:Gain")
+        self.assertEqual(income["benefit_source"]["fee_evidence_refs"], [fee["ref"]])
+        self.assertEqual(income["benefit_source"]["fee_report_value"], "1")
+        self.assertEqual(report["k_book_purposes"]["rows"][0]["booked_end"], "0")
+        self.assertIn("赎回核对：实收 104 CNY＝账面本金 100 CNY＋损益 5 CNY－费用 1 CNY",
+                      "\n".join(render_transaction(transaction, report["owner_names"])))
+
+    def test_book_redemption_preserves_multiple_fee_legs_and_inferred_income(self):
+        source = self.redemption("102", "-5", extra='  Expenses:Food 1 CNY\n  Expenses:Travel 2 CNY\n')
+        report = self.report(source.replace('Income:Gain -5 CNY', 'Income:Gain'))
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "152")
+        self.assertEqual(self.income_total(), "5")
+        transaction = next(row for row in report["transactions"]["rows"] if row["narration"] == "redeem")
+        event = transaction["purpose_events"][0]["protocol"]
+        self.assertEqual(event["fee_value"], "3")
+        self.assertEqual(len(event["fee_refs"]), 2)
+        self.assertEqual({row["account"] for row in event["fee_components"]}, {"Expenses:Food", "Expenses:Travel"})
+        self.assertEqual(report["default_outflows"]["totals"][0]["net_outflow"], "0")
+
+    def test_book_redemption_with_fees_without_income_does_not_create_an_income_leg(self):
+        source = self.redemption("99", "-5", extra='  Expenses:Food 1 CNY\n')
+        source = source.replace('  Income:Gain -5 CNY\n    budget: "投资"\n', '')
+        report = self.report(source)
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "149")
+        self.assertEqual(self.income_total(), "0")
+        transaction = next(row for row in report["transactions"]["rows"] if row["narration"] == "redeem")
+        event = transaction["purpose_events"][0]["protocol"]
+        self.assertIsNone(event["income_ref"])
+        self.assertEqual(event["income_value"], "0")
+        self.assertFalse(any(row["account"].startswith("Income:") for row in transaction["postings"]))
+        self.assertEqual(report["default_outflows"]["totals"][0]["net_outflow"], "0")
+
+    def test_book_redemption_loss_and_fee_are_not_charged_twice(self):
+        report = self.report(self.redemption("94", "5", extra='  Expenses:Food 1 CNY\n'))
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "144")
+        self.assertEqual(self.income_total(), "-5")
+        expense = next(row for row in report["expense_targets"]["categories"] if row["name"] == "生活开销")
+        self.assertEqual(expense["subtree_spent"], "1")
+        self.assertEqual(report["default_outflows"]["totals"][0]["expenses_paid"], "0")
+
+    def test_fee_budget_category_does_not_choose_another_asset_purpose(self):
+        source = self.redemption("104", "-5", k_purpose="储蓄", cash_purpose="储蓄", extra='  Expenses:Food 1 CNY\n')
+        source = source.replace('  Assets:Book 100 CNY\n    fund: "生活费"',
+                                '  Assets:Book 100 CNY\n    fund: "储蓄"')
+        self.configure(source)
+        outcome = audit_month_workflow(self.config, include_transactions=True)
+        self.assertEqual(outcome["status"], "CERTIFIED_SCOPED", outcome["review_items"])
+        report = outcome["report"]
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "50")
+        transaction = next(row for row in report["transactions"]["rows"] if row["narration"] == "redeem")
+        self.assertEqual(transaction["net_allocations"], {})
+        cash = next(row for row in transaction["postings"] if row["account"] == "Assets:Cash")
+        self.assertEqual(cash["h_purpose"]["slices"][0]["name"], "储蓄")
+        self.assertEqual(cash["h_purpose"]["slices"][0]["signed_units"], "104")
+        self.assertEqual(report["default_outflows"]["totals"][0]["expenses_paid"], "0")
+
+    def test_fee_redemption_still_requires_explicit_cash_purpose(self):
+        self.configure(self.redemption("104", "-5", cash_purpose=None, extra='  Expenses:Food 1 CNY\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "NEEDS_REVIEW")
+        self.assertIn("OWNERSHIP_UNREVIEWED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_fee_redemption_cannot_silently_change_the_principal_purpose(self):
+        self.configure(self.redemption("104", "-5", cash_purpose="储蓄", extra='  Expenses:Food 1 CNY\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_REDEMPTION_PURPOSE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_fee_refund_cannot_be_treated_as_a_deducted_redemption_cost(self):
+        self.configure(self.redemption("106", "-5", extra='  Expenses:Food -1 CNY\n'))
         outcome = audit_month_workflow(self.config)
         self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
         self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_fee_price_is_not_a_native_redemption_amount(self):
+        self.configure(self.redemption("104", "-5", extra='  Expenses:Food 1 CNY @ 1 CNY\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_foreign_fee_is_not_folded_into_a_report_currency_redemption(self):
+        self.configure(self.redemption("104", "-5", extra='  Expenses:Food 1 USD @ 1 CNY\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_loader_tolerance_does_not_prove_an_inexact_fee_equation(self):
+        self.configure('option "inferred_tolerance_default" "CNY:1"\n' +
+                       self.redemption("104", "-5.01", extra='  Expenses:Food 1 CNY\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_redemption_fee_cannot_hide_an_extra_liability_counterpart(self):
+        self.configure(self.redemption("104", "-5", extra='  Expenses:Food 1 CNY\n  Liabilities:Card 0 CNY\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_multiple_income_legs_need_their_own_redemption_protocol(self):
+        self.configure(self.redemption("105", "-5", extra='  Income:Bonus -1 CNY\n  Expenses:Food 1 CNY\n'))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
+        self.assertIn("K_EVENT_SHAPE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+
+    def test_future_fee_redemption_does_not_change_earlier_money_or_flows(self):
+        source = self.redemption("104", "-5", extra='  Expenses:Food 1 CNY\n')
+        initial, redemption = source.split('2026-09-03 * "redeem"', 1)
+        self.configure(initial)
+        before = audit_month_workflow(self.config, include_transactions=True)["report"]
+        self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + '2026-10-03 * "redeem"' + redemption,
+                               encoding="utf-8")
+        result = audit_month_workflow(self.config, include_transactions=True)
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED")
+        after = result["report"]
+        self.assertEqual(after["actual_spendable"]["actual_spendable"], before["actual_spendable"]["actual_spendable"])
+        self.assertEqual(after["transactions"]["rows"], before["transactions"]["rows"])
+        self.assertEqual(after["expense_targets"], before["expense_targets"] | {"ledger_snapshot": after["ledger_snapshot"]})
+        document = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        with booked_through(date(2026, 10, 31)):
+            events = audit_k_events(self.ledger, date(2026, 9, 1), self.config.parent / document["accounts"],
+                                    self.config.parent / document["ownership"])
+        self.assertEqual(events["certified_events"], 2)
+        self.assertEqual(events["events"][-1]["fee_value"], "1")
 
     def test_future_book_redemption_does_not_change_the_previous_month(self):
         self.configure(self.redemption().replace('2026-09-03', '2026-10-03'))

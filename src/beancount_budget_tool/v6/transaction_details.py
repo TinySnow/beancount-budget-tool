@@ -182,11 +182,14 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
                          f"{event['commodity']}；应付款不计个人收入或消费。")
     for event in record["purpose_events"]:
         protocol = event.get("protocol", {})
-        if event["kind"] == "k_event" and protocol.get("shape") == "book_redemption_income":
+        if event["kind"] == "k_event" and protocol.get("shape") in ("book_redemption_income", "book_redemption_costs"):
             currency = protocol["commodity"]
-            lines.append(f"赎回核对：实收 {amount_text(protocol['signed_cash_units'])} {currency}＝账面本金 "
-                         f"{amount_text(protocol['principal_book_value'])} {currency}＋损益 "
-                         f"{amount_text(protocol['income_value'])} {currency}")
+            equation = (f"赎回核对：实收 {amount_text(protocol['signed_cash_units'])} {currency}＝账面本金 "
+                        f"{amount_text(protocol['principal_book_value'])} {currency}＋损益 "
+                        f"{amount_text(protocol['income_value'])} {currency}")
+            if protocol["shape"] == "book_redemption_costs":
+                equation += f"－费用 {amount_text(protocol['fee_value'])} {currency}"
+            lines.append(equation)
         elif event["kind"] == "k_event" and protocol.get("shape") == "zero_record":
             lines.append("K 零金额记录：预算变动和正式划拨均为 0；实际份额与基金价值未记录，不能由 0 元推断。")
     allocations = record["net_allocations"]

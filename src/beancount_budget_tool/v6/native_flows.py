@@ -27,10 +27,12 @@ class NativeCardPurchase:
 class NativeBookRedemption:
     book: data.Posting
     cash: data.Posting
-    income: data.Posting
+    income: data.Posting | None
     principal: Fraction
     receipt: Fraction
     gain: Fraction
+    fees: tuple
+    fee_total: Fraction
 
 
 def zero_native_record(fin, entry, currency: str) -> bool:
@@ -42,32 +44,38 @@ def zero_native_record(fin, entry, currency: str) -> bool:
 
 
 def native_book_redemption(fin, entry, modes: dict | None = None) -> NativeBookRedemption | None:
-    """Prove cash receipt = book-flow principal + signed income, without lots.
+    """Prove receipt = book-flow principal + signed income - expenses.
 
-    This is an exact three-posting equation, not a claim about fund shares,
+    This is a complete native equation, not a claim about fund shares,
     cost lots or market value. K event consumers additionally require reviewed
     K/H semantics; the benefit projection only uses the booked source equation.
     """
-    if not isinstance(entry, data.Transaction) or len(entry.postings) != 3:
+    if not isinstance(entry, data.Transaction) or len(entry.postings) < 3:
         return None
     assets = [p for p in entry.postings if p.account.split(":", 1)[0] == fin.options["name_assets"]]
     incomes = [p for p in entry.postings if p.account.split(":", 1)[0] == fin.options["name_income"]]
-    if len(assets) != 2 or len(incomes) != 1:
+    fees = tuple(p for p in entry.postings if p.account.split(":", 1)[0] == fin.options["name_expenses"])
+    if (len(assets) != 2 or len(incomes) > 1 or not (incomes or fees) or
+            len(entry.postings) != 2 + len(incomes) + len(fees) or
+            any(exact(p.units.number) < 0 for p in fees)):
         return None
     outgoing = [p for p in assets if exact(p.units.number) < 0]
     incoming = [p for p in assets if exact(p.units.number) > 0]
     if len(outgoing) != 1 or len(incoming) != 1:
         return None
-    book, cash, income = outgoing[0], incoming[0], incomes[0]
+    book, cash = outgoing[0], incoming[0]
     if modes is not None and (modes.get(book.account) != "K" or modes.get(cash.account) != "H"):
         return None
     if any(p.cost is not None or p.price is not None or fin.raw_price(p)[0] != "none" or
            p.units.currency != cash.units.currency for p in entry.postings):
         return None
-    principal, receipt, gain = -exact(book.units.number), exact(cash.units.number), -exact(income.units.number)
-    if receipt != principal + gain:
+    income = incomes[0] if incomes else None
+    principal, receipt = -exact(book.units.number), exact(cash.units.number)
+    gain = -exact(income.units.number) if income is not None else Fraction(0)
+    fee_total = sum((exact(p.units.number) for p in fees), Fraction(0))
+    if receipt != principal + gain - fee_total:
         return None
-    return NativeBookRedemption(book, cash, income, principal, receipt, gain)
+    return NativeBookRedemption(book, cash, income, principal, receipt, gain, fees, fee_total)
 
 
 def native_card_purchase(fin, entry, modes: dict | None = None) -> NativeCardPurchase | None:
