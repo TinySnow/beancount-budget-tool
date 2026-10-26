@@ -117,6 +117,8 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     if debt is not None:
         claimed = {_key(row["ref"]): row for row in owner_audit["ownership"]}
         claimed_h = set(claimed)
+        debt_by_ref = {_key(row["liability_ref"]): row for row in debt["events"]}
+        used_purchase_groups = set()
         for event in debt["events"]:
             if event["date"][:7] != month or event["status"] != "CERTIFIED":
                 continue
@@ -130,6 +132,13 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                 # Only the observed cash share changes H holdings. The card
                 # share remains a debt, not another asset payment or G.
                 refs = event.get("asset_refs", [])
+                if event.get("proof") == "native_joint_card_purchase_v1":
+                    group = _key(event["purchase_group_ref"])
+                    members = [debt_by_ref[_key(ref)] for ref in event["liability_refs"]]
+                    if group in used_purchase_groups or any(row["status"] != "CERTIFIED" for row in members):
+                        continue
+                    used_purchase_groups.add(group)
+                    event = {**event, "obligation_ids": [row["obligation_id"] for row in members]}
                 if refs and all(_key(ref) in claimed_h and all(
                         part["role"] == "hold" for part in claimed[_key(ref)]["slices"]) for ref in refs):
                     add("liability_consumer_purchase", event, refs, {})

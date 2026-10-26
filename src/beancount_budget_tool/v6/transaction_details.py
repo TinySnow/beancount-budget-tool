@@ -172,10 +172,20 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
             lines.append("  本项仅显示原币分类；本月报未给出该分录的报告货币计价值。")
         for flow in posting["default_outflows"]:
             lines.append(f"  默认支出资金收付：{FLOW_NAMES.get(flow['kind'], flow['kind'])} {amount_text(flow['amount'])} {flow['commodity']}")
+    shown_purchase_groups = set()
     for event in record["liabilities"]:
+        if event.get("proof") == "native_joint_card_purchase_v1":
+            group = _key(event["purchase_group_ref"])
+            if group not in shown_purchase_groups:
+                lines.append(f"多卡消费核对：消费 {amount_text(event['expense_total'])}＝现金实付 "
+                             f"{amount_text(event['cash_paid'])}＋新增欠款 {amount_text(event['debt_total'])} "
+                             f"{event['commodity']}；消费仅计一次，不逐费用分配到卡。")
+                shown_purchase_groups.add(group)
         label = event["obligation_id"] or event["clearing_id"]
         owner = event["responsibility_owner_name"] or "单位代垫清算，不作本人消费责任"
         lines.append(f"责任事件：{DEBT_NAMES.get(event['kind'], event['kind'])}，ID {label}，责任用途：{owner}")
+        if event.get("proof") == "native_joint_card_purchase_v1":
+            lines.append(f"  本条负债新增欠款：{amount_text(-Fraction(event['signed_units']))} {event['commodity']}")
         if event.get("proof") == "native_income_payable_v1":
             lines.append(f"  到账核对：{amount_text(event['cash_received'])}＝收入 "
                          f"{amount_text(event['income_received'])}＋应付款 {amount_text(event['payable_received'])} "

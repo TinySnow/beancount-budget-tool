@@ -46,6 +46,7 @@ class NativeFlowTests(unittest.TestCase):
         document["defaults"]["confirmed"] = document["completeness_confirmed"] = True
         document["expense_targets"] = {"生活开销": "500"}
         document["allocation_targets"] = {name: "not_assessed" for name in document["allocation_targets"]}
+        document["allocation_targets"].setdefault(bank_owner, "not_assessed")
         for account in document["accounts"]:
             account.update(semantics="K" if account["account"] == "Assets:Book" else "H", reason="虚拟账本已审")
             account["payment_scope"] = {key: "payable" if account["semantics"] == "H" else "excluded"

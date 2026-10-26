@@ -111,6 +111,14 @@ def audit_simple_obligations(root: Path, cutover: date,
                     counterpart_refs=[facts.for_posting(p).as_dict() for p in entry.postings if p is not posting],
                     expense_refs=[facts.for_posting(p).as_dict() for p in group.expenses],
                     asset_refs=[facts.for_posting(p).as_dict() for p in group.assets])
+                if len(group.liabilities) > 1:
+                    candidate.update(
+                        proof="native_joint_card_purchase_v1",
+                        purchase_group_ref=facts.for_transaction(entry).as_dict(),
+                        liability_refs=[facts.for_posting(p).as_dict() for p in group.liabilities],
+                        expense_total=exact_text(sum((exact(p.units.number) for p in group.expenses), Fraction(0))),
+                        cash_paid=exact_text(-sum((exact(p.units.number) for p in group.assets), Fraction(0))),
+                        debt_total=exact_text(-sum((exact(p.units.number) for p in group.liabilities), Fraction(0))))
             if receipt is not None and receipt.liability is posting:
                 candidate.update(counterpart_refs=[facts.for_posting(p).as_dict()
                                                    for p in entry.postings if p is not posting],

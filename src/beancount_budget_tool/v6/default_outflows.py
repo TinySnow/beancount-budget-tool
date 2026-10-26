@@ -95,8 +95,11 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
     debt = audit_simple_obligations(root, cutover, obligations, last)
     payments = {_key(row["counterpart_ref"]): row for row in debt["events"]
                 if row["counterpart_ref"] is not None}
-    purchases = {_key(ref): row for row in debt["events"]
-                 if row["shape"] == "consumer_purchase" for ref in row.get("asset_refs", [])}
+    purchases = defaultdict(list)
+    for row in debt["events"]:
+        if row["shape"] == "consumer_purchase":
+            for ref in row.get("asset_refs", []):
+                purchases[_key(ref)].append(row)
     sources = posting_sources(fin)
     by_currency = defaultdict(lambda: defaultdict(Fraction))
     by_account = defaultdict(lambda: defaultdict(Fraction))
@@ -158,12 +161,15 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                 kind = "expenses_paid" if units < 0 else "expense_refunds"
                 counterparts = [facts.for_posting(p).as_dict() for p in expense_legs]
             elif _key(ref) in purchases:
-                event = purchases[_key(ref)]
-                if event["status"] != "CERTIFIED":
+                members = purchases[_key(ref)]
+                event = members[0]
+                if any(row["status"] != "CERTIFIED" for row in members):
                     pending("OBLIGATION_UNCLAIMED", ref, posting.account)
                     continue
                 kind = "expenses_paid"
                 counterparts = event["expense_refs"]
+                if len(members) > 1:
+                    event = {**event, "obligation_ids": [row["obligation_id"] for row in members]}
             elif liability_legs and len(entry.postings) == 2:
                 event = payments.get(_key(ref))
                 if event is None or event["status"] != "CERTIFIED" or event["kind"] not in KINDS:
@@ -183,7 +189,8 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                 "account": posting.account, "commodity": posting.units.currency, "owner_id": owner,
                 "kind": kind, "amount": exact_text(amount), "signed_owner_units": exact_text(units),
                 "asset_ref": ref, "counterpart_refs": counterparts, "source": sources[_key(ref)],
-                **({"obligation_id": event["obligation_id"], "clearing_id": event["clearing_id"]}
+                **({"obligation_ids": event["obligation_ids"]} if event and "obligation_ids" in event else
+                   {"obligation_id": event["obligation_id"], "clearing_id": event["clearing_id"]}
                    if event else {})})
     if result["review_items"]:
         return {**result, "status": "NEEDS_REVIEW", "events": [],
