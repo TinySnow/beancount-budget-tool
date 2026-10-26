@@ -411,6 +411,9 @@ def render_text(report: dict) -> str:
         headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
              headline, "", ("自然月消费目标（与发薪周期额度分别显示）" if "salary_cycle" in report else "消费目标（目标 − 实际；负数为超支）")]
+    if actual.get("same_day_clearings"):
+        lines[2:2] = [f"本月已审同日责任清算 {len(actual['same_day_clearings'])} 条：已确认付款与责任来源对应，"
+                      "未确认实际日内先后；保留原顺序，按日末余额签发。", ""]
     if report.get("salary_cycle", {}).get("status") == "NOT_STARTED":
         lines[2:2] = [f"首个已配置发薪日：{report['salary_cycle']['first_payday']}；此前仅核对账务，不套用工资周期额度。", ""]
     if report.get("salary_cycle", {}).get("report"):

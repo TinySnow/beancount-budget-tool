@@ -158,7 +158,7 @@ class ObligationReviewTests(unittest.TestCase):
         self.assertEqual(prefix['obligations'], [])
         self.assertEqual(prefix['before_liability_ref'], second['liability_ref'])
 
-    def test_same_day_later_purchase_is_not_a_repayment_candidate(self):
+    def test_same_day_later_purchase_is_only_an_explicit_clearing_not_prior_balance(self):
         self.ledger.write_text(self.ledger.read_text(encoding='utf-8') +
             '2026-10-03 * "later same day"\n  Expenses:Food 50 CNY\n  Liabilities:Card -50 CNY\n', encoding='utf-8')
         browser = self.browser()
@@ -168,8 +168,14 @@ class ObligationReviewTests(unittest.TestCase):
         browser.jump_month('2026-10'); browser.refresh()
         self.submit(browser, '生活费', shape='consumer_purchase')
         prepared = prepare_review(browser.config, self.selected(browser))
-        self.assertEqual(list(prepared.choices), [old_id])
+        self.assertIn(old_id, prepared.choices)
+        self.assertNotIn('same_day_source_ref', prepared.choices[old_id])
         self.assertIn('未偿 20 CNY', prepared.choice_labels[0])
+        later = [choice for choice in prepared.choices.values() if 'same_day_source_ref' in choice]
+        self.assertEqual(len(later), 1)
+        self.assertIn('同日清算（先后未知）', later[0]['label'])
+        self.assertEqual(prepared.initial, '')
+        self.assertIsNone(browser.outcome['report'])
 
     def test_payment_does_not_offer_other_card_ids_or_allow_overpayment(self):
         browser = self.browser()

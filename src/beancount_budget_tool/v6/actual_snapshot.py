@@ -218,7 +218,13 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
             uncovered_responsibility = exact_text(report.uncovered)
             purpose_available = [{"owner_id": owner, "units": exact_text(amount)}
                                  for owner, amount in report.purpose_available]
+    same_day = [{**{key: row[key] for key in ("date", "signed_units", "commodity", "obligation_id",
+                                             "liability_ref", "same_day_source_ref", "intraday_order")},
+                 "source": sources[_key(row["liability_ref"])]} for row in debt["events"]
+                if row.get("clearing_protocol") == "same_day_obligation_clearing_v1" and
+                row["date"][:7] == as_of.strftime("%Y-%m") and row["status"] == "CERTIFIED"]
     return {"mode": "v6_actual_simple_booked_debt_snapshot",
+            **({"same_day_clearings": same_day} if actual is not None and same_day else {}),
             "cutover": cutover.isoformat(), "as_of": as_of.isoformat(),
             "ledger_snapshot": fin.digest, "completeness_sha256": declaration_sha,
             "status": "CERTIFIED" if actual is not None else "NEEDS_REVIEW",

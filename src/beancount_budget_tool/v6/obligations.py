@@ -54,6 +54,7 @@ def audit_simple_obligations(root: Path, cutover: date,
     facts = FactIndex(fin)
     liability_root = fin.options["name_liabilities"]
     future_pairs = None
+    future_info = {}
     asset_root = fin.options["name_assets"]
     expense_root = fin.options["name_expenses"]
     opening = defaultdict(Fraction)
@@ -176,7 +177,7 @@ def audit_simple_obligations(root: Path, cutover: date,
         review_sha = sha256(declarations.read_bytes()).hexdigest()
         for row_index, row in enumerate(document["events"]):
             location = ("events", row_index)
-            check_event(type(row) is dict and set(row) in ({
+            check_event(type(row) is dict and (set(row) - ({"same_day_source_ref"} if row.get("kind") == "payment" else set())) in ({
                 "liability_ref", "counterpart_ref", "kind", "obligation_id",
                 "owner_id", "reason"}, {
                 "liability_ref", "counterpart_ref", "kind", "obligation_id", "reason"}, {
@@ -190,6 +191,10 @@ def audit_simple_obligations(root: Path, cutover: date,
             check_event(type(row["liability_ref"]) is dict and type(refs) is list and bool(refs) and
                         all(type(ref) is dict for ref in refs),
                     "OBLIGATION_CLAIM_INVALID", "责任事件必须绑定全部对手的完整 booked 来源", location)
+            if "same_day_source_ref" in row:
+                check_event(type(row.get("obligation_id")) is str and bool(ID.fullmatch(row["obligation_id"])) and
+                            "owner_id" not in row and "clearing_id" not in row,
+                            "SAME_DAY_CLEARING_INVALID", "同日清算只可绑定既有责任 ID，不能重写用途或冒充代垫", location)
             try:
                 ref_keys = [_key(ref) for ref in refs]
                 key = _key(row["liability_ref"])
@@ -212,10 +217,23 @@ def audit_simple_obligations(root: Path, cutover: date,
                             for index, posting in enumerate(entry.postings):
                                 if posting.account.split(":", 1)[0] == liability_root:
                                     future_pairs[refs[index]] = set(refs[:index] + refs[index + 1:])
+                                    future_info[refs[index]] = (entry.date, posting.account,
+                                                               posting.units.currency, _lot(posting))
                 if key in future_pairs:
                     check_event(set(ref_keys) == future_pairs[key] if grouped else ref_keys[0] in future_pairs[key],
                             "OBLIGATION_COUNTERPART_INVALID", "未来负债对手须为同一交易的完整来源组",
                             (*location, ref_field))
+                    if "same_day_source_ref" in row:
+                        source = row["same_day_source_ref"]
+                        check_event(type(source) is dict and all(type(value) in (str, int) for value in source.values()),
+                                    "SAME_DAY_CLEARING_INVALID", "同日清算须绑定完整来源", (*location, "same_day_source_ref"))
+                        source_key = _key(source)
+                        check_event(source_key in future_info and future_info[source_key] == future_info[key] and
+                                    any(type(other) is dict and other.get("liability_ref") == source and
+                                        other.get("kind") == "consumer_purchase" and
+                                        other.get("obligation_id") == row["obligation_id"] for other in document["events"]),
+                                    "SAME_DAY_CLEARING_INVALID", "未来清算须绑定同日、同坐标及相同 ID 的已审消费来源",
+                                    (*location, "same_day_source_ref"))
                     continue  # Existing source after the report date; do not apply its claim.
             check_event(key in candidates, "OBLIGATION_REF_INVALID", "负债来源不存在或过期",
                         (*location, "liability_ref"))
@@ -256,6 +274,29 @@ def audit_simple_obligations(root: Path, cutover: date,
             claims[key] = row
             claim_locations[key] = location
 
+    # A user may identify two same-date sources as one clearing without
+    # asserting which happened first. Bind the approved purchase explicitly;
+    # never discover it by amount or use a later date to clear today's cash.
+    same_day_targets = {}
+    for key, claim in claims.items():
+        if "same_day_source_ref" not in claim:
+            continue
+        location = (*claim_locations[key], "same_day_source_ref")
+        ref = claim["same_day_source_ref"]
+        check_event(type(ref) is dict and all(type(value) in (str, int) for value in ref.values()),
+                    "SAME_DAY_CLEARING_INVALID", "同日清算须绑定完整的消费责任来源", location)
+        source_key = _key(ref)
+        target = candidates.get(source_key)
+        approved = claims.get(source_key)
+        payment = candidates[key]
+        check_event(target is not None and target["liability_ref"] == ref and
+                    target["shape"] == "consumer_purchase" and target["date"] == payment["date"] and
+                    all(target[field] == payment[field] for field in ("account", "commodity", "lot")) and
+                    approved is not None and approved["kind"] == "consumer_purchase" and
+                    approved["obligation_id"] == claim["obligation_id"],
+                    "SAME_DAY_CLEARING_INVALID", "清算对象须为同日、同账户／币种／批次的已审消费责任，且 ID 精确一致", location)
+        same_day_targets[key] = target
+
     opening_audit = compile_obligation_opening(opening, historical_sources, opening_rows, owners, declarations)
     require(before_ref is None or type(before_ref) is str and before_ref in candidates and
             (as_of is None or candidates[before_ref]["date"] <= as_of.isoformat()),
@@ -264,6 +305,7 @@ def audit_simple_obligations(root: Path, cutover: date,
     advances = opening_audit["advances"]
     opening_pending = opening_audit["pending"]
     pending_coordinates = {(row["account"], row["commodity"], row["lot"]) for row in opening_pending}
+    prepaid = defaultdict(Fraction)
     events = []
     for key in order:
         if before_ref is not None and candidate_transactions[key] == candidate_transactions[before_ref]:
@@ -299,7 +341,7 @@ def audit_simple_obligations(root: Path, cutover: date,
                 claim = {"kind": kind, "obligation_id": ident,
                          "reason": "支付同账户同币种唯一未结的已记应付款；金额不超过剩余责任"}
         opening_required = coord in pending_coordinates and (
-            kind == "payment" and ident not in balances or
+            kind == "payment" and ident not in balances and key not in same_day_targets or
             kind == "advance_reimbursement" and ident not in advances)
         state, codes = "NEEDS_REVIEW", ["OBLIGATION_UNCLAIMED"]
         if candidate["shape"] == "unsupported":
@@ -313,18 +355,23 @@ def audit_simple_obligations(root: Path, cutover: date,
                 check_event(ident not in balances, "DUPLICATE_OBLIGATION_CLAIM",
                         "稳定责任 ID 重复用于新消费", location)
                 balances[ident] = {"account": coord, "owner_id": claim["owner_id"],
-                                   "remaining": -amount, "purchase_ref": candidate["liability_ref"],
+                                   "remaining": -amount - prepaid.pop(ident, Fraction(0)), "purchase_ref": candidate["liability_ref"],
                                    "purchase_date": candidate["date"],
                                    **({"origin": "payable_receipt"} if kind == "payable_receipt" else {})}
             elif kind == "payment":
-                check_event(ident in balances, "OBLIGATION_SETTLEMENT_UNKNOWN",
-                        "还款未指向本审计中较早发生的消费责任", location)
-                obligation = balances[ident]
-                check_event(obligation["account"] == coord and
-                        amount <= obligation["remaining"],
-                        "OBLIGATION_SETTLEMENT_EXCESS",
-                        "还款币种／账户不符或超过所指责任未偿额", location)
-                obligation["remaining"] -= amount
+                if ident not in balances and key in same_day_targets:
+                    prepaid[ident] += amount
+                    check_event(prepaid[ident] <= -Fraction(same_day_targets[key]["signed_units"]),
+                                "OBLIGATION_SETTLEMENT_EXCESS", "同日预付合计超过明确关联的消费责任金额", location)
+                else:
+                    check_event(ident in balances, "OBLIGATION_SETTLEMENT_UNKNOWN",
+                            "还款未指向本审计中较早发生的消费责任", location)
+                    obligation = balances[ident]
+                    check_event(obligation["account"] == coord and
+                            amount <= obligation["remaining"],
+                            "OBLIGATION_SETTLEMENT_EXCESS",
+                            "还款币种／账户不符或超过所指责任未偿额", location)
+                    obligation["remaining"] -= amount
             elif kind == "advance_outflow":
                 check_event(ident not in advances, "CLEARING_DOUBLE_CLAIM",
                         "代垫清算 ID 重复", location)
@@ -350,8 +397,13 @@ def audit_simple_obligations(root: Path, cutover: date,
                        "clearing_id": claim.get("clearing_id") if claim else None,
                        "owner_id": (claim.get("owner_id") if claim else None),
                        "review_reason": claim["reason"] if claim else None,
+                       **({"clearing_protocol": "same_day_obligation_clearing_v1",
+                           "same_day_source_ref": claim["same_day_source_ref"],
+                           "intraday_order": "not_asserted"} if key in same_day_targets else {}),
                        **({"claim_origin": "booked_equation"} if derived else {})})
 
+    require(before_ref is not None or not prepaid, "SAME_DAY_CLEARING_INCOMPLETE",
+            "同日预付未由明确来源全部承接，不能签发日末责任", str(declarations or root))
     remaining = [{"obligation_id": ident, "account": item["account"][0],
                   "commodity": item["account"][1], "lot": item["account"][2],
                   "owner_id": item["owner_id"],
@@ -367,10 +419,12 @@ def audit_simple_obligations(root: Path, cutover: date,
                          "outflow_ref": item["outflow_ref"]}
                         for ident, item in sorted(advances.items())]
     return {"mode": "v6_simple_booked_obligation_audit", "cutover": cutover.isoformat(),
-            **({"before_liability_ref": candidates[before_ref]["liability_ref"]} if before_ref is not None else {}),
+            **({"before_liability_ref": candidates[before_ref]["liability_ref"],
+                **({"pending_same_day_prepayments": {ident: exact_text(value) for ident, value in prepaid.items()}}
+                   if prepaid else {})} if before_ref is not None else {}),
             "as_of": as_of.isoformat() if as_of is not None else None,
             "ledger_snapshot": fin.digest, "review_sha256": review_sha,
-            "review_state": "complete" if declarations is not None and not opening_pending and all(
+            "review_state": "complete" if declarations is not None and not opening_pending and not prepaid and all(
                 row["status"] == "CERTIFIED" for row in events) else "pending",
             "opening_pending": opening_pending,
             "opening_declarations": opening_audit["declarations"],
