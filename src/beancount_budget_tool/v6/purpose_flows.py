@@ -216,30 +216,29 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                    if not (row["kind"] in ("h_fx", "h_transfer") and
                            row.get("ref") is not None and
                            _key(row["ref"]) in pool_internal_keys)]
-    ref_months = {}
-    ref_sources = {}
+    # History is replayed above; this projection only needs this month's refs.
+    month_sources = {}
     for entry in fin.entries:
-        if not isinstance(entry, data.Transaction):
+        if not isinstance(entry, data.Transaction) or not first <= entry.date <= last:
             continue
         for posting in entry.postings:
             key = _key(facts.for_posting(posting).as_dict())
-            ref_months[key] = entry.date.strftime("%Y-%m")
             meta = posting.meta or {}
-            ref_sources[key] = f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
+            month_sources[key] = f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
     for row in owner_audit["ownership"]:
         key = _key(row["ref"])
-        if ref_months[key] != month or key in used_h:
+        if key not in month_sources or key in used_h:
             continue
         if any(part["owner_id"] != "-" or part["role"] != "hold"
                for part in row["slices"]):
             pending.append({"kind": "named_h_without_protocol", "ref": row["ref"],
                             "reason": "NAMED_H_EVENT_UNSUPPORTED"})
     for row in owner_audit["missing_h_ownership"]:
-        if ref_months[_key(row["ref"])] == month and _key(row["ref"]) not in used_h:
+        if _key(row["ref"]) in month_sources and _key(row["ref"]) not in used_h:
             pending.append({"kind": "h_ownership", "ref": row["ref"],
                             "reason": "H_OWNER_PENDING"})
     for row in owner_audit["unknown_account_semantics"]:
-        if ref_months[_key(row["ref"])] == month:
+        if _key(row["ref"]) in month_sources:
             pending.append({"kind": "account_semantics", "ref": row["ref"],
                             "reason": "ACCOUNT_SEMANTICS_PENDING"})
     # The pool protocol proves booked native lots and nominal coverage without
@@ -272,9 +271,9 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     complete = not pending
     for row in pending:
         if row.get("ref") is not None:
-            row["source"] = ref_sources.get(_key(row["ref"]))
+            row["source"] = month_sources.get(_key(row["ref"]))
     evidence = ({"_transaction_evidence": {
-        "ownership": [row for row in owner_audit["ownership"] if ref_months[_key(row["ref"])] == month],
+        "ownership": [row for row in owner_audit["ownership"] if _key(row["ref"]) in month_sources],
         "events": known, "pool_internal_keys": sorted(pool_internal_keys),
         "liabilities": [row for row in debt["events"] if row["date"][:7] == month] if debt else [],
         "responsibility_owners": {row["obligation_id"]: row["owner_id"] for row in debt["obligations"]} if debt else {},

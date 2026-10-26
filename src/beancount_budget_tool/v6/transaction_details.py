@@ -45,7 +45,7 @@ def project_transactions(fin, month: str, expense: dict, purpose: dict, pools: d
     facts = FactIndex(fin)
     rows, by_posting = [], {}
     for entry in fin.entries:
-        if not isinstance(entry, data.Transaction) or entry.date.strftime("%Y-%m") != month:
+        if not isinstance(entry, data.Transaction) or entry.date.isoformat()[:7] != month:
             continue
         reference = facts.for_transaction(entry).as_dict()
         meta = entry.meta

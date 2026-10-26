@@ -7,12 +7,14 @@ from contextlib import redirect_stdout
 from io import StringIO
 import json
 import unittest
+from unittest.mock import Mock, patch
 
 from beancount import __version__ as BEANCOUNT_VERSION
 import yaml
 
 from beancount_budget_tool.financial import load_financial
 from beancount_budget_tool.v6.cli import main
+from beancount_budget_tool.v6.facts import FactIndex
 from beancount_budget_tool.v6.h_transfers import audit_h_transfers
 from beancount_budget_tool.v6.k_events import audit_k_events
 from beancount_budget_tool.v6.purpose_flows import audit_monthly_purpose_flows
@@ -101,11 +103,45 @@ class PurposeFlowTests(unittest.TestCase):
             "owners": [{"id": "savings", "name": "储蓄", "aliases": []}],
             "claims": claims}, allow_unicode=True), encoding="utf-8")
 
-    def audit(self, books=True):
+    def audit(self, books=True, *, month="2026-09", include_evidence=False):
         return audit_monthly_purpose_flows(
-            self.ledger, CUTOVER, "2026-09", self.accounts, self.opening,
+            self.ledger, CUTOVER, month, self.accounts, self.opening,
             self.ownership,
-            self.transfers, self.books if books else None)
+            self.transfers, self.books if books else None, include_evidence=include_evidence)
+
+    def test_monthly_projection_does_not_index_preceding_month_postings(self):
+        indices = []
+
+        def index(fin):
+            result = Mock(wraps=FactIndex(fin))
+            indices.append((fin, result))
+            return result
+
+        with patch("beancount_budget_tool.v6.purpose_flows.FactIndex", side_effect=index):
+            report = self.audit(include_evidence=True)
+        self.assertEqual(report["status"], "CERTIFIED")
+        self.assertEqual(report["net_allocations"], {"savings": "200"})
+        self.assertEqual(len(indices), 1)
+        fin, facts = indices[0]
+        prior = {id(posting) for entry in fin.entries if entry.date < CUTOVER
+                 for posting in getattr(entry, "postings", [])}
+        self.assertTrue(prior)
+        self.assertTrue(facts.for_posting.call_args_list)
+        self.assertFalse(any(id(call.args[0]) in prior for call in facts.for_posting.call_args_list))
+
+    def test_empty_next_month_keeps_history_validation_without_borrowing_allocations(self):
+        report = self.audit(month="2026-10", include_evidence=True)
+        self.assertEqual(report["status"], "CERTIFIED")
+        self.assertEqual(report["net_allocations"], {"savings": "0"})
+        self.assertEqual(report["known_events"], [])
+        self.assertEqual(report["_transaction_evidence"]["ownership"], [])
+        document = yaml.safe_load(self.opening.read_text(encoding="utf-8"))
+        document["h_holdings"] = []
+        self.opening.write_text(yaml.safe_dump(document), encoding="utf-8")
+        pending = self.audit(month="2026-10", include_evidence=True)
+        self.assertEqual(pending["status"], "NEEDS_REVIEW")
+        self.assertIsNone(pending["net_allocations"])
+        self.assertIn("H_HOLDINGS_PENDING", [row["reason"] for row in pending["pending_events"]])
 
     def test_first_allocation_and_following_k_move_count_once(self):
         report = self.audit()

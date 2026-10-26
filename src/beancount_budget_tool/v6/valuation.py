@@ -40,11 +40,12 @@ def audit_classification_valuation(root: Path, cutover: date, classifications: P
     native_totals: dict[tuple[str, str, str, str], Fraction] = {}
     for claim in claims["classifications"]:
         posting, booked_date = postings[_key(claim["ref"])]
+        booked_month = booked_date.isoformat()[:7]
         native = exact(posting.units.number)
         role = ("net_expense" if posting.account.split(":", 1)[0] == fin.options["name_expenses"]
                 else "income_supplement")
         for part in claim["slices"]:
-            key = (booked_date.strftime("%Y-%m"), role, part["category_id"],
+            key = (booked_month, role, part["category_id"],
                    posting.units.currency)
             native_totals[key] = native_totals.get(key, Fraction(0)) + Fraction(part["signed_units"])
         if isinstance(facts.for_posting(posting), GeneratedPostingRef):
@@ -64,7 +65,7 @@ def audit_classification_valuation(root: Path, cutover: date, classifications: P
                 missing.append({"ref": claim["ref"], "account": posting.account,
                                 "signed_units": exact_text(native),
                                 "commodity": posting.units.currency,
-                                "month": booked_date.strftime("%Y-%m"),
+                                "month": booked_month,
                                 "native_slices": claim["slices"],
                                 "source": f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}",
                                 "reason_code": "HISTORICAL_VALUE_MISSING"})

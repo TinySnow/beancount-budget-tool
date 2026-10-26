@@ -112,8 +112,9 @@ def _audit_spending_window(root: Path, cutover: date, first: date, last: date,
                     blocking_reason_code=code))
         native_amounts = defaultdict(Fraction)
         for row in role_claims:
+            booked_month = ref_dates[_key(row["ref"])].isoformat()[:7]
             for part in row["slices"]:
-                key = (ref_dates[_key(row["ref"])].strftime("%Y-%m"), part["category_id"], row["commodity"])
+                key = (booked_month, part["category_id"], row["commodity"])
                 native_amounts[key] += Fraction(part["signed_units"])
         native = [{"month": m, "role": role, "category_id": category,
                    "commodity": commodity, "signed_units": exact_text(amount)}

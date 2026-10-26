@@ -34,7 +34,7 @@ def audit_monthly_tracking(root: Path, cutover: date, month: str) -> dict:
         lambda: {"spent": Fraction(0), "returned": Fraction(0)})
     events = []
     for entry in fin.entries:
-        if not isinstance(entry, data.Transaction) or entry.date.strftime("%Y-%m") != month:
+        if not isinstance(entry, data.Transaction) or entry.date.isoformat()[:7] != month:
             continue
         transaction_topics = _topics((entry.meta or {}).get("tracking"))
         for posting in entry.postings:
