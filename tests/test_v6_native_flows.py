@@ -208,20 +208,108 @@ class NativeFlowTests(unittest.TestCase):
         self.assertIsNone(outcome["report"])
         self.assertIn("K_CASH_OWNER_PENDING", {row["reason_code"] for row in outcome["review_items"]})
 
-    def test_book_redemption_with_purpose_change_or_mixed_purposes_remains_an_implementation_limit(self):
-        for k_purpose, cash_purpose in (("生活费", "储蓄"), ("生活费50,储蓄50", "生活费55,储蓄50")):
-            with self.subTest(k=k_purpose, cash=cash_purpose), TemporaryDirectory() as folder:
-                original, self.base = self.base, Path(folder)
-                try:
-                    self.configure(self.redemption(k_purpose=k_purpose, cash_purpose=cash_purpose))
-                    outcome = audit_month_workflow(self.config)
-                    self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
-                    self.assertIsNone(outcome["report"])
-                    item = next(row for row in outcome["review_items"]
-                                if row["reason_code"] == "K_REDEMPTION_PURPOSE_UNSUPPORTED")
-                    self.assertTrue(item["source"].startswith(str(self.ledger.resolve())))
-                finally:
-                    self.base = original
+    def mixed_redemption(self, receipt="105", income="-5", cash_purpose="生活费55,储蓄50", extra=""):
+        return self.redemption(receipt, income, "生活费50,储蓄50", cash_purpose, extra).replace(
+            '  Assets:Book 100 CNY\n    fund: "生活费"',
+            '  Assets:Book 100 CNY\n    fund: "生活费50,储蓄50"')
+
+    def mixed_report(self, source):
+        self.configure(source)
+        outcome = audit_month_workflow(self.config, include_transactions=True)
+        self.assertEqual(outcome["status"], "CERTIFIED_SCOPED", outcome["review_items"])
+        report = outcome["report"]
+        tx = next(row for row in report["transactions"]["rows"] if row["narration"] == "redeem")
+        self.assertEqual(tx["net_allocations"], {})
+        event = tx["purpose_events"][0]["protocol"]
+        self.assertEqual(event["protocol"], "matched_purpose_book_redemption_v1")
+        self.assertEqual(event["net_allocations"], {})
+        self.assertEqual(report["k_book_purposes"]["rows"][0]["purpose_changes"], [])
+        return report, tx, event
+
+    def named_changes(self, report, event):
+        return {report["owner_names"][owner]: value for owner, value in event["net_purpose_changes"].items()}
+
+    def test_mixed_redemption_assigns_net_gain_without_recounting_allocation(self):
+        report, tx, event = self.mixed_report(self.mixed_redemption())
+        self.assertEqual(self.named_changes(report, event), {"生活费": "5", "储蓄": "0"})
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "105")
+        progress = {report["owner_names"][row["owner_id"]]: row["actual_g"] for row in report["purpose_progress"]["owners"]}
+        self.assertEqual((progress["生活费"], progress["储蓄"]), ("-50", "50"))
+        self.assertEqual(self.income_total(), "5")
+        detail = "\n".join(render_transaction(tx, report["owner_names"]))
+        self.assertIn("生活费：本金 50，实收 55，净变动 5 CNY", detail)
+        self.assertIn("储蓄：本金 50，实收 50，净变动 0 CNY", detail)
+        self.assertIn("不据此拆分各用途毛收益／费用", detail)
+
+    def test_mixed_redemption_can_assign_loss_to_a_protected_purpose(self):
+        report, tx, event = self.mixed_report(self.mixed_redemption("95", "5", "生活费50,储蓄45"))
+        self.assertEqual(self.named_changes(report, event), {"生活费": "0", "储蓄": "-5"})
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "100")
+        self.assertEqual(self.income_total(), "-5")
+
+    def test_mixed_redemption_keeps_net_changes_and_all_fee_sources_separate(self):
+        source = self.mixed_redemption("102", "-5", "储蓄55,生活费47",
+                                       '  Expenses:Food 1 CNY\n  Expenses:Travel 2 CNY\n')
+        report, tx, event = self.mixed_report(source)
+        self.assertEqual(self.named_changes(report, event), {"生活费": "-3", "储蓄": "5"})
+        self.assertEqual(event["fee_value"], "3")
+        self.assertEqual(len(event["fee_refs"]), 2)
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "97")
+        self.assertEqual(report["default_outflows"]["totals"][0]["expenses_paid"], "0")
+        self.assertEqual(self.income_total(), "5")
+        self.assertFalse(any("income_value" in part or "fee_value" in part for part in event["slices"]))
+
+    def test_mixed_redemption_without_income_does_not_invent_an_income_source(self):
+        source = self.mixed_redemption("99", "-5", "生活费49,储蓄50", '  Expenses:Food 1 CNY\n')
+        source = source.replace('  Income:Gain -5 CNY\n    budget: "投资"\n', '')
+        report, tx, event = self.mixed_report(source)
+        self.assertEqual(self.named_changes(report, event), {"生活费": "-1", "储蓄": "0"})
+        self.assertIsNone(event["income_ref"])
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "99")
+        self.assertFalse(any(row["account"].startswith("Income:") for row in tx["postings"]))
+
+    def test_mixed_redemption_equal_principal_and_receipt_has_zero_net_changes(self):
+        report, tx, event = self.mixed_report(self.mixed_redemption("100", "0", "储蓄50,生活费50"))
+        self.assertEqual(self.named_changes(report, event), {"生活费": "0", "储蓄": "0"})
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "100")
+
+    def test_mixed_redemption_uses_exact_decimal_net_changes(self):
+        report, tx, event = self.mixed_report(self.mixed_redemption("99.97", "0.03", "储蓄49.99,生活费49.98"))
+        self.assertEqual(self.named_changes(report, event), {"生活费": "-1/50", "储蓄": "-1/100"})
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "4999/50")
+
+    def test_redemption_purpose_change_needs_a_separate_virtual_transfer(self):
+        self.configure(self.redemption(cash_purpose="储蓄"))
+        outcome = audit_month_workflow(self.config)
+        self.assertEqual(outcome["status"], "NEEDS_REVIEW")
+        self.assertIsNone(outcome["report"])
+        item = next(row for row in outcome["review_items"] if row["reason_code"] == "K_REDEMPTION_PURPOSE_MISMATCH")
+        self.assertEqual(item["reason_kind"], "data_review")
+        self.assertTrue(item["source"].startswith(str(self.ledger.resolve())))
+        self.assertIn("虚拟调拨", item["detail"])
+
+    def test_mixed_redemption_can_be_followed_by_an_explicit_virtual_transfer(self):
+        source = self.mixed_redemption() + (
+            '2026-09-04 * "reallocate"\n'
+            '  Assets:Cash -5 CNY\n    fund: "生活费"\n'
+            '  Assets:Cash 5 CNY\n    fund: "储蓄"\n')
+        report, tx, event = self.mixed_report(source)
+        self.assertEqual(self.named_changes(report, event), {"生活费": "5", "储蓄": "0"})
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "100")
+        progress = {report["owner_names"][row["owner_id"]]: row["actual_g"] for row in report["purpose_progress"]["owners"]}
+        self.assertEqual((progress["生活费"], progress["储蓄"]), ("-55", "55"))
+        transfer = next(row for row in report["transactions"]["rows"] if row["narration"] == "reallocate")
+        self.assertEqual({report["owner_names"][key]: value for key, value in transfer["net_allocations"].items()},
+                         {"生活费": "-5", "储蓄": "5"})
+
+    def test_future_mixed_redemption_keeps_current_book_purposes_and_cash(self):
+        self.configure(self.mixed_redemption().replace('2026-09-03', '2026-10-03'))
+        outcome = audit_month_workflow(self.config, include_transactions=True)
+        self.assertEqual(outcome["status"], "CERTIFIED_SCOPED", outcome["review_items"])
+        report = outcome["report"]
+        self.assertEqual(report["actual_spendable"]["actual_spendable"], "50")
+        self.assertEqual(report["k_book_purposes"]["rows"][0]["booked_end"], "100")
+        self.assertFalse(any(row["narration"] == "redeem" for row in report["transactions"]["rows"]))
 
     def test_book_redemption_with_separate_fee_proves_every_component_once(self):
         report = self.report(self.redemption("104", "-5", extra='  Expenses:Food 1 CNY\n'))
@@ -303,8 +391,8 @@ class NativeFlowTests(unittest.TestCase):
     def test_fee_redemption_cannot_silently_change_the_principal_purpose(self):
         self.configure(self.redemption("104", "-5", cash_purpose="储蓄", extra='  Expenses:Food 1 CNY\n'))
         outcome = audit_month_workflow(self.config)
-        self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
-        self.assertIn("K_REDEMPTION_PURPOSE_UNSUPPORTED", {row["reason_code"] for row in outcome["review_items"]})
+        self.assertEqual(outcome["status"], "NEEDS_REVIEW")
+        self.assertIn("K_REDEMPTION_PURPOSE_MISMATCH", {row["reason_code"] for row in outcome["review_items"]})
 
     def test_fee_refund_cannot_be_treated_as_a_deducted_redemption_cost(self):
         self.configure(self.redemption("106", "-5", extra='  Expenses:Food -1 CNY\n'))

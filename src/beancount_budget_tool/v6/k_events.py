@@ -58,22 +58,39 @@ def _zero_claim(candidate: dict, raw_fund: str | None, names: dict[str, str], so
 
 
 def _redemption_claim(candidate: dict, raw_fund: str, cash_claim: dict,
-                       names: dict[str, str], source: str) -> dict | None:
+                       names: dict[str, str], source: str) -> tuple[dict | None, str | None]:
     parts = _inline_parts(raw_fund, Fraction(candidate["signed_k_units"]), names, source)
-    k_owners = {owner for owner, units in parts}
-    cash_owners = {part["owner_id"] for part in cash_claim["slices"]}
-    if len(k_owners) != 1 or k_owners != cash_owners:
-        return None  # A source/destination remap needs a separate gain/loss policy.
-    owner = next(iter(k_owners))
+    principal, receipts = {}, {}
+    for owner, units in parts:
+        principal[owner] = principal.get(owner, Fraction(0)) - units
+    for part in cash_claim["slices"]:
+        owner = part["owner_id"]
+        receipts[owner] = receipts.get(owner, Fraction(0)) + Fraction(part["signed_units"])
+    if principal.keys() != receipts.keys():
+        return None, "K_REDEMPTION_PURPOSE_MISMATCH"
+    # Explicit matching names define net ownership changes. They do not identify
+    # each purpose's gross return or fee; purpose transfers are separate events.
+    changes = {owner: receipts[owner] - principal[owner] for owner in principal}
+    require(sum(changes.values(), Fraction(0)) ==
+            Fraction(candidate["income_value"]) - Fraction(candidate.get("fee_value", "0")),
+            "K_EVENT_UNITS_MISMATCH", "各用途净差额未加回本次损益减费用", source)
+    ident = "redemption_" + sha256(_key(candidate["k_ref"]).encode()).hexdigest()[:24]
     reason = ("同用途 K 赎回：实收现金＝账面本金＋Income 损益－Expenses 费用，损益和内扣费用不计正式划拨"
               if candidate["shape"] == "book_redemption_costs" else
               "同用途 K 赎回：实收现金＝账面本金＋Income 损益，损益不计正式划拨")
-    return {"reason": reason,
-            "net_allocations": {}, "slices": [{
-                "id": "redemption_" + sha256(_key(candidate["k_ref"]).encode()).hexdigest()[:24],
+    owners = sorted(principal)
+    claim = {"reason": reason,
+             "net_allocations": {}, "slices": [{
+                "id": ident if len(owners) == 1 else f"{ident}_{index}",
                 "k_owner_id": owner, "cash_owner_id": owner,
-                "signed_k_units": candidate["signed_k_units"],
-                "signed_cash_units": candidate["signed_cash_units"], "boundary_role": "preserve"}]}
+                "signed_k_units": exact_text(-principal[owner]),
+                "signed_cash_units": exact_text(receipts[owner]), "boundary_role": "preserve"}
+                for index, owner in enumerate(owners)]}
+    if len(owners) > 1:
+        claim.update(protocol="matched_purpose_book_redemption_v1",
+                     reason="多用途 K 赎回：同名用途实收减本金为净损益／内扣费用变动，改用途须另记虚拟调拨；G=0",
+                     net_purpose_changes={owner: exact_text(changes[owner]) for owner in owners})
+    return claim, None
 
 
 def audit_k_events(root: Path, cutover: date, accounts: Path,
@@ -360,12 +377,12 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
     for key in order:
         candidate = candidates[key]
         claim = claims.get(key)
-        purpose_unsupported = False
+        purpose_error = None
         if claim is None and key in inline_funds and candidate["shape"] in ("book_redemption_income", "book_redemption_costs"):
             cash_claim = cash_claims.get(_key(candidate["cash_ref"]))
             if cash_claim is not None:
-                claim = _redemption_claim(candidate, inline_funds[key], cash_claim, names, source_locations[key])
-                purpose_unsupported = claim is None
+                claim, purpose_error = _redemption_claim(
+                    candidate, inline_funds[key], cash_claim, names, source_locations[key])
         if claim is None and key in inline_funds and candidate["shape"] == "simple_cash":
             cash_claim = cash_claims.get(_key(candidate["cash_ref"]))
             if cash_claim is not None:
@@ -375,8 +392,8 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
             state, codes = "CERTIFIED", []
         elif candidate["shape"] not in ("simple_cash", "book_redemption_income", "book_redemption_costs"):
             state, codes = "UNSUPPORTED", ["K_EVENT_SHAPE_UNSUPPORTED"]
-        elif purpose_unsupported:
-            state, codes = "UNSUPPORTED", ["K_REDEMPTION_PURPOSE_UNSUPPORTED"]
+        elif purpose_error:
+            state, codes = "NEEDS_REVIEW", [purpose_error]
         elif claim is None:
             state, codes = "NEEDS_REVIEW", ["K_CASH_OWNER_PENDING" if key in inline_funds
                                                else "K_EVENT_PENDING"]
@@ -405,7 +422,10 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
         events.append({**candidate, "status": state, "reason_codes": codes,
                        "review_reason": claim["reason"] if claim else None,
                        "slices": claim["slices"] if claim else None,
-                       "net_allocations": claim["net_allocations"] if state == "CERTIFIED" else None})
+                       "net_allocations": claim["net_allocations"] if state == "CERTIFIED" else None,
+                       **({"protocol": claim["protocol"],
+                           "net_purpose_changes": claim["net_purpose_changes"]}
+                          if claim and "net_purpose_changes" in claim else {})})
     return {"mode": "v6_k_simple_event_audit", "cutover": cutover.isoformat(),
             "ledger_snapshot": fin.digest, "review_sha256": review_sha,
             "review_state": "complete" if all(row["status"] == "CERTIFIED" for row in events) and
@@ -414,4 +434,6 @@ def audit_k_events(root: Path, cutover: date, accounts: Path,
             "pending_events": sum(row["status"] == "NEEDS_REVIEW" for row in events),
             "unsupported_events": sum(row["status"] == "UNSUPPORTED" for row in events),
             "events": events,
-            "note": "认证当次 K 申赎与现金对手；三腿损益赎回仅支持本金与实收现金同一用途。K 账面累计不代表基金份额、市值或用途库存"}
+            "note": ("多用途赎回按同名用途净差额确认；不推断各用途毛收益／费用或基金持仓、市值。"
+                     if any("net_purpose_changes" in event for event in events) else
+                     "认证当次 K 申赎与现金对手；三腿损益赎回仅支持本金与实收现金同一用途。K 账面累计不代表基金份额、市值或用途库存")}

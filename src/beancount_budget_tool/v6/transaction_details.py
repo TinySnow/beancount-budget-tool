@@ -190,6 +190,15 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
             if protocol["shape"] == "book_redemption_costs":
                 equation += f"－费用 {amount_text(protocol['fee_value'])} {currency}"
             lines.append(equation)
+            for part in protocol.get("slices", []) if "net_purpose_changes" in protocol else []:
+                owner = part["k_owner_id"]
+                name = owner_names.get(owner, "预算外" if owner == "-" else owner)
+                principal = -Fraction(part["signed_k_units"])
+                lines.append(f"  {name}：本金 {amount_text(principal)}，实收 "
+                             f"{amount_text(part['signed_cash_units'])}，净变动 "
+                             f"{amount_text(protocol['net_purpose_changes'][owner])} {currency}")
+            if "net_purpose_changes" in protocol:
+                lines.append("  同名用途净差额包含损益和内扣费用；不据此拆分各用途毛收益／费用。改用途另记虚拟调拨。")
         elif event["kind"] == "k_event" and protocol.get("shape") == "zero_record":
             lines.append("K 零金额记录：预算变动和正式划拨均为 0；实际份额与基金价值未记录，不能由 0 元推断。")
     allocations = record["net_allocations"]
