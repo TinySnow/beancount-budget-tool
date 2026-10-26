@@ -496,7 +496,8 @@ def render_text(report: dict) -> str:
     for row in purpose["owners"]:
         name = owner_names.get(row["owner_id"], row["owner_id"])
         if row["status"] == "CERTIFIED":
-            lines.append(f"  {name}：目标 {amount(row['target_q'])}，实际 {amount(row['actual_g'])}，差额 {amount(row['remaining_q_minus_g'])} {currency}")
+            completion = "已达成" if Fraction(row["remaining_q_minus_g"]) <= 0 else "未达成"
+            lines.append(f"  {name}：目标 {amount(row['target_q'])}，实际 {amount(row['actual_g'])}，差额 {amount(row['remaining_q_minus_g'])} {currency}；{completion}")
         elif row["status"] == "NOT_ASSESSED":
             value = amount(row["actual_g"]) if row["actual_g"] is not None else "待审"
             lines.append(f"  {name}：实际净划拨 {value} {currency}；本月不考核划拨目标")
@@ -517,6 +518,17 @@ def render_text(report: dict) -> str:
         for account in pool["account_purposes"]:
             lines.append(f"    {account['account']}：{pool['protected_label']} {amount(account['protected_nominal'])}，"
                          f"{pool['remainder_label']} {amount(account['remainder_book_cost'])} {currency}")
+    if "account_purposes" in report:
+        lines += ["", "其他 H 资产账户的用途份额（原币）"]
+        for row in report["account_purposes"].get("negative_purpose_positions", []):
+            name = owner_names.get(row["owner_id"], row["owner_id"])
+            lines.append(f"  警告：{row['account']} 的 {name} 用途份额为 "
+                         f"{amount(row['units'])} {row['commodity']}")
+        for row in report["account_purposes"]["rows"]:
+            name = owner_names.get(row["owner_id"], row["owner_id"])
+            lines.append(f"  {row['account']}：{name} {amount(row['units'])} {row['commodity']}")
+        if not report["account_purposes"]["rows"]:
+            lines.append("  无已审的非证券池 H 余额")
     if report.get("k_book_purposes", {}).get("rows"):
         lines += ["", "K 账面申赎及用途变动（非真实持仓；不可与 H 余额相加）"]
         for row in report["k_book_purposes"]["rows"]:
@@ -532,17 +544,6 @@ def render_text(report: dict) -> str:
         if zero_records:
             lines.append(f"  截至报告日保留 {len(zero_records)} 条 K 零金额记录；不改变预算、现金或 G，"
                          "实际份额与价值未记录，不能把 0 元当作价值为零。")
-    if "account_purposes" in report:
-        lines += ["", "其他 H 资产账户的用途份额（原币）"]
-        for row in report["account_purposes"].get("negative_purpose_positions", []):
-            name = owner_names.get(row["owner_id"], row["owner_id"])
-            lines.append(f"  警告：{row['account']} 的 {name} 用途份额为 "
-                         f"{amount(row['units'])} {row['commodity']}")
-        for row in report["account_purposes"]["rows"]:
-            name = owner_names.get(row["owner_id"], row["owner_id"])
-            lines.append(f"  {row['account']}：{name} {amount(row['units'])} {row['commodity']}")
-        if not report["account_purposes"]["rows"]:
-            lines.append("  无已审的非证券池 H 余额")
     if report.get("purpose_balances", {}).get("status") == "CERTIFIED":
         lines += ["", "预算资金按用途查看（各币种与账面口径分别列示）"]
         balances = report["purpose_balances"]
@@ -588,10 +589,13 @@ def main(argv=None) -> int:
     source.add_argument("--project", type=Path, help="项目入口；省略输入时读取当前目录 budget-project.yaml")
     parser.add_argument("--month", help="两文件入口或项目中选择 YYYY-MM；省略时使用配置默认月份")
     parser.add_argument("--format", choices=("text", "json", "tui"), default="text")
+    parser.add_argument("--watch", action="store_true", help="保存账本、include 或配置后自动重算；支持 text 和 tui")
     parser.add_argument("--transactions", action="store_true", help="已签发时附逐笔来源详情；TUI 自动启用，可按 a 浏览")
     parser.add_argument("--tui-config", type=Path, action="append", default=[],
                         help="TUI 中可切换的其他已准备月报配置，可重复指定；按所给顺序浏览")
     args = parser.parse_args(argv)
+    if args.watch and args.format == "json":
+        parser.error("--watch 支持 text／tui；单次 JSON 请去掉 --watch")
     if args.tui_config and args.format != "tui":
         parser.error("--tui-config 仅用于 --format tui")
     if not args.config and not args.project and (Path.cwd() / "config.yml").is_file():
@@ -630,18 +634,36 @@ def main(argv=None) -> int:
         try:
             if simple:
                 from .simple_tui import run_simple_tui
-                run_simple_tui(args.config, args.month)
+                run_simple_tui(args.config, args.month, **({"watch": True} if args.watch else {}))
             elif project:
                 run_report_tui(list(project.months.values()), partial(audit_month_workflow, include_transactions=True),
-                               render_workflow_text, project=project, initial_config=args.config)
+                               render_workflow_text, project=project, initial_config=args.config, **({"watch": True} if args.watch else {}))
             else:
                 run_report_tui([args.config, *args.tui_config],
-                               partial(audit_month_workflow, include_transactions=True), render_workflow_text)
+                               partial(audit_month_workflow, include_transactions=True), render_workflow_text, **({"watch": True} if args.watch else {}))
         except BudgetError as exc:
             print(json.dumps({"error": {"code": exc.code, "message": exc.message,
                                         "source": exc.source}}, ensure_ascii=False), file=sys.stderr)
             return 2
         return 0
+    if args.watch:
+        from .input_watch import InputWatch
+        import time
+        watcher = InputWatch([args.config])
+        rerun = ["--config", str(args.config), "--format", "text"]
+        if args.month:
+            rerun.extend(["--month", args.month])
+        if args.transactions:
+            rerun.append("--transactions")
+        try:
+            while True:
+                watcher.accept()
+                main(rerun)
+                print("\n正在监测账本／配置保存；Ctrl+C 退出。", flush=True)
+                while not watcher.changed():
+                    time.sleep(0.3)
+        except KeyboardInterrupt:
+            return 0
     try:
         outcome = (audit_month_workflow(args.config.resolve(), month=args.month, include_transactions=args.transactions) if simple else
                    audit_month_workflow(args.config.resolve(), include_transactions=True) if args.transactions

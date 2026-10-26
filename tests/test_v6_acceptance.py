@@ -102,8 +102,10 @@ class PublicAcceptanceTests(unittest.TestCase):
         names = report["owner_names"]
         progress = {names[row["owner_id"]]: row for row in report["purpose_progress"]["owners"]}
         self.assertEqual(progress["生活费"]["actual_g"], "2000")
-        self.assertEqual(progress["储蓄"]["actual_g"], "800")
-        self.assertEqual(progress["自由资金"]["actual_g"], "-3400")
+        # The explicitly earmarked 100 Income now also fulfills the goal;
+        # subsequent same-purpose moves still contribute zero.
+        self.assertEqual(progress["储蓄"]["actual_g"], "900")
+        self.assertEqual(progress["自由资金"]["actual_g"], "-3500")
         # Spending, card responsibility and later settlements do not add allocation.
         for month in ("2026-11", "2026-12"):
             self.assertTrue(all(row["actual_g"] == "0" for row in self.report(month)["purpose_progress"]["owners"]))

@@ -18,7 +18,7 @@ def month_end(month):
     return date(year, number, monthrange(year, number)[1])
 
 
-def read_cycles(plans, source, *, root_key="salary_cycles"):
+def read_cycles(plans, source, *, root_key="salary_cycles", default_category=None):
     rows = plans.get(root_key, {})
     require_yaml(type(rows) is dict, "SALARY_PLAN_INVALID", "salary_cycles 须为实际发薪日期到目标的映射", source, (root_key,))
     result = {}
@@ -31,11 +31,16 @@ def read_cycles(plans, source, *, root_key="salary_cycles"):
             cycle_bounds(start, (date.fromisoformat(start) + timedelta(days=1)).isoformat())
         except (BudgetError, ValueError, TypeError) as exc:
             raise BudgetError("SALARY_PLAN_INVALID", "发薪日须为加引号的 YYYY-MM-DD", yaml_path_location(source, keys)) from exc
+        scalar = type(row) is not dict
+        if scalar:
+            require_yaml(default_category is not None, "SALARY_PLAN_INVALID",
+                         "简写周期额度需要 config.yml 中的消费上限类别", source, keys)
+            row = {"expense_targets": {default_category: row}}
         require_yaml(type(row) is dict and set(row) == {"expense_targets"} and type(row["expense_targets"]) is dict,
                      "SALARY_PLAN_INVALID", "每个发薪日须有 expense_targets；下一条发薪日自动结束上一周期", source, keys)
         targets = {}
         for name, value in row["expense_targets"].items():
-            location = (*keys, "expense_targets", name)
+            location = keys if scalar else (*keys, "expense_targets", name)
             try:
                 require(type(name) is str and _name(name) == name, "SALARY_PLAN_INVALID", "消费类别名称无效")
             except BudgetError as exc:
@@ -181,7 +186,7 @@ def audit_configured_cycle(config, start=None, as_of=None):
     from .simple_config import _documents, _unchanged, _write, build_runtime
     watched = {}
     doc, budgets, plans = _documents(config, watched)
-    cycles = read_cycles(plans, budgets)
+    cycles = read_cycles(plans, budgets, default_category=doc.get("spendable_cap_category", doc["defaults"]["expense_category"]))
     try:
         cutoff = date.fromisoformat(as_of) if as_of else month_end(doc["month"])
     except (ValueError, TypeError) as exc:

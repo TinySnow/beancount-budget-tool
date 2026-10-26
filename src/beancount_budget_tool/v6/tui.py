@@ -5,6 +5,7 @@ from __future__ import annotations
 import curses
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -548,12 +549,47 @@ def _put(stdscr, row: int, text: str, style=0):
         if hasattr(stdscr, "move") and hasattr(stdscr, "clrtoeol"):
             stdscr.move(row, 0)
             stdscr.clrtoeol()
-        # Native Windows curses can lose the tail of styled CJK text in VS
-        # Code's terminal. Keep content plain; selection has a textual marker.
-        stdscr.addstr(row, 0, _clip(_clean(text), max(0, stdscr.getmaxyx()[1] - 1)),
-                      0 if sys.platform == "win32" else style)
+        visible = _clip(_clean(text), max(0, stdscr.getmaxyx()[1] - 1))
+        stdscr.addstr(row, 0, visible, 0 if sys.platform == "win32" else style)
+        if style and hasattr(stdscr, "chgat"):
+            stdscr.chgat(row, 0, max(1, sum(_width(char) for char in visible)), style)
     except curses.error:
         pass
+
+
+_COLORS = {}
+
+
+def _init_colors():
+    _COLORS.clear()
+    try:
+        if "NO_COLOR" in os.environ or not curses.has_colors():
+            return
+        curses.start_color()
+        background = curses.COLOR_BLACK
+        try:
+            curses.use_default_colors()
+            background = -1
+        except curses.error:
+            pass
+        for index, name in enumerate(("cyan", "green", "yellow", "magenta", "red"), 1):
+            curses.init_pair(index, getattr(curses, "COLOR_" + name.upper()), background)
+            _COLORS[name] = curses.color_pair(index)
+    except curses.error:
+        _COLORS.clear()
+
+
+def _line_style(line, current=0):
+    if any(word in line for word in ("警告", "计算失败", "H_OWNER_NEGATIVE", "程序实现缺口")):
+        return _COLORS.get("red", 0) | curses.A_BOLD
+    if line and not line[0].isspace():
+        for heading, color in (("用途划拨", "green"), ("其他 H", "cyan"),
+                               ("消费目标", "yellow"), ("默认支出", "yellow"),
+                               ("预算资金", "green"), ("专题", "magenta"),
+                               ("K 账面", "magenta"), ("证券资金池", "magenta")):
+            if line.startswith(heading):
+                return _COLORS.get(color, 0) | curses.A_BOLD
+    return current
 
 
 def _draw_browser(stdscr, browser: ReportBrowser):
@@ -672,20 +708,33 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     if not listing:
         lines = _wrap(lines, width - 1)
         browser.offset = max(0, min(browser.offset, max(0, len(lines) - page)))
+    styles, current_style = [], 0
+    for line in lines:
+        style = _line_style(line, current_style)
+        if line and not line[0].isspace() and "警告" not in line:
+            current_style = style
+        styles.append((_COLORS.get("red", 0) if browser.error else style))
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
-        _put(stdscr, row, line)
+        _put(stdscr, row, line, styles[browser.offset + row - 3])
     footer = ("w 工资周期 p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
               "w 工资周期 p 区间 m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
     if listing and browser.view == "reviews":
-        footer = "↑↓ 选项 Enter 详情 r 重算 / 筛选 ? 更多按键 q 退出"
+        footer = "↑↓ 选项 Enter 详情 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
     elif browser.detail:
         footer = "↑↓ 滚动 PgUp/PgDn 翻页 Esc 返回 ? 帮助 q 退出"
+    if browser.error:
+        footer = "[ ] 上/下月 m 跳月 r 重算 ↑↓ 滚动 ? 帮助 q 退出"
+    if getattr(browser, "watch", False):
+        footer = "自动监测保存 · " + footer
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
     stdscr.refresh()
 
 
 def _read_key(stdscr):
-    value = stdscr.get_wch() if hasattr(stdscr, "get_wch") else stdscr.getch()
+    try:
+        value = stdscr.get_wch() if hasattr(stdscr, "get_wch") else stdscr.getch()
+    except curses.error:
+        return -1  # get_wch raises on a timed poll, including inside dialogs.
     return chr(value) if type(value) is int and 0 <= value < 256 else value
 
 
@@ -1025,8 +1074,11 @@ def _jump_month(stdscr, browser: ReportBrowser):
         return
     try:
         choices = browser.month_choices()
-        value = _read_field(stdscr, "跳到已载入月份", ["可选月份：", *[f"{month}：{path}" for month, path in choices],
-                           "只切换已有配置并重算；要准备新月请按 n。"], "月份 YYYY-MM（空白／Esc 返回）：")
+        context = ["已浏览月份：" if hasattr(browser, "user_config") else "可选月份：",
+                   *[f"{month}：{path}" for month, path in choices],
+                   "可输入任意 cutover 之后的月份，不要求先签发；当前失败也能返回前月。"
+                   if hasattr(browser, "user_config") else "只切换已有配置并重算；要准备新月请按 n。"]
+        value = _read_field(stdscr, "跳到月份", context, "月份 YYYY-MM（空白／Esc 返回）：")
         if value is None or not value.strip():
             return
         browser.jump_month(value.strip())
@@ -1110,16 +1162,36 @@ def _report_browser(stdscr, browser: ReportBrowser):
     except curses.error:
         pass
     stdscr.keypad(True)
+    _init_colors()
+    watcher = None
+    if getattr(browser, "watch", False):
+        from .input_watch import InputWatch
+        watcher = InputWatch([browser.user_config] if hasattr(browser, "user_config") else browser.configs)
+        stdscr.timeout(300)
 
     def reload():
+        if watcher:
+            watcher.configs = ([browser.user_config] if hasattr(browser, "user_config") else list(browser.configs))
+            watcher.accept()
         browser.clear()
         _draw_browser(stdscr, browser)
         browser.refresh()
 
     reload()
+    redraw = True
     while True:
-        _draw_browser(stdscr, browser)
+        if redraw:
+            _draw_browser(stdscr, browser)
+            redraw = False
         key = _read_key(stdscr)
+        if key == -1:
+            if watcher and watcher.changed():
+                reload()
+                redraw = True
+            continue
+        redraw = True
+        if watcher and watcher.changed():
+            reload()
         page = max(1, stdscr.getmaxyx()[0] - 4)
         listing = browser.view in {"reviews", "transactions"} and not (browser.detail or browser.help or browser.error)
         if key == "q":
@@ -1146,8 +1218,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
                     reload()
             else:
                 _jump_month(stdscr, browser)
-        elif key in ("[", "]"):
-            if browser.switch(-1 if key == "[" else 1):
+        elif key in ("[", "]", curses.KEY_LEFT, curses.KEY_RIGHT):
+            if browser.switch(-1 if key in ("[", curses.KEY_LEFT) else 1):
                 reload()
         elif key == "/":
             browser.filter(_read_filter(stdscr, browser.query))
@@ -1191,11 +1263,12 @@ def _report_browser(stdscr, browser: ReportBrowser):
 
 
 def run_report_tui(configs: list[Path], loader: Callable, renderer: Callable, *, project=None,
-                   initial_config: Path | None = None) -> None:
+                   initial_config: Path | None = None, watch: bool = False) -> None:
     """Run foreground audits on demand; never carry numbers across config files."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise BudgetError("TUI_TERMINAL_REQUIRED", "TUI 需要交互式终端；脚本中请使用 text 或 json")
     browser = ReportBrowser(configs, loader, renderer, project=project, initial_config=initial_config)
+    browser.watch = watch
     try:
         curses.wrapper(_report_browser, browser)
     except KeyboardInterrupt:

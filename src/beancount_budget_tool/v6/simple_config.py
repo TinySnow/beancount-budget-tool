@@ -57,17 +57,50 @@ def _unchanged(inputs: dict):
             "INPUT_CHANGED", "配置、预算或审阅记录在计算期间改变；请重算")
 
 
+def _grouped_accounts(doc: dict, config: Path) -> tuple[dict, dict]:
+    """Expand explicit account lists; never classify by account name or prefix."""
+    groups = doc.get("account_groups", {})
+    require_yaml(type(groups) is dict and set(groups) <= {"H", "K"},
+                 "SIMPLE_ACCOUNT_INVALID", "account_groups 只接受 H 和 K", config, ("account_groups",))
+    h = groups.get("H", {})
+    require_yaml(type(h) is dict and set(h) <= {"payable", "excluded"},
+                 "SIMPLE_ACCOUNT_INVALID", "H 按 payable／excluded 列出完整账户名", config, ("account_groups", "H"))
+    accounts, locations = {}, {}
+    for semantics, scope, names, keys in [
+        ("H", scope, names, ("account_groups", "H", scope)) for scope, names in h.items()
+    ] + [("K", "excluded", groups.get("K", []), ("account_groups", "K"))]:
+        require_yaml(type(names) is list, "SIMPLE_ACCOUNT_INVALID", "账户组须为完整账户名列表", config, keys)
+        for index, name in enumerate(names):
+            require_yaml(type(name) is str and bool(name) and name == name.strip(),
+                         "SIMPLE_ACCOUNT_INVALID", "账户名须为非空字符串", config, (*keys, index))
+            require_yaml(name not in accounts, "SIMPLE_ACCOUNT_DUPLICATE", "账户不能重复列入多个组", config, (*keys, index))
+            accounts[name] = {"semantics": semantics, "payment_scope": {doc["report_currency"]: scope}}
+            locations[name] = (*keys, index)
+    for name, settings in doc.get("accounts", {}).items():
+        require_yaml(type(settings) is dict, "SIMPLE_ACCOUNT_INVALID", "账户设置须为映射", config, ("accounts", name))
+        # Explicit per-account settings are exceptions, including opening owners.
+        require_yaml(type(settings.get("payment_scope", {})) is dict, "SIMPLE_ACCOUNT_INVALID",
+                     "payment_scope 须为币种映射", config, ("accounts", name, "payment_scope"))
+        base = accounts.get(name, {})
+        accounts[name] = {**base, **settings,
+                          "payment_scope": {**base.get("payment_scope", {}), **settings.get("payment_scope", {})}}
+        locations[name] = ("accounts", name)
+    return accounts, locations
+
+
 def _documents(config: Path, inputs: dict | None = None):
     inputs = {} if inputs is None else inputs
     inputs.setdefault(config, config.read_bytes())
     doc = load_yaml(config)
-    fields = {"schema", "ledger", "budgets", "cutover", "month", "report_currency", "defaults", "accounts"}
-    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis"},
-                 "SIMPLE_CONFIG_INVALID", "config.yml 须含 schema: 1、ledger、budgets、cutover、month、report_currency、defaults、accounts", config)
+    fields = {"schema", "ledger", "budgets", "cutover", "month", "report_currency", "defaults"}
+    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"accounts", "account_groups", "account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis"},
+                 "SIMPLE_CONFIG_INVALID", "config.yml 须含 schema: 1、ledger、budgets、cutover、month、report_currency、defaults，以及 accounts 或 account_groups", config)
     for key in ("ledger", "budgets", "cutover", "month", "report_currency"):
         require_yaml(type(doc[key]) is str and bool(doc[key].strip()), "SIMPLE_CONFIG_INVALID",
                      f"{key} 须为非空字符串", config, (key,))
-    require_yaml(type(doc["accounts"]) is dict, "SIMPLE_CONFIG_INVALID", "accounts 须为账户名映射", config, ("accounts",))
+    require_yaml(type(doc.get("accounts", {})) is dict, "SIMPLE_CONFIG_INVALID", "accounts 须为账户名映射", config, ("accounts",))
+    require_yaml("accounts" in doc or "account_groups" in doc, "SIMPLE_CONFIG_INVALID",
+                 "请用 account_groups 分组，或用 accounts 列出账户", config)
     defaults = doc["defaults"]
     require_yaml(type(defaults) is dict and {"income_purpose", "expense_purpose", "expense_category"} <= set(defaults) <=
                  {"income_purpose", "expense_purpose", "expense_category", "income_category"},
@@ -281,7 +314,7 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
     month = _month(month or doc["month"])
     goals, locations = _layer(plans, month, budgets)
     from .salary_plan import read_cycles
-    cycles = read_cycles(plans, budgets)
+    cycles = read_cycles(plans, budgets, default_category=doc.get("spendable_cap_category", doc["defaults"]["expense_category"]))
     state, previous = _baseline(config, inputs, month)
     if previous:
         require(previous["cutover"] == doc["cutover"] and previous["report_currency"] == doc["report_currency"],
@@ -318,9 +351,10 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
             filled["expense_targets"].setdefault(name, "not_assessed")
     if "income_category" in doc["defaults"]:
         filled["expense_targets"].setdefault(doc["defaults"]["income_category"], "not_assessed")
+    declared_accounts, account_locations = _grouped_accounts(doc, config)
     for row in filled["accounts"]:
         name = row["account"]
-        declared = doc["accounts"].get(name, doc.get("account_defaults", {}))
+        declared = declared_accounts.get(name, doc.get("account_defaults", {}))
         require_yaml(type(declared) is dict and set(declared) <= {"semantics", "payment_scope", "opening"},
                      "SIMPLE_ACCOUNT_INVALID", "账户只需 semantics、payment_scope 和必要的 opening", config, ("accounts", name))
         row["semantics"] = declared.get("semantics")
@@ -353,7 +387,8 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
     def input_location(keys):
         target, public_keys = config, keys
         if len(keys) > 1 and keys[0] == "accounts" and type(keys[1]) is int:
-            public_keys = ("accounts", filled["accounts"][keys[1]]["account"], *keys[2:])
+            name = filled["accounts"][keys[1]]["account"]
+            public_keys = (*account_locations.get(name, ("accounts", name)), *keys[2:])
         elif len(keys) > 1 and keys[0] in ("expense_targets", "allocation_targets"):
             field = keys[0] if keys[0] != "expense_targets" or keys[1] not in goals["expense_direct_targets"] else "expense_direct_targets"
             public_keys = locations.get((field, keys[1]), ("months", month))

@@ -21,6 +21,7 @@ class SimpleReportBrowser(ReportBrowser):
         self.runtime = None
         self.range_runtimes = []
         self.saved_cycle = None
+        self.visited_months = {self.selected_month}
         super().__init__([config], audit_month_workflow, render_workflow_text)
         # Transaction details remain available just as in the normal browser.
         self.loader = lambda path: audit_month_workflow(path, include_transactions=True)
@@ -81,6 +82,7 @@ class SimpleReportBrowser(ReportBrowser):
         month = _month(month)
         require(month >= load_yaml(self.user_config)["cutover"][:7], "MONTH_INVALID", "月份不得早于 cutover", str(self.user_config))
         self.selected_month, self.period = month, False
+        self.visited_months.add(month)
         self.saved_cycle = None
         self.salary_cycle = None
         self.filter("")
@@ -99,7 +101,7 @@ class SimpleReportBrowser(ReportBrowser):
             return False
 
     def month_choices(self):
-        return [(self.selected_month, self.config)]
+        return [(month, self.user_config) for month in sorted(self.visited_months)]
 
     def show_saved_month(self, result):
         try:
@@ -142,7 +144,7 @@ class SimpleReportBrowser(ReportBrowser):
         from .simple_config import _documents
         from .salary_plan import read_cycles, month_end, window
         doc, path, plans = _documents(self.user_config)
-        cycles = read_cycles(plans, path)
+        cycles = read_cycles(plans, path, default_category=doc.get("spendable_cap_category", doc["defaults"]["expense_category"]))
         if not cycles:
             return [], None
         chosen = window(cycles, month_end(self.selected_month))
@@ -166,8 +168,8 @@ class SimpleReportBrowser(ReportBrowser):
         from datetime import date, timedelta
         from .simple_config import _documents
         from .salary_plan import read_cycles, month_end
-        _, path, plans = _documents(self.user_config)
-        cycles = read_cycles(plans, path)
+        doc, path, plans = _documents(self.user_config)
+        cycles = read_cycles(plans, path, default_category=doc.get("spendable_cap_category", doc["defaults"]["expense_category"]))
         following = next((day for day in cycles if day > start), None)
         return date.fromisoformat(following) - timedelta(days=1) if following else month_end(self.selected_month)
 
@@ -190,10 +192,11 @@ class SimpleReportBrowser(ReportBrowser):
         return True
 
 
-def run_simple_tui(config: Path, month: str | None = None):
+def run_simple_tui(config: Path, month: str | None = None, *, watch=False):
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise BudgetError("TUI_TERMINAL_REQUIRED", "TUI 需要交互式终端；脚本中请使用 text 或 json")
     browser = SimpleReportBrowser(config, month)
+    browser.watch = watch
     try:
         curses.wrapper(_report_browser, browser)
     except KeyboardInterrupt:

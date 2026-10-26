@@ -182,6 +182,8 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
                          f"{event['commodity']}；应付款不计个人收入或消费。")
     for event in record["purpose_events"]:
         protocol = event.get("protocol", {})
+        if protocol.get("protocol") == "inline_income_allocation_v1":
+            lines.append("收入到账按显式 fund 直接分配；计入用途目标，后续同用途搬移不重复计数。")
         if event["kind"] == "k_event" and protocol.get("shape") in ("book_redemption_income", "book_redemption_costs"):
             currency = protocol["commodity"]
             equation = (f"赎回核对：实收 {amount_text(protocol['signed_cash_units'])} {currency}＝账面本金 "

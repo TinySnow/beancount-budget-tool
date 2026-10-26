@@ -91,7 +91,12 @@ def _require_transfer_balance(coordinate: tuple[str, str, str],
             f"本次缺口：{amount_text(outgoing - available)} {commodity}",
             f"划拨后余额：{amount_text(after[owner])} {commodity}",
         ])
-    lines.append("请核对转出腿的 fund、此前用途分配及同日交易顺序；不会自动挪用账户内其他用途的余额。")
+    lines.append("该账户本次划拨前的全部用途余额：")
+    for owner in sorted(set(before) | set(after), key=lambda ident: owner_names.get(ident, ident)):
+        balance = before.get(owner, Fraction(0))
+        name = owner_names.get(owner, "预算外" if owner == "-" else owner)
+        lines.append(f"  {name}：{amount_text(balance)} {commodity}（可划出 {amount_text(max(balance, Fraction(0)))} {commodity}）")
+    lines.append("以上为该交易前、该账户及币种／批次的余额，不是月末余额。请核对 fund；改用途须明确记虚拟调拨，不会自动挪用其他用途。")
     require(False, "H_OWNER_NEGATIVE", "\n".join(lines), source)
 
 

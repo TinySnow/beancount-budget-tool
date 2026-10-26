@@ -152,6 +152,8 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     # Source refs do not contain a date. Use booked transaction dates for all
     # uncovered legs, including pad-generated postings.
     fin = load_financial(root)
+    pool_report = audit_purpose_pools(root, cutover, last, purpose_pools) if purpose_pools is not None else None
+    pool_accounts = {name for row in pool_report["pools"] for name in row["accounts"]} if pool_report else set()
     facts = FactIndex(fin)
     initial_pads = initial_pad_postings(fin, cutover)
     by_ref = {_key(row["ref"]): row for row in owner_audit["ownership"]}
@@ -165,6 +167,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                 part["role"] == "hold" for part in by_ref[key]["slices"]):
             add("initial_balance", {"date": entry.date.isoformat()}, [ref], {})
     if "defaults" in owner_document:
+        report_currency = load_yaml(accounts)["report_currency"]
         h_accounts = {row["account"] for row in load_yaml(accounts)["accounts"]
                       if row["semantics"] == "H"}
         modes = {name: "H" for name in h_accounts}
@@ -179,17 +182,29 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
             if any(key in used_h or key not in by_ref or any(
                     part["role"] != "hold" for part in by_ref[key]["slices"]) for key in keys):
                 continue
-            add("income_asset" if native.kind == "income" else "expense_asset",
-                {"date": entry.date.isoformat()}, refs, {})
-    pool_accounts: set[str] = set()
+            allocations = {}
+            if native.kind == "income" and native.assets[0].units.currency == report_currency:
+                default = owner_document["defaults"]["income_owner_id"]
+                for posting, key in zip(native.assets, keys):
+                    if posting.account in pool_accounts or by_ref[key].get("origin") != "inline":
+                        continue
+                    for part in by_ref[key]["slices"]:
+                        owner, units = part["owner_id"], Fraction(part["signed_units"])
+                        if owner not in (default, "-"):
+                            allocations[owner] = allocations.get(owner, Fraction(0)) + units
+                            allocations[default] = allocations.get(default, Fraction(0)) - units
+            event = {"date": entry.date.isoformat()}
+            if allocations:
+                event.update(protocol="inline_income_allocation_v1",
+                             income_refs=[facts.for_posting(p).as_dict() for p in native.counterparts])
+            add("income_asset" if native.kind == "income" else "expense_asset", event, refs,
+                {owner: exact_text(value) for owner, value in allocations.items() if value})
     pool_internal_events = 0
     pool_internal_keys: set[str] = set()
-    if purpose_pools is not None:
-        pool_report = audit_purpose_pools(root, cutover, last, purpose_pools)
+    if pool_report is not None:
         require(pool_report["ledger_snapshot"] == fin.digest and
                 pool_report["report_currency"] == load_yaml(accounts)["report_currency"],
                 "PURPOSE_POOL_MISMATCH", "资金池与月度用途审计的账本或货币不一致")
-        pool_accounts = {name for pool in pool_report["pools"] for name in pool["accounts"]}
         claimed = {_key(row["ref"]): row for row in owner_audit["ownership"]}
         for entry in fin.entries:
             if not isinstance(entry, data.Transaction) or not first <= entry.date <= last:
