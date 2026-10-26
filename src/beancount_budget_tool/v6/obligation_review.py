@@ -35,25 +35,32 @@ class PreparedObligationReview:
         return self.row["shape"] == "consumer_purchase"
 
     @property
+    def receipt(self):
+        return self.row["shape"] == "asset_inflow"
+
+    @property
     def label(self):
-        return "新增消费责任的用途" if self.purchase else "本次归还的责任（编号）"
+        return ("新增消费责任的用途" if self.purchase else "新增应付款的责任用途" if self.receipt else
+                "本次归还的责任（编号）")
 
     @property
     def choice_labels(self):
-        if self.purchase:
+        if self.purchase or self.receipt:
             return sorted(self.aliases)
         return [f"{index}. {row['label']}" for index, row in enumerate(self.choices.values(), 1)]
 
     @property
     def guidance(self):
+        if self.receipt:
+            return "确认本次到账全额形成须留作归还的应付款，不是收入、收回代垫或一般贷款／分期；资产 fund 仍另审，不凭此新增可花或 G。"
         return ("只确认这条卡债由哪个已登记用途承担；不填 fund，不拆分金额，不改变现金或 G。" if self.purchase else
-                "选择本笔还款之前已经存在的责任；不按金额或 FIFO 猜配。合并还款、单位代垫不能借此放行。")
+                "选择本条负债分录归还的既有责任；合并付款须逐条选择，现金只计一次。不按金额或 FIFO 猜配，不作单位代垫。")
 
 
 def _resolve(prepared, decision):
     require(type(decision) is str and bool(decision.strip()), "REVIEW_DECISION_INVALID", "请选择一个可用项目", prepared.row["source"])
     decision = decision.strip()
-    if prepared.purchase:
+    if prepared.purchase or prepared.receipt:
         ident = prepared.aliases.get(decision)
     else:
         identifiers = list(prepared.choices)
@@ -72,8 +79,8 @@ def validate_decision(prepared, decision, reason):
 
 def prepare_review(config: Path, item: dict) -> PreparedObligationReview:
     require(item.get("kind") == "booked_obligation" and item.get("reason_code") == "OBLIGATION_UNCLAIMED" and
-            item.get("shape") in ("consumer_purchase", "asset_outflow"), "TUI_REVIEW_UNSUPPORTED",
-            "此入口只审阅已支持的消费责任和单笔还款；代垫、期初及程序实现缺口须分别处理", item.get("source"))
+            item.get("shape") in ("consumer_purchase", "asset_outflow", "asset_inflow"), "TUI_REVIEW_UNSUPPORTED",
+            "此入口只审消费责任、新增应付款及已支持的还款；代垫、期初及实现缺口须分别处理", item.get("source"))
     config = config.resolve()
     doc, paths, cutover = read_month_config(config)
     inputs = {path: path.read_bytes() for path in {config, *paths.values()} if path != paths["ledger"]}
@@ -81,7 +88,8 @@ def prepare_review(config: Path, item: dict) -> PreparedObligationReview:
         current = audit_month_workflow(config)
         selected = next((row for row in current["review_items"] if row.get("kind") == "booked_obligation" and
                          _key(row.get("ref")) == _key(item["ref"])), None)
-        require(selected is not None and selected["reason_code"] == "OBLIGATION_UNCLAIMED",
+        require(selected is not None and selected["reason_code"] == "OBLIGATION_UNCLAIMED" and
+                selected["shape"] == item["shape"],
                 "REVIEW_SOURCE_CHANGED", "选中来源已变或已被认领；请返回清单重新选择", item.get("source"))
         audit = audit_simple_obligations(paths["ledger"], cutover, paths["obligations"], last)
         event = next(row for row in audit["events"] if _key(row["liability_ref"]) == _key(selected["ref"]))
@@ -101,11 +109,28 @@ def prepare_review(config: Path, item: dict) -> PreparedObligationReview:
                                               before_ref=_key(event["liability_ref"]))
             coordinate = tuple(event[key] for key in ("account", "commodity", "lot"))
             same = lambda record: tuple(record[key] for key in ("account", "commodity", "lot")) == coordinate
-            require(not any(same(record) for record in prefix["opening_pending"]) and
-                    not any(same(record) and record["status"] != "CERTIFIED" for record in prefix["events"]),
-                    "TUI_OBLIGATION_REVIEW_PENDING", "同账户／币种此前的责任或期初尚未审定；请先处理此前项目", row["source"])
+            require(not any(same(record) for record in prefix["opening_pending"]),
+                    "TUI_OBLIGATION_REVIEW_PENDING", "同账户／币种的期初责任尚未审定；请先处理期初项目", row["source"])
+            prior = next((record for record in prefix["events"] if same(record) and record["status"] != "CERTIFIED"), None)
+            if prior is not None:
+                from .review_diagnostics import posting_sources
+                earlier = posting_sources(fin)[_key(prior["liability_ref"])]
+                require(False, "TUI_OBLIGATION_REVIEW_PENDING",
+                        f"同账户／币种有更早的未审责任事件：{prior['date']}，{earlier}。先审该项，再审本条；清单展示顺序不代表重放顺序",
+                        row["source"])
             amount = Fraction(event["signed_units"])
-            eligible = sorted((record for record in prefix["obligations"]
+            # Choices use the whole pre-transaction snapshot, minus decisions
+            # already saved for sibling legs of this same observed payment.
+            allocated = {}
+            if event.get("proof") == "native_group_payment_v1":
+                for sibling in audit["events"]:
+                    if (sibling.get("payment_group_ref") == event["payment_group_ref"] and
+                            sibling["status"] == "CERTIFIED"):
+                        ident = sibling["obligation_id"]
+                        allocated[ident] = allocated.get(ident, Fraction(0)) + Fraction(sibling["signed_units"])
+            available = [{**record, "remaining_native": str(Fraction(record["remaining_native"]) -
+                          allocated.get(record["obligation_id"], Fraction(0)))} for record in prefix["obligations"]]
+            eligible = sorted((record for record in available
                                if same(record) and Fraction(record["remaining_native"]) >= amount),
                               key=lambda record: (record.get("purchase_date") or "", record["obligation_id"]))
             wanted = {_key(record["purchase_ref"]) for record in eligible}
@@ -124,7 +149,7 @@ def prepare_review(config: Path, item: dict) -> PreparedObligationReview:
                 f"{descriptions.get(_key(record['purchase_ref']), '已审期初责任')}"}
                 for record in eligible}
             require(bool(choices), "TUI_OBLIGATION_REVIEW_PENDING",
-                    "本笔之前没有可单独覆盖本次还款的已审责任；先审消费／期初。合并多笔责任或预付款仍需专门协议，不要拆改真实交易", row["source"])
+                    "没有可单独覆盖本条负债分录的已审责任；先审来源／期初或同日顺序。单条负债分录合并多个责任、预付款仍需专门协议，不要拆改真实交易", row["source"])
             initial = "1" if len(choices) == 1 else ""
     check_unchanged(inputs)
     return PreparedObligationReview(config, row, inputs, choices, aliases, initial)
@@ -145,9 +170,9 @@ def save_review(prepared, decision, reason, output: Path, *, approved=False):
     event = fresh.row["event"]
     counterpart = "counterpart_refs" if "counterpart_refs" in event else "counterpart_ref"
     claim = {"liability_ref": event["liability_ref"], counterpart: event[counterpart], "reason": reason.strip(),
-             "kind": "consumer_purchase" if fresh.purchase else "payment",
-             "obligation_id": "debt_" + sha256(_key(event["liability_ref"]).encode()).hexdigest() if fresh.purchase else ident,
-             **({"owner_id": ident} if fresh.purchase else {})}
+             "kind": "consumer_purchase" if fresh.purchase else "payable_receipt" if fresh.receipt else "payment",
+             "obligation_id": "debt_" + sha256(_key(event["liability_ref"]).encode()).hexdigest() if fresh.purchase or fresh.receipt else ident,
+             **({"owner_id": ident} if fresh.purchase or fresh.receipt else {})}
     document["events"].append(claim)
     with month_inputs(paths["ledger"], doc["month"], cutover) as (_, last):
         with TemporaryDirectory(prefix="budget-debt-review-") as folder:

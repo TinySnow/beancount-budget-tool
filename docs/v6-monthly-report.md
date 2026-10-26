@@ -217,7 +217,7 @@ purpose_pools: purpose-pools.yaml
 
 日常使用可在 TUI 选中消费责任／简单还款待审后按 e，填写用途或责任编号、理由并明确批准；两文件模式自动保存到原审阅状态，无须复制引用。以下仅说明高级手工输入：多腿待审项的 JSON 会提供 `ref`（负债来源）、`counterpart_refs`（该负债腿以外的全部分录，多卡时包括其他负债）、`expense_refs` 和 `asset_refs`。把该负债来源填为事件的 `liability_ref`，完整复制 `counterpart_refs`，并填写 `kind: consumer_purchase`、稳定的 `obligation_id`、已登记的 `owner_id` 和 `reason`。不要删去看似无关的现金腿，也不要逐费用重复认领同一卡债。两腿事件沿用原 `counterpart_ref`；后续还款仍使用同一责任 ID。
 
-这不自动批准卡债或月末资料。合并还款、找零／退款混入、带价格或成本的多腿消费，以及 K 资金腿仍需后续专门协议。
+这不自动批准卡债或月末资料。`native_group_payment_v1` 已支持一条 H 现金清偿多条正数负债：逐负债关联既有责任，全部原币金额精确守恒、共享现金计一次；TUI e 可分别保存。纯资产到账／等额应付款可明确认领 `payable_receipt`，不记 Income 或 G。单条负债合计清偿多个 ID、找零／退款混入、带价格或成本的多腿消费，以及 K 资金腿仍需后续专门协议。
 
 ## 从历史月份开始：切换前还没结清的债务或代垫
 

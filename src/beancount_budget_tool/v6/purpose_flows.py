@@ -119,6 +119,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
         claimed_h = set(claimed)
         debt_by_ref = {_key(row["liability_ref"]): row for row in debt["events"]}
         used_purchase_groups = set()
+        used_payment_groups = set()
         for event in debt["events"]:
             if event["date"][:7] != month or event["status"] != "CERTIFIED":
                 continue
@@ -145,6 +146,13 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                 continue
             if event["kind"] not in ("payment", "advance_outflow", "advance_reimbursement"):
                 continue
+            if event.get("proof") == "native_group_payment_v1":
+                group = _key(event["payment_group_ref"])
+                members = [debt_by_ref[_key(ref)] for ref in event["liability_refs"]]
+                if group in used_payment_groups or any(row["status"] != "CERTIFIED" for row in members):
+                    continue
+                used_payment_groups.add(group)
+                event = {**event, "obligation_ids": [row["obligation_id"] for row in members]}
             ref = event["counterpart_ref"]
             if ref is not None and _key(ref) in claimed_h:
                 add("liability_" + event["kind"], event, [ref], {})

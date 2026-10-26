@@ -283,6 +283,8 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                           **({key: row[key] for key in ("proof", "purchase_group_ref", "liability_refs",
                                                         "expense_total", "cash_paid", "debt_total")}
                              if row.get("proof") == "native_joint_card_purchase_v1" else {}),
+                          **({key: row[key] for key in ("proof", "payment_group_ref", "liability_refs", "cash_paid")}
+                             if row.get("proof") == "native_group_payment_v1" else {}),
                           "source": source_by_ref[_key(row["liability_ref"])],
                           "reason_code": row["reason_codes"][0]})
         for row in transfers["events"]:

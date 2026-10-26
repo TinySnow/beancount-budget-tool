@@ -23,6 +23,24 @@ class NativeCardPurchase:
     expenses: tuple
 
 
+def native_group_payment(fin, entry, modes: dict | None = None) -> NativeFlow | None:
+    """One observed cash payment exactly clears several positive debt legs."""
+    if not isinstance(entry, data.Transaction):
+        return None
+    cash = tuple(p for p in entry.postings if p.account.split(":", 1)[0] == fin.options["name_assets"])
+    debts = tuple(p for p in entry.postings if p.account.split(":", 1)[0] == fin.options["name_liabilities"])
+    if (len(cash) != 1 or len(debts) < 2 or len(entry.postings) != 1 + len(debts) or
+            modes is not None and modes.get(cash[0].account) != "H"):
+        return None
+    asset = cash[0]
+    if (exact(asset.units.number) >= 0 or any(exact(p.units.number) <= 0 for p in debts) or
+            any(p.cost is not None or p.price is not None or fin.raw_price(p)[0] != "none" or
+                p.units.currency != asset.units.currency for p in entry.postings) or
+            sum((exact(p.units.number) for p in entry.postings), Fraction(0)) != 0):
+        return None
+    return NativeFlow("payment", cash, debts, exact(asset.units.number))
+
+
 @dataclass(frozen=True)
 class NativeBookRedemption:
     book: data.Posting

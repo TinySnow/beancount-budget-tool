@@ -93,8 +93,10 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
     # Even without a declaration file, recognize supported shapes as data
     # awaiting review rather than labelling their cash share unsupported.
     debt = audit_simple_obligations(root, cutover, obligations, last)
-    payments = {_key(row["counterpart_ref"]): row for row in debt["events"]
-                if row["counterpart_ref"] is not None}
+    payments = defaultdict(list)
+    for row in debt["events"]:
+        if row["counterpart_ref"] is not None:
+            payments[_key(row["counterpart_ref"])].append(row)
     purchases = defaultdict(list)
     for row in debt["events"]:
         if row["shape"] == "consumer_purchase":
@@ -170,15 +172,23 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                 counterparts = event["expense_refs"]
                 if len(members) > 1:
                     event = {**event, "obligation_ids": [row["obligation_id"] for row in members]}
-            elif liability_legs and len(entry.postings) == 2:
-                event = payments.get(_key(ref))
-                if event is None or event["status"] != "CERTIFIED" or event["kind"] not in KINDS:
-                    code = ("OBLIGATION_EVENT_UNSUPPORTED" if event and event["status"] == "UNSUPPORTED"
+            elif liability_legs and (len(entry.postings) == 2 or any(
+                    row.get("proof") == "native_group_payment_v1" for row in payments.get(_key(ref), []))):
+                members = payments.get(_key(ref), [])
+                event = members[0] if members else None
+                if not members or any(row["status"] != "CERTIFIED" or row["kind"] not in KINDS for row in members):
+                    # Certified receipts add cash and a separate obligation;
+                    # they are neither personal income nor expense refunds.
+                    if len(members) == 1 and event["status"] == "CERTIFIED" and event["kind"] == "payable_receipt":
+                        continue
+                    code = ("OBLIGATION_EVENT_UNSUPPORTED" if any(row["status"] == "UNSUPPORTED" for row in members)
                             else "OBLIGATION_UNCLAIMED")
                     pending(code, ref, posting.account)
                     continue
                 kind = KINDS[event["kind"]]
-                counterparts = [event["liability_ref"]]
+                counterparts = [row["liability_ref"] for row in members]
+                if len(members) > 1:
+                    event = {**event, "obligation_ids": [row["obligation_id"] for row in members]}
             else:
                 pending("DEFAULT_OUTFLOW_EVENT_UNSUPPORTED", ref, posting.account)
                 continue

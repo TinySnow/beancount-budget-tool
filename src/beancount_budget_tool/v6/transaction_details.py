@@ -173,7 +173,14 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
         for flow in posting["default_outflows"]:
             lines.append(f"  默认支出资金收付：{FLOW_NAMES.get(flow['kind'], flow['kind'])} {amount_text(flow['amount'])} {flow['commodity']}")
     shown_purchase_groups = set()
+    shown_payment_groups = set()
     for event in record["liabilities"]:
+        if event.get("proof") == "native_group_payment_v1":
+            group = _key(event["payment_group_ref"])
+            if group not in shown_payment_groups:
+                lines.append(f"合并付款核对：现金实付 {amount_text(event['cash_paid'])} {event['commodity']}＝"
+                             "本笔各条负债清偿额合计；现金与用途流水只计一次，各条责任独立核销。")
+                shown_payment_groups.add(group)
         if event.get("proof") == "native_joint_card_purchase_v1":
             group = _key(event["purchase_group_ref"])
             if group not in shown_purchase_groups:
@@ -190,6 +197,9 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
             lines.append(f"  到账核对：{amount_text(event['cash_received'])}＝收入 "
                          f"{amount_text(event['income_received'])}＋应付款 {amount_text(event['payable_received'])} "
                          f"{event['commodity']}；应付款不计个人收入或消费。")
+        if event.get("proof") == "native_payable_inflow_v1":
+            lines.append(f"  到账核对：{amount_text(event['cash_received'])} {event['commodity']} 全额形成已审应付款；"
+                         "不计个人收入、消费或正式划拨 G。")
     for event in record["purpose_events"]:
         protocol = event.get("protocol", {})
         if protocol.get("protocol") == "inline_income_allocation_v1":

@@ -1,7 +1,8 @@
 """Source-bound replay of simple booked obligations and clearing advances.
 
 This contract covers a card purchase (including native expenses jointly paid
-by cash and one or several cards) and later single asset/card payments.
+by cash and one or several cards), explicit payable receipts and native
+single-cash payments settling one or several liability legs.
 A separately reviewed asset-outflow / asset-inflow pair
 can settle a third-party advance recorded in a liability account without
 creating a personal consumption obligation.
@@ -27,7 +28,7 @@ from .classification import _key
 from .facts import FactIndex, reference_fact_index
 from .obligation_opening import compile_obligation_opening, opening_source, paired_price_value
 from .ownership import _owners
-from .native_flows import native_card_purchase, native_payable_receipt
+from .native_flows import native_card_purchase, native_payable_receipt, native_group_payment
 from .inline_amounts import parse_inline_amounts
 from .provenance import valid_digest
 from .source import _source, scan_v6_source
@@ -129,6 +130,14 @@ def audit_simple_obligations(root: Path, cutover: date,
                                  income_received=exact_text(receipt.income),
                                  payable_received=exact_text(receipt.payable),
                                  proof="native_income_payable_v1")
+            payment = native_group_payment(fin, entry)
+            if payment is not None:
+                candidate.update(shape="asset_outflow", proof="native_group_payment_v1",
+                    counterpart_ref=facts.for_posting(payment.assets[0]).as_dict(),
+                    counterpart_refs=[facts.for_posting(p).as_dict() for p in entry.postings if p is not posting],
+                    asset_refs=[facts.for_posting(payment.assets[0]).as_dict()],
+                    liability_refs=[facts.for_posting(p).as_dict() for p in payment.counterparts],
+                    payment_group_ref=facts.for_transaction(entry).as_dict(), cash_paid=exact_text(-payment.asset_total))
             candidates[key] = candidate
             if before_ref is not None:
                 candidate_transactions[key] = id(entry)
@@ -172,7 +181,8 @@ def audit_simple_obligations(root: Path, cutover: date,
                 "owner_id", "reason"}, {
                 "liability_ref", "counterpart_ref", "kind", "obligation_id", "reason"}, {
                 "liability_ref", "counterpart_ref", "kind", "clearing_id", "reason"}, {
-                "liability_ref", "counterpart_refs", "kind", "obligation_id", "owner_id", "reason"}),
+                "liability_ref", "counterpart_refs", "kind", "obligation_id", "owner_id", "reason"}, {
+                "liability_ref", "counterpart_refs", "kind", "obligation_id", "reason"}),
                 "OBLIGATION_CLAIM_INVALID", "责任事件字段无效", location)
             grouped = "counterpart_refs" in row
             ref_field = "counterpart_refs" if grouped else "counterpart_ref"
@@ -221,8 +231,10 @@ def audit_simple_obligations(root: Path, cutover: date,
             kind = row["kind"]
             allowed = {"consumer_purchase": {"consumer_purchase"},
                        "asset_outflow": {"payment", "advance_outflow"},
-                       "asset_inflow": {"advance_reimbursement"},
+                       "asset_inflow": {"advance_reimbursement", "payable_receipt"},
                        "income_payable": {"payable_receipt"}}
+            if candidate.get("proof") == "native_group_payment_v1":
+                allowed["asset_outflow"] = {"payment"}
             check_event(type(kind) is str and kind in allowed[candidate["shape"]] and
                     type(row["reason"]) is str and bool(row["reason"].strip()),
                     "OBLIGATION_CLAIM_INVALID", "责任 ID、类型或理由无效", location)
@@ -231,10 +243,10 @@ def audit_simple_obligations(root: Path, cutover: date,
                     "OBLIGATION_CLAIM_INVALID", "责任或清算 ID 非法", location)
             if kind in ("consumer_purchase", "payable_receipt"):
                 check_event("obligation_id" in row and "clearing_id" not in row,
-                        "OBLIGATION_CLAIM_INVALID", "消费须使用责任 ID", location)
+                        "OBLIGATION_CLAIM_INVALID", "新增责任须使用责任 ID", location)
                 check_event("owner_id" in row and type(row["owner_id"]) is str and
                         row["owner_id"] in owners,
-                        "OBLIGATION_OWNER_INVALID", "消费责任须声明已登记用途", location)
+                        "OBLIGATION_OWNER_INVALID", "新增责任须声明已登记用途", location)
             else:
                 check_event("owner_id" not in row, "OBLIGATION_CLAIM_INVALID",
                         "还款沿用原责任用途，不得重写", location)
@@ -276,7 +288,8 @@ def audit_simple_obligations(root: Path, cutover: date,
                     kind, derived = "payable_receipt", True
                     claim = {"kind": kind, "obligation_id": ident, "owner_id": owner_names[parts[0][0]],
                              "reason": "同笔原币精确等式：到账＝已记收入＋应付款；责任沿唯一显式资产用途"}
-        if claim is None and candidate["shape"] == "asset_outflow" and coord not in pending_coordinates:
+        if (claim is None and candidate["shape"] == "asset_outflow" and coord not in pending_coordinates and
+                candidate.get("proof") != "native_group_payment_v1"):
             active = [(name, item) for name, item in balances.items()
                       if item["account"] == coord and item["remaining"] > 0]
             if (len(active) == 1 and active[0][1].get("origin") == "payable_receipt" and
@@ -327,6 +340,10 @@ def audit_simple_obligations(root: Path, cutover: date,
                         "报销币种／账户不符或超过代垫未结额", location)
                 advance["remaining"] += amount
             state, codes = "CERTIFIED", []
+        if kind == "payable_receipt" and candidate["shape"] == "asset_inflow":
+            candidate = {**candidate, "asset_refs": [candidate["counterpart_ref"]],
+                         "proof": "native_payable_inflow_v1", "cash_received": exact_text(-amount),
+                         "income_received": "0", "payable_received": exact_text(-amount)}
         events.append({**candidate, "status": state, "reason_codes": codes,
                        "kind": claim["kind"] if claim else None,
                        "obligation_id": claim.get("obligation_id") if claim else None,
