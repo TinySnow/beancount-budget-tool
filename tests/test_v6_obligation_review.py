@@ -7,6 +7,8 @@ import unittest
 from unittest.mock import patch
 
 import yaml
+import gzip
+import json
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.simple_config import create_files
@@ -106,6 +108,45 @@ class ObligationReviewTests(unittest.TestCase):
             save_review(prepared, '生活费', 'test', target)
         self.assertEqual(caught.exception.code, 'REVIEW_APPROVAL_REQUIRED')
         self.assertFalse(target.exists())
+
+    def test_blank_reason_retries_reason_only_and_saved_reason_is_visible_and_persistent(self):
+        from beancount_budget_tool.v6.state_store import state_file
+        browser = self.browser()
+        browser.view = 'reviews'
+        browser.selected = browser.items().index(self.selected(browser))
+        with patch('beancount_budget_tool.v6.tui._read_field', side_effect=['生活费', '', '   ', '核对本人消费责任', 'y']) as field, \
+             patch('beancount_budget_tool.v6.tui._message') as message:
+            _edit_review(FakeScreen(size=(30, 130)), browser)
+        self.assertEqual([call.args[1] for call in field.call_args_list],
+                         ['填写一项审阅决定', '填写审阅理由', '填写审阅理由', '填写审阅理由', '核对后明确批准'])
+        self.assertIn('判断依据不能为空', '\n'.join(field.call_args_list[2].args[2]))
+        saved = state_file(self.simple)
+        document = json.loads(gzip.decompress(saved.read_bytes()))
+        self.assertEqual(document['shared']['obligations']['events'][-1]['reason'], '核对本人消费责任')
+        self.assertEqual(message.call_args.args[1], '已保存审阅决定')
+        text = '\n'.join(message.call_args.args[2])
+        self.assertIn('核对本人消费责任', text)
+        self.assertIn(str(saved), text)
+        self.submit(browser, '生活费', account='Liabilities:Other')
+        self.assertEqual(browser.outcome['status'], 'CERTIFIED_SCOPED')
+        from beancount_budget_tool.v6.transaction_details import render_transaction
+        report = browser.outcome['report']
+        purchase = next(row for row in report['transactions']['rows'] if row['narration'] == 'joint purchase')
+        self.assertIn('责任依据：核对本人消费责任', '\n'.join(render_transaction(purchase, report['owner_names'])))
+        self.assertTrue(all(path.read_bytes() == original for path, original in self.originals.items()))
+
+    def test_cancel_after_blank_reason_does_not_save_or_restart_decision(self):
+        from beancount_budget_tool.v6.state_store import state_file
+        browser = self.browser()
+        before = state_file(self.simple).read_bytes()
+        browser.view = 'reviews'
+        browser.selected = browser.items().index(self.selected(browser))
+        with patch('beancount_budget_tool.v6.tui._read_field', side_effect=['生活费', '', None]) as field, \
+             patch('beancount_budget_tool.v6.tui._message') as message:
+            _edit_review(FakeScreen(size=(30, 130)), browser)
+        self.assertEqual(field.call_count, 3)
+        message.assert_not_called()
+        self.assertEqual(state_file(self.simple).read_bytes(), before)
 
     def test_purchase_rejects_unknown_split_and_outside_owners_and_missing_reason(self):
         browser = self.browser()

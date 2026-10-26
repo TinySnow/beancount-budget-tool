@@ -196,6 +196,8 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
         owner = event["responsibility_owner_name"] or "单位代垫清算，不作本人消费责任"
         identity = "" if for_search else f"，ID {label}"
         lines.append(f"责任事件：{DEBT_NAMES.get(event['kind'], event['kind'])}{identity}，责任用途：{owner}")
+        if event.get("review_reason"):
+            lines.append(f"  责任依据：{event['review_reason']}")
         if event.get("clearing_protocol") == "same_day_obligation_clearing_v1":
             lines.append(f"  同日责任清算 {amount_text(event['signed_units'])} {event['commodity']}：明确关联同日已审消费，"
                          "不确认真实日内先后；保留原顺序，先付部分按当日预付冲销，不计第二份消费或 G。")

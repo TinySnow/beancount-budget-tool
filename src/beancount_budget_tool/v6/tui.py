@@ -821,7 +821,27 @@ def _read_field(stdscr, title: str, context: list[str], prompt: str,
 
 
 def _message(stdscr, title: str, lines: list[str]):
-    _read_field(stdscr, title, lines, "Enter 或 Esc 返回")
+    """A read-only notice; never present an input box that discards text."""
+    offset = 0
+    while True:
+        height, width = stdscr.getmaxyx()
+        _erase_screen(stdscr)
+        _put(stdscr, 0, title, curses.A_REVERSE | curses.A_BOLD)
+        page = max(1, height - 2)
+        wrapped = _wrap(lines, width - 1)
+        offset = max(0, min(offset, max(0, len(wrapped) - page)))
+        if height >= 3:
+            for row, line in enumerate(wrapped[offset:offset + page], 1):
+                _put(stdscr, row, line)
+        _put(stdscr, max(0, height - 1), "PgUp/PgDn 查看全文；Enter 或 Esc 返回")
+        stdscr.refresh()
+        key = _read_key(stdscr)
+        if key in ("\n", "\r", curses.KEY_ENTER, "\x1b"):
+            return
+        if key in (curses.KEY_PPAGE, curses.KEY_UP):
+            offset -= page if key == curses.KEY_PPAGE else 1
+        elif key in (curses.KEY_NPAGE, curses.KEY_DOWN):
+            offset += page if key == curses.KEY_NPAGE else 1
 
 
 def _edit_review(stdscr, browser: ReportBrowser):
@@ -853,9 +873,15 @@ def _edit_review(stdscr, browser: ReportBrowser):
             decision = _read_field(stdscr, "填写一项审阅决定", context, f"{label}：", decision)
             if decision is None:
                 return
-            reason = _read_field(stdscr, "填写审阅理由", [*context[:5], f"决定：{decision}"], "判断依据：", reason)
-            if reason is None:
-                return
+            reason_context = [*context[:5], f"决定：{decision}",
+                              "请在底部 > 后输入判断依据；必填。下一步核对并输入 y 才会保存。"]
+            while True:
+                reason = _read_field(stdscr, "填写审阅理由", reason_context, "判断依据：", reason)
+                if reason is None:
+                    return
+                if reason.strip():
+                    break
+                reason_context = [*reason_context[:6], "判断依据不能为空；请直接在底部 > 后输入理由，或 Esc 取消本项。"]
             try:
                 parts = validate_decision(prepared, decision, reason)
                 break
@@ -888,7 +914,10 @@ def _edit_review(stdscr, browser: ReportBrowser):
         lines = ["本项决定已保存；当前月份已切换到新配置并重新审计。",
                  f"以后请使用：{browser.config}", f"审阅记录：{output}"]
         if hasattr(browser, "user_config"):
-            lines = ["本项决定已保存并重新审计；以后仍使用同一份配置。", f"用户入口：{browser.user_config}"]
+            from .state_store import state_file
+            lines = ["本项决定已保存并重新审计；以后仍使用同一份配置。", f"用户入口：{browser.user_config}",
+                     f"本次判断依据：{reason.strip()}", f"保存位置：{state_file(browser.user_config)}",
+                     "这是压缩的审阅记录，不会写回账本或 config.yml；已审交易详情也会显示依据。"]
         if browser.error:
             lines += ["决定已保存，但月报计算仍有错误：", str(browser.error)]
         else:

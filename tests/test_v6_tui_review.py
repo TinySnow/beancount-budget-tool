@@ -12,7 +12,7 @@ from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.tools.v6_init import _SetupDumper, create_setup, compile_setup
 from beancount_budget_tool.tools.v6_review_decisions import apply_review
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
-from beancount_budget_tool.v6.tui import ReportBrowser, _draw_browser, _read_field, _report_browser
+from beancount_budget_tool.v6.tui import ReportBrowser, _draw_browser, _read_field, _report_browser, _message
 from beancount_budget_tool.v6.review import prepare_review, save_review, validate_decision
 from test_v6_tui import FakeScreen
 
@@ -302,6 +302,25 @@ class InteractiveReviewTests(unittest.TestCase):
 
 
 class ReviewFormTests(unittest.TestCase):
+    def test_notice_has_no_discarded_text_field_and_both_keys_return(self):
+        for key in ('\n', '\x1b'):
+            screen = FakeScreen(keys=['误以为能在这里填写的文字', key], size=(8, 90))
+            _message(screen, '填写有误；尚未保存', ['判断依据不能为空'])
+            text = '\n'.join(value for frame in screen.frames for _, _, value in frame)
+            self.assertIn('Enter 或 Esc 返回', text)
+            self.assertNotIn('Enter 继续', text)
+            self.assertNotIn('Ctrl+U', text)
+            self.assertNotIn('> ', text)
+            self.assertNotIn('误以为能在这里填写的文字', text)
+
+    def test_notice_scrolls_and_can_close_on_small_screens(self):
+        import curses
+        screen = FakeScreen(keys=[curses.KEY_NPAGE, curses.KEY_PPAGE, '\n'], size=(5, 40))
+        _message(screen, '通知', [f'内容 {index}' for index in range(20)])
+        self.assertTrue(any('内容 3' in value for _, _, value in screen.frames[1]))
+        for size in ((1, 8), (3, 6)):
+            _message(FakeScreen(keys=['\x1b'], size=size), '通知', ['长内容'])
+
     def test_unicode_backspace_clear_scroll_and_control_character_escaping(self):
         context = ["/账本/很长的路径/" + "x" * 30 + ":42", "原文\x1b[2J", *[str(i) for i in range(20)]]
         screen = FakeScreen(keys=[*"旅游x", "\x7f", 338, 339, "\x15", *"生活费", "\n"], size=(8, 24))

@@ -284,6 +284,8 @@ salary_cycles:
 
 正常使用只会在有已审数据时保存 `.budget-state/config/reviews.json.gz`，包含已审来源决定、月末声明、债务证据和恢复资料。它不是缓存，需备份。运行输入放系统临时目录，正常重算／退出自动释放；纯行内配置可完全没有持久状态。
 
+审阅理由在最终输入 y 后随决定一起保存到这个压缩文件，不追加到原账本、config.yml 或 budgets.yml；未批准／取消的表单内容不持久保存。保存成功页显示理由和文件位置，已审交易详情显示分类／用途／责任依据。需要在月报尚未签发时查看文字版，可用下方 state --export 导出只读用途的副本，在 obligations.yaml 的 events[].reason 查看负债理由；分类／H 用途决定在相应 classifications.yaml／ownership.yaml 中。查看无须执行 import-reviewed，也不要直接修改压缩记录。
+
 升级后退出其他预算工具窗口，执行 `clean --config config.yml`，可将旧 latest.yaml、snapshots、reviews 收拢并删除旧 runtime 缓存。`--dry-run` 只预览。文件损坏或无法证明安全时会保留原文件，不通过删除审阅记录来消除错误。
 
 ## 高级审阅数据
