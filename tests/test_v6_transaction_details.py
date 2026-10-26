@@ -1,6 +1,7 @@
 """Signed-month provenance must not turn labels, debt, or K flows into holdings."""
 
 from contextlib import redirect_stdout
+from copy import deepcopy
 from datetime import date
 from fractions import Fraction
 from io import StringIO
@@ -28,7 +29,7 @@ from test_v6_tui import FakeScreen
 class TransactionDetailsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        temporary = TemporaryDirectory()
+        temporary = TemporaryDirectory(prefix="budget-e3-")
         cls.addClassCleanup(temporary.cleanup)
         cls.base = Path(temporary.name).resolve()
         cls.runner = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/v6/acceptance/run.py"))
@@ -179,6 +180,37 @@ class TransactionDetailsTests(unittest.TestCase):
         self.assertIn("匹配 0 项", text)
         self.assertIn("交易总数 16", text)
         self.assertIn("月报警告 2 条", text)
+
+    def test_short_transaction_queries_ignore_parent_paths_and_opaque_ids(self):
+        outcome = deepcopy(self.outcomes["2026-10"])
+        rows = outcome["report"]["transactions"]["rows"]
+        for style in ("/private/tmp/budget-E3-random/", "C:\\Users\\name\\Temp\\budget-E3-random\\"):
+            with self.subTest(style=style):
+                for row in rows:
+                    row["source"] = style + "acceptance.bean:11"
+                    for posting in row["postings"]:
+                        posting["source"] = style + "acceptance.bean:12"
+                    for event in row["liabilities"]:
+                        event["obligation_id"] = "opaque_E3_not_a_search_term"
+                unchanged = deepcopy(outcome)
+                browser = ReportBrowser([self.configs["2026-10"]], Mock(return_value=outcome), render_workflow_text)
+                browser.refresh()
+                browser.toggle_transactions()
+                browser.filter("e3")
+                self.assertEqual(len(browser.transactions()), 1)
+                self.assertTrue(browser.transactions()[0]["narration"].startswith("E3"))
+                browser.filter("opaque_E3_not_a_search_term")
+                self.assertEqual(browser.transactions(), [])
+                browser.filter("acceptance.bean:12")
+                self.assertEqual(len(browser.transactions()), len(rows))
+                for query in ("第一次旅行", "Expenses:Traffic", "700"):
+                    browser.filter(query)
+                    self.assertTrue(any(row["narration"].startswith("E3") for row in browser.transactions()))
+                normal = "\n".join(render_transaction(rows[0], outcome["report"]["owner_names"]))
+                self.assertIn(style + "acceptance.bean:11", normal)
+                debt = next(row for row in rows if row["liabilities"])
+                self.assertIn("opaque_E3_not_a_search_term", "\n".join(render_transaction(debt, outcome["report"]["owner_names"])))
+                self.assertEqual(outcome, unchanged)
 
     def test_tui_keys_and_refresh_clear_details_before_pending_or_error(self):
         outcomes = [self.outcomes["2026-10"], self.outcomes["2026-11"]]

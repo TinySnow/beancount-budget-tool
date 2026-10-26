@@ -469,9 +469,9 @@ class ReportBrowser:
             return items
         from .transaction_details import render_transaction
         names = self.outcome["report"]["owner_names"] if self.has_transactions() else {}
-        # Search what the user can read, including decimal display amounts.
-        # Short queries must not accidentally match opaque source hashes.
-        return [item for item in items if query in "\n".join(render_transaction(item, names)).casefold()]
+        # Search transaction text, file/line and decimal display amounts;
+        # machine-specific parent paths and opaque IDs are not keywords.
+        return [item for item in items if query in "\n".join(render_transaction(item, names, for_search=True)).casefold()]
 
     def items(self) -> list[dict]:
         return self.transactions() if self.view == "transactions" else self.reviews()

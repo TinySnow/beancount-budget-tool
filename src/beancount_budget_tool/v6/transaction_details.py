@@ -125,17 +125,21 @@ def project_transactions(fin, month: str, expense: dict, purpose: dict, pools: d
             "note": "已签发月报内的 booked 来源与各项审计证据；不另行签发逐笔净收益或市值。分录保留原币和正负号，资金用途与债务责任分别显示。"}
 
 
-def render_transaction(record: dict, owner_names: dict) -> list[str]:
+def render_transaction(record: dict, owner_names: dict, *, for_search: bool = False) -> list[str]:
     """Readable first; complete reference dictionaries remain in JSON."""
+    # Machine-specific parent paths and opaque responsibility IDs must not
+    # make a short keyword match every transaction in an unrelated directory.
+    def location(source):
+        return source.replace("\\", "/").rsplit("/", 1)[-1] if for_search else source
     lines = [f"{record['date']} {record.get('payee') or ''} {record['narration']}",
-             f"账本位置：{record['source']}"]
+             f"账本位置：{location(record['source'])}"]
     if "budget_order" in record:
         lines.append(f"显式同日顺序 budget-order：{record['budget_order']}（未填为 0）")
     if record["generated"]:
         lines.append("由 Beancount pad 生成；以下位置是原始 pad 指令。")
     for posting in record["postings"]:
         lines.extend(["", f"{posting['account']}  {amount_text(posting['signed_units'])} {posting['commodity']}",
-                      f"  位置：{posting['source']}"])
+                      f"  位置：{location(posting['source'])}"])
         for key, label in (("classification", "预算类别"), ("h_purpose", "资产分录用途"), ("k_purpose", "K 账面申赎用途")):
             claim = posting[key]
             if claim:
@@ -190,7 +194,8 @@ def render_transaction(record: dict, owner_names: dict) -> list[str]:
                 shown_purchase_groups.add(group)
         label = event["obligation_id"] or event["clearing_id"]
         owner = event["responsibility_owner_name"] or "单位代垫清算，不作本人消费责任"
-        lines.append(f"责任事件：{DEBT_NAMES.get(event['kind'], event['kind'])}，ID {label}，责任用途：{owner}")
+        identity = "" if for_search else f"，ID {label}"
+        lines.append(f"责任事件：{DEBT_NAMES.get(event['kind'], event['kind'])}{identity}，责任用途：{owner}")
         if event.get("proof") == "native_joint_card_purchase_v1":
             lines.append(f"  本条负债新增欠款：{amount_text(-Fraction(event['signed_units']))} {event['commodity']}")
         if event.get("proof") == "native_income_payable_v1":
