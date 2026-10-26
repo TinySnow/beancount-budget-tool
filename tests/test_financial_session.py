@@ -8,6 +8,8 @@ import os
 from unittest.mock import patch
 
 from beancount import __version__ as BEANCOUNT_VERSION
+from beancount.core import data
+from beancount_budget_tool.refs import ReferenceIndex
 import yaml
 
 from beancount_budget_tool import financial
@@ -41,12 +43,78 @@ class FrozenFinancialTests(unittest.TestCase):
                     self.assertIsNot(fresh, first)
                 self.assertEqual(load.call_count, 4)
 
+    def test_multiple_cutoffs_share_capture_and_raw_identities_without_future_leakage(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text('2023-07-01 open Assets:Cash\n2023-07-01 open Income:Salary\n'
+                            '2023-07-02 * "July"\n  Assets:Cash 10 CNY\n  Income:Salary -10 CNY\n'
+                            '2023-08-02 * "August"\n  Assets:Cash 20 CNY\n  Income:Salary -20 CNY\n', encoding="utf-8")
+            with patch.object(financial, "_load_financial_uncached", wraps=financial._load_financial_uncached) as load, \
+                 patch("beancount_budget_tool.refs.ReferenceIndex", wraps=ReferenceIndex) as raw:
+                with financial_session(), frozen_fact_indices():
+                    with booked_through(date(2023, 7, 31)), frozen_financial(root) as july:
+                        july_index = FactIndex(july)
+                        complete = reference_financial(july)
+                        august_transaction = next(entry for entry in complete.entries if isinstance(entry, data.Transaction)
+                                                  and entry.date.month == 8)
+                        full_index = reference_fact_index(july)
+                        future_ref = full_index.for_posting(august_transaction.postings[0])
+                        with self.assertRaises(BudgetError) as error:
+                            july_index.for_posting(august_transaction.postings[0])
+                        self.assertEqual(error.exception.code, "SOURCE_REF_INVALID")
+                        self.assertEqual(len(july_index.posting_refs), 2)
+                    with booked_through(date(2023, 8, 31)), frozen_financial(root) as august:
+                        august_index = FactIndex(august)
+                        self.assertIs(reference_financial(august), complete)
+                        self.assertIs(reference_fact_index(august), full_index)
+                        self.assertEqual(august_index.for_posting(august_transaction.postings[0]), future_ref)
+                        self.assertEqual(len(august_index.posting_refs), 4)
+                    self.assertEqual(load.call_count, 1)
+                    self.assertEqual(raw.call_count, 1)
+                    with self.assertRaises(BudgetError):
+                        july_index.for_posting(august_transaction.postings[0])
+                self.assertEqual(load.call_count, 2)
+
+    def test_edit_between_cutoff_views_rejects_the_whole_query_and_reload_sees_it(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            initial = ('2023-07-01 open Assets:Cash\n2023-07-01 open Income:Salary\n'
+                       '2023-07-02 * "salary"\n  Assets:Cash 10 CNY\n  Income:Salary -10 CNY\n')
+            extra = '2023-08-02 * "new"\n  Assets:Cash 20 CNY\n  Income:Salary -20 CNY\n'
+            root.write_text(initial, encoding="utf-8")
+            with self.assertRaises(BudgetError) as error:
+                with financial_session():
+                    with booked_through(date(2023, 7, 31)), frozen_financial(root):
+                        pass
+                    root.write_text(initial + extra, encoding="utf-8")
+                    with booked_through(date(2023, 8, 31)), frozen_financial(root) as august:
+                        self.assertEqual(sum(isinstance(e, data.Transaction) for e in august.entries), 1)
+            self.assertEqual(error.exception.code, "INPUT_CHANGED")
+            with financial_session(), booked_through(date(2023, 8, 31)), frozen_financial(root) as fresh:
+                self.assertEqual(sum(isinstance(e, data.Transaction) for e in fresh.entries), 2)
+
+    def test_cutoff_audit_results_stay_separate_when_the_full_capture_is_shared(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder) / "main.bean"
+            root.write_text('2023-07-01 open Assets:Cash\n2023-08-01 open Assets:Future\n', encoding="utf-8")
+            calls = []
+            @shared_audit
+            def count_entries(root):
+                calls.append(len(load_financial(root).entries))
+                return {"count": calls[-1]}
+            with financial_session():
+                for cutoff, expected in ((date(2023, 7, 31), 1), (date(2023, 8, 31), 2), (date(2023, 7, 31), 1)):
+                    with booked_through(cutoff), frozen_financial(root):
+                        self.assertEqual(count_entries(root)["count"], expected)
+            self.assertEqual(calls, [1, 2])
+
     def test_session_separates_roots_and_report_cutoffs(self):
         with TemporaryDirectory() as folder:
             root, other = (Path(folder) / name for name in ("main.bean", "other.bean"))
             root.write_text('2023-07-01 open Assets:Cash\n2023-08-01 open Assets:Future\n', encoding="utf-8")
             other.write_text('2023-07-01 open Assets:Other\n', encoding="utf-8")
-            with financial_session(), frozen_fact_indices():
+            with patch.object(financial, "_load_financial_uncached", wraps=financial._load_financial_uncached) as load, \
+                 financial_session(), frozen_fact_indices():
                 with booked_through(date(2023, 7, 31)), frozen_financial(root) as july:
                     self.assertEqual(len(july.entries), 1)
                 with booked_through(date(2023, 8, 31)), frozen_financial(root) as august:
@@ -58,6 +126,7 @@ class FrozenFinancialTests(unittest.TestCase):
                     self.assertNotEqual(separate.digest, july.digest)
                 with booked_through(date(2023, 7, 31)), frozen_financial(root) as repeated:
                     self.assertIs(repeated, july)
+            self.assertEqual(load.call_count, 4)  # Two independent roots, two cutoffs for the first.
 
     def test_session_rejects_same_size_source_edit_after_an_earlier_stage(self):
         with TemporaryDirectory() as folder:

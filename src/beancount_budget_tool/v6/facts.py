@@ -18,7 +18,7 @@ from beancount.core import data
 
 from ..errors import BudgetError, require
 from ..financial import FinancialInput, reference_financial
-from ..refs import BookedRef, ReferenceIndex, TransactionRef, _fact, _lot
+from ..refs import BookedRef, TransactionRef, _fact, _lot
 
 
 @dataclass(frozen=True)
@@ -129,9 +129,13 @@ class FactIndex:
     def __init__(self, fin: FinancialInput) -> None:
         if getattr(self, "_initialized", False):
             return
-        raw = ReferenceIndex(fin)
-        self.transaction_refs: Dict[int, TransactionIdentity] = dict(raw.by_transaction)
-        self.posting_refs: Dict[int, PostingIdentity] = dict(raw.by_posting)
+        raw_transactions, raw_postings = reference_financial(fin)._reference_tables
+        visible = [entry for entry in fin.entries if isinstance(entry, data.Transaction)]
+        self.transaction_refs: Dict[int, TransactionIdentity] = {
+            id(entry): raw_transactions[id(entry)] for entry in visible if id(entry) in raw_transactions}
+        self.posting_refs: Dict[int, PostingIdentity] = {
+            id(posting): raw_postings[id(posting)] for entry in visible for posting in entry.postings
+            if id(posting) in raw_postings}
         self.generated_transactions = 0
         self.generated_postings = 0
 

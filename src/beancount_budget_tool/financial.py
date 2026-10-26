@@ -82,6 +82,13 @@ class FinancialInput:
     def _audit_results(self) -> dict:
         return {}
 
+    @cached_property
+    def _reference_tables(self) -> tuple[dict, dict]:
+        """Raw identities for this capture; scoped indices take their own subset."""
+        from .refs import ReferenceIndex
+        index = ReferenceIndex(self)
+        return index.by_transaction, index.by_posting
+
     def _source(self, filename: str) -> SourceFile:
         # Booked metadata normally already has the canonical absolute name.
         # Match that frozen name without consulting the live filesystem again.
@@ -173,7 +180,13 @@ def reference_financial(fin: FinancialInput) -> FinancialInput:
     Retain those source identities so a known future claim is distinguishable
     from a stale reference, without replaying future cash or responsibility.
     """
-    return replace(fin, entries=fin.reference_entries) if fin.reference_entries is not None else fin
+    if fin.reference_entries is None:
+        return fin
+    inputs = _REPORT_INPUTS.get()
+    complete = inputs.get((fin.root, None)) if inputs is not None else None
+    if complete is not None and fin.reference_entries is complete.entries:
+        return complete
+    return replace(fin, entries=fin.reference_entries)
 
 
 @contextmanager
@@ -223,8 +236,8 @@ def _load_financial_uncached(root: Path) -> FinancialInput:
 def financial_session():
     """Share source inputs across the sequential stages of one report.
 
-    Each root/cutoff keeps its own input and base-audit results. Nested stages
-    join the current session; only its owner re-loads sources before returning.
+    Each root is captured once, with independent cutoff views and base-audit
+    results. Nested stages join the owner, which re-loads each root at exit.
     Nothing survives a reload, and standalone audits keep their existing checks.
     """
     if _REPORT_INPUTS.get() is not None:
@@ -236,7 +249,9 @@ def financial_session():
         yield
     finally:
         _REPORT_INPUTS.reset(token)
-        for (root, _), fin in inputs.items():
+        for (root, through), fin in inputs.items():
+            if through is not None:
+                continue  # These views all derive from the same complete capture.
             after = _load_financial_uncached(root)
             require(after.digest == fin.digest, "INPUT_CHANGED",
                     "报表运行期间根账本或 include 来源发生变化", str(root))
@@ -247,8 +262,11 @@ def _session_input(root: Path) -> FinancialInput:
     key = (root.resolve(), _BOOKED_THROUGH.get())
     if inputs is None:
         return _bounded(_load_financial_uncached(key[0]))
+    complete_key = (key[0], None)
+    if complete_key not in inputs:
+        inputs[complete_key] = _load_financial_uncached(key[0])
     if key not in inputs:
-        inputs[key] = _bounded(_load_financial_uncached(key[0]))
+        inputs[key] = _bounded(inputs[complete_key])
     return inputs[key]
 
 

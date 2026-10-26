@@ -1,13 +1,17 @@
 """v6 source identities survive ordinary source edits and include pad facts."""
 
+from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
 from beancount.core import data
 
-from beancount_budget_tool.financial import load_financial
-from beancount_budget_tool.v6.facts import FactIndex, GeneratedPostingRef
+from beancount_budget_tool.errors import BudgetError
+from beancount_budget_tool.financial import load_financial, financial_session, frozen_financial, booked_through
+from beancount_budget_tool.refs import ReferenceIndex
+from beancount_budget_tool.v6.facts import FactIndex, GeneratedPostingRef, reference_fact_index, frozen_fact_indices
 
 
 HEADER = (
@@ -49,6 +53,36 @@ class FactIndexTests(unittest.TestCase):
         self.assertEqual(index.for_transaction(second).occurrence, 2)
         self.assertNotEqual(index.for_posting(first.postings[0]),
                             index.for_posting(second.postings[0]))
+
+    def test_bounded_references_and_pad_ordinals_match_the_independent_index(self):
+        future = TX.replace("2026-01-03", "2026-02-03")
+        self.root.write_text(HEADER + TX + TX + future, encoding="utf-8")
+        with financial_session(), frozen_fact_indices(), booked_through(date(2026, 1, 31)), frozen_financial(self.root) as fin:
+            scoped = FactIndex(fin)
+            independent = ReferenceIndex(fin)
+            complete = reference_fact_index(fin)
+            self.assertEqual(scoped.generated_transactions, 1)
+            for entry in fin.entries:
+                if not isinstance(entry, data.Transaction):
+                    continue
+                for posting in entry.postings:
+                    ref = scoped.for_posting(posting)
+                    self.assertEqual(ref, complete.for_posting(posting))
+                    if not isinstance(ref, GeneratedPostingRef):
+                        self.assertEqual(ref, independent.for_posting(posting))
+
+    def test_unsupported_generated_future_fact_does_not_poison_a_past_index(self):
+        fin, _ = self.index(HEADER + TX)
+        original = next(entry for entry in fin.entries if isinstance(entry, data.Transaction) and entry.flag != "P")
+        future = original._replace(meta={}, date=date(2026, 2, 1),
+                                   postings=[posting._replace(meta={}) for posting in original.postings])
+        complete = replace(fin, entries=(*fin.entries, future))
+        past = replace(complete, entries=fin.entries, reference_entries=complete.entries)
+        index = FactIndex(past)
+        self.assertEqual(index.for_posting(original.postings[0]), FactIndex(fin).for_posting(original.postings[0]))
+        with self.assertRaises(BudgetError) as error:
+            reference_fact_index(past)
+        self.assertEqual(error.exception.code, "GENERATED_REF_UNSUPPORTED")
 
     def test_unrelated_transaction_does_not_invalidate_existing_fact(self):
         _, before = self.index(HEADER + TX)
