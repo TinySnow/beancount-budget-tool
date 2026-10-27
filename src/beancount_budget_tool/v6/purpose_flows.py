@@ -344,6 +344,8 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
             row["source"] = month_sources.get(_key(row["ref"]))
     evidence = ({"_transaction_evidence": {
         "ownership": [row for row in owner_audit["ownership"] if _key(row["ref"]) in month_sources],
+        **({"credit_income_receipts": owner_audit["credit_income_receipts"]}
+           if owner_audit.get("credit_income_receipts") else {}),
         "events": known, "pool_internal_keys": sorted(pool_internal_keys),
         "liabilities": [row for row in debt["events"] if row["date"][:7] == month] if debt else [],
         "responsibility_owners": {row["obligation_id"]: row["owner_id"] for row in debt["obligations"]} if debt else {},

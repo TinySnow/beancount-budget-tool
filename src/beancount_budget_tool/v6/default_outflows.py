@@ -92,6 +92,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                                                  "owner_ids": sorted(members)})
     modes = {row["account"]: row.get("semantics") for row in account_audit["accounts"]}
     claims = {_key(row["ref"]): row for row in owned["ownership"]}
+    mixed_receipts = {_key(row["asset_ref"]): row for row in owned.get("credit_income_receipts", [])}
     # Even without a declaration file, recognize supported shapes as data
     # awaiting review rather than labelling their cash share unsupported.
     debt = audit_simple_obligations(root, cutover, obligations, last)
@@ -126,7 +127,8 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
         if not expense_legs and not liability_legs:
             continue  # Includes all virtual allocations, transfers, K and FX.
         native = native_asset_flow(fin, entry, modes)
-        if native_payable_receipt(fin, entry, modes) is not None:
+        receipt = native_payable_receipt(fin, entry, modes)
+        if receipt is not None and _key(facts.for_posting(receipt.cash).as_dict()) not in mixed_receipts:
             continue  # A receipt is not a default-purpose payment or expense refund.
         if native_book_redemption(fin, entry, modes) is not None:
             continue  # Expenses netted from a K receipt are not another H cash debit.
@@ -179,6 +181,9 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                     kind = "advance_reimbursements"
                 elif kinds == {"credit_return"}:
                     kind = "credit_returns"
+                    if _key(ref) in mixed_receipts:
+                        components = {kind: sum((Fraction(part["units"]) for part in mixed_receipts[_key(ref)][kind]
+                                                 if part["owner_id"] == owner), Fraction(0))}
                 elif kinds <= {"payment", "advance_outflow"}:
                     fees = sum((exact(p.units.number) for p in expense_legs), Fraction(0))
                     if len(kinds) == 1 and not fees:

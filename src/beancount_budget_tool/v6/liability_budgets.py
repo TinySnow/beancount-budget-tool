@@ -15,7 +15,7 @@ from beancount.core import data
 from ..exact import exact, exact_text, amount_text
 from ..refs import _lot
 from .classification import _key
-from .liability_rules import liability_budget
+from .liability_rules import liability_budget, certify_credit_income_receipt
 
 
 def apply_budget_responsibilities(fin, facts, cutover, rules, owners, result):
@@ -53,6 +53,8 @@ def apply_budget_responsibilities(fin, facts, cutover, rules, owners, result):
                 refs[coordinate, owner] = ref
                 continue
             event = dict(events[key])
+            for field in ('receipt_protocol', 'receipt_credit_native', 'receipt_income_native'):
+                event.pop(field, None)
             flow = event['shape']
             labels = liability_budget(posting, owners)
             meaningful = [part for part in labels or [] if part['name'] != '-']
@@ -137,8 +139,9 @@ def apply_budget_responsibilities(fin, facts, cutover, rules, owners, result):
         if 'credit_return' in kinds and (len(kinds) > 1 or any(
                 p.account.split(':', 1)[0] == fin.options['name_income'] and exact(p.units.number)
                 for p in entry.postings)):
-            for event in group:
-                event.update(status='UNSUPPORTED', reason_codes=['LIABILITY_CREDIT_MIXED_UNSUPPORTED'])
+            if not certify_credit_income_receipt(fin, entry, group):
+                for event in group:
+                    event.update(status='UNSUPPORTED', reason_codes=['LIABILITY_CREDIT_MIXED_UNSUPPORTED'])
     debts, credits, pending = [], [], []
     for coordinate, vector in sorted(balances.items()):
         account, currency, lot = coordinate

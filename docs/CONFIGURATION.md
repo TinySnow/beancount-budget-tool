@@ -150,7 +150,11 @@ python -m beancount_budget_tool --config examples/v6/liabilities/config.yml --fo
 
 默认支出资金收付、区间累计和 CSV 另列 `credit_returns`（预付／溢缴退回），不冲减 Expenses，不重复记个人收入。没有此类流量时不增加该字段。
 
-**剩余实现边界**：同笔既取回预付又新增借款／个人收入，或尚不能证明来源约束的多账户混合预付退回，显示 `LIABILITY_CREDIT_MIXED_UNSUPPORTED`／`LIABILITY_CREDIT_GROUP_UNSUPPORTED`。这些是程序缺口，不能通过选择 fund、填写理由或批准来跳过；不会伪装成普通待审。
+支持**预付收回与个人收入一起到账**：同币、无成本／价格的一条 H 现金、一条负债和一条或多条 Income，且负债减少的全部金额确实来自先前预付。允许部分收回，剩余预付继续结转。比如先转交同事 240，随后收到银行 480，其中负债腿 −240、Income −240，按「480＝原预付收回240＋个人收入240」核对；不要求改日期或补 budget-order。
+
+原预付部分须恢复已经证明的资产 fund，用途不足会报具体缺口。收款没写 fund 时，恢复旧预付用途，仅个人收入沿默认收入用途；显式 fund 则必须容纳原预付份额，剩余才是本次收入的资金用途。个人收入只计 Income 的 240；默认资金收付的 `credit_returns` 也只计恢复的那部分，不能把实收 480 全当收入或全当预付收回。TUI 详情显示等式和两部分用途。该协议不新增消费或正式划拨；原预付用途不明时仍待审。
+
+**剩余实现边界**：同笔退回预付还新增借款、多条现金／负债或其他清算，或尚不能证明来源约束的多账户混合预付退回，仍显示 `LIABILITY_CREDIT_MIXED_UNSUPPORTED`／`LIABILITY_CREDIT_GROUP_UNSUPPORTED`。这些是程序缺口，不能通过选择 fund、填写理由或批准来跳过；不会伪装成普通待审。
 
 ### 账户多时，按三组填写
 

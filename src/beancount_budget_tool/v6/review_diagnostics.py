@@ -9,12 +9,13 @@ from .facts import FactIndex
 
 
 MESSAGES = {
+    "LIABILITY_CREDIT_RECEIPT_PURPOSE_MISMATCH": "预付收回与个人收入合并到账时，原预付款仍须恢复到已证明的 fund 用途；请核对收款资产腿的用途切片，个人收入不能掩盖本金改用途。",
     "LIABILITY_BUDGET_AMBIGUOUS": "该负债账户有多个责任用途，或此前用途尚未确定；本次无法唯一分配。请在这条 Liabilities 分录填写 budget（可写多用途及金额），不用重复填逐笔审阅理由。",
     "LIABILITY_BUDGET_TRANSFER_MISMATCH": "债务转移两侧的责任用途金额不一致；请核对各条 Liabilities 的 budget，债务搬移不能暗中改用途。",
     "H_REDEMPTION_OWNER_PENDING": "理财赎回本金与实收现金的 fund 尚未完整确定，或声明了不适用的划拨角色；先确认两条资产腿的持有用途。",
     "H_REDEMPTION_PURPOSE_MISMATCH": "理财赎回本金与实收现金的用途名称不一致；本金与损益按同名用途核对，改用途请另记明确的虚拟调拨。",
     "LIABILITY_CREDIT_PURPOSE_PENDING": "本次是预付／溢缴余额退回，原资金用途未能唯一确定；在收款资产腿明确 fund，不能把它当成新收入或自动挑一份用途。",
-    "LIABILITY_CREDIT_MIXED_UNSUPPORTED": "同笔既退回预付／溢缴余额，又包含新增借款、个人收入或其他清算类型；联合流量拆分尚未实现，不可用人工批准绕过。",
+    "LIABILITY_CREDIT_MIXED_UNSUPPORTED": "该复合收款不满足已支持的单现金、单负债原预付收回＋Income 等式，可能含新增借款、多现金／多负债或其他清算；仍需联合流量协议，不能靠批准绕过。",
     "LIABILITY_CREDIT_GROUP_UNSUPPORTED": "该退回涉及多账户混合预付的用途分配或后续来源约束，程序尚不能完整证明；不能凭收款 fund 覆盖旧来源或要求人工批准绕过。",
     "LIABILITY_RULE_BALANCE_INVALID": "负债账户规则与余额不符：应收账户不能自动形成应付款，带成本批次也不能按普通现金负债清算；核对账户 role、原分录或拆分往来对象。",
     "LIABILITY_RULE_OWNER_CONFLICT": "账户规则的单一责任用途与已有逐笔审阅不同；请核对 config 的 purpose，不能自动覆盖不同用途。",

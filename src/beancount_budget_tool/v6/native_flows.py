@@ -178,7 +178,10 @@ class NativePayableReceipt:
 
 
 def native_payable_receipt(fin, entry, modes: dict | None = None) -> NativePayableReceipt | None:
-    """Prove cash = income + new payable, without treating the payable as income."""
+    """Prove cash = income + negative liability leg, counting only Income.
+
+    Liability replay decides whether that leg creates debt or returns credit.
+    """
     if not isinstance(entry, data.Transaction):
         return None
     grouped = {kind: tuple(p for p in entry.postings

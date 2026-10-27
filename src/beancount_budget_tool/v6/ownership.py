@@ -154,6 +154,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     liability_rules = {}
     budget_owners = None
     responsibilities = None
+    credit_income_receipts = []
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
@@ -434,6 +435,17 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     for key in leg_keys:
                         compiled_by_key.pop(key, None)
                         pending_reasons[key] = credit_issue
+                elif credit_owners.last_income_receipt is not None:
+                    credit_income_receipts.append({"protocol": "native_credit_income_receipt_v1",
+                        "transaction_ref": facts.for_transaction(entry).as_dict(),
+                        "asset_ref": facts.for_posting(receipt.cash).as_dict(),
+                        "liability_ref": facts.for_posting(receipt.liability).as_dict(),
+                        "income_refs": [facts.for_posting(p).as_dict() for p in receipt.incomes],
+                        "commodity": receipt.cash.units.currency,
+                        "receipt_native": exact_text(receipt.received), "credit_native": exact_text(receipt.payable),
+                        "income_native": exact_text(receipt.income),
+                        **{kind: [{"owner_id": owner, "units": exact_text(units)} for owner, units in sorted(parts.items())]
+                           for kind, parts in credit_owners.last_income_receipt.items()}})
             if any(key not in compiled_by_key for key in leg_keys):
                 unknown_coordinates.update(coordinates.values())
                 continue
@@ -483,6 +495,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 **({"reason_code": pending_reasons[key]} if key in pending_reasons else {})}
                for key in order if key not in compiled_by_key]
     return {"mode": "v6_ownership_audit_only", "cutover": cutover.isoformat(),
+            **({"credit_income_receipts": credit_income_receipts} if credit_income_receipts else {}),
             "ledger_snapshot": fin.digest,
             "review_state": "complete" if not missing and not unknown else "pending",
             "h_postings": len(order), "claimed_h_postings": len(compiled),

@@ -20,10 +20,28 @@ from ..refs import _lot
 from ..yamlstrict import require_yaml
 from .classification import _key, _name
 from .inline_amounts import parse_inline_amounts
+from .native_flows import native_payable_receipt
 from .source import _source
 
 
 ROLES = {"credit_card", "payable", "receivable", "loan"}
+
+
+def certify_credit_income_receipt(fin, entry, group):
+    """Extend only a proved full credit-return leg, never new borrowing.
+
+    Reuse the complete one-cash/one-liability native equation. Purpose-source
+    restoration is checked separately by CreditOwners against actual cash.
+    """
+    native = native_payable_receipt(fin, entry)
+    if (native is None or len(group) != 1 or group[0]["status"] != "CERTIFIED" or
+            group[0]["kind"] != "credit_return" or
+            Fraction(group[0]["credit_return_native"]) != native.payable):
+        return False
+    group[0].update(receipt_protocol="native_credit_income_receipt_v1",
+                    receipt_credit_native=exact_text(native.payable),
+                    receipt_income_native=exact_text(native.income))
+    return True
 
 
 def validate_rules(rules, owners, source, *, public=False, liability_root="Liabilities"):
@@ -150,6 +168,7 @@ class CreditOwners:
         self.fin, self.rules, self.defaults = fin, rules, defaults
         self.owner_names = owner_names or {}
         self.responsibilities = responsibilities
+        self.last_income_receipt = None
         self.balances, self.credits = defaultdict(Fraction), {}
         self.credit_caps, self.joint_pending = {}, set()
         for entry in fin.entries:
@@ -206,26 +225,39 @@ class CreditOwners:
             return parts.copy()
         return {next(iter(parts)): amount} if len(parts) == 1 else None
 
-    def pure_return(self, entry):
+    def pure_return(self, entry, *, allow_income=False):
         moving = [p for p in self.movements(entry) if exact(p.units.number) != 0]
         returning = self.returning(entry)
         return (bool(returning) and len(moving) == len(returning) and
                 all(-exact(p.units.number) <= self.balances[self.coordinate(p)] for p in returning) and
-                not any(p.account.split(":", 1)[0] == self.fin.options["name_income"] and exact(p.units.number)
-                        for p in entry.postings))
+                (allow_income or not any(p.account.split(":", 1)[0] == self.fin.options["name_income"] and exact(p.units.number)
+                                        for p in entry.postings)))
 
-    def receipt_parts(self, entry, posting):
-        cash = [p for p in entry.postings if p.account.split(":", 1)[0] == self.fin.options["name_assets"]]
-        debts = [p for p in self.movements(entry) if exact(p.units.number) < 0]
-        if not self.pure_return(entry):
-            return None
+    def income_return(self, entry):
+        return native_payable_receipt(self.fin, entry) is not None and self.pure_return(entry, allow_income=True)
+
+    def returned_parts(self, entry):
         result = defaultdict(Fraction)
-        for debt in debts:
+        for debt in self.returning(entry):
             parts = self.take(debt, -exact(debt.units.number))
             if parts is None:
                 return None
             for owner, units in parts.items():
                 result[owner] += units
+        return dict(result)
+
+    def receipt_parts(self, entry, posting):
+        cash = [p for p in entry.postings if p.account.split(":", 1)[0] == self.fin.options["name_assets"]]
+        mixed = self.income_return(entry)
+        if not (mixed or self.pure_return(entry)):
+            return None
+        result = self.returned_parts(entry)
+        if result is None:
+            return None
+        if mixed:
+            native = native_payable_receipt(self.fin, entry)
+            owner = self.defaults["income_owner_id"]
+            result[owner] = result.get(owner, Fraction(0)) + native.income
         units = exact(posting.units.number)
         if len(cash) == 1 and sum(result.values(), Fraction(0)) == units:
             return list(result.items())
@@ -248,6 +280,7 @@ class CreditOwners:
 
     def advance(self, entry, flow, owned):
         issue = None
+        self.last_income_receipt = None
         assets = [p for p in entry.postings if p.account.split(":", 1)[0] == self.fin.options["name_assets"]]
         cash = defaultdict(Fraction)
         for asset in assets:
@@ -261,6 +294,26 @@ class CreditOwners:
         debts = self.movements(entry)
         returning = self.returning(entry) if flow == "receipt" else []
         moving = [p for p in debts if exact(p.units.number) != 0]
+        if flow == "receipt" and self.income_return(entry):
+            restored = self.returned_parts(entry)
+            if any(self.coordinate(p) in self.joint_pending for p in returning):
+                issue = "LIABILITY_CREDIT_GROUP_UNSUPPORTED"
+            elif restored is None or cash is None:
+                issue = "LIABILITY_CREDIT_PURPOSE_PENDING"
+            else:
+                missing = {owner: units - cash.get(owner, Fraction(0)) for owner, units in restored.items()
+                           if units > cash.get(owner, Fraction(0))}
+                if missing:
+                    details = [f"资金用途：{self.owner_names.get(owner, owner)}；应收回 "
+                               f"{amount_text(restored[owner])}，实际收到 {amount_text(cash.get(owner, 0))}，"
+                               f"缺口 {amount_text(units)} {assets[0].units.currency}"
+                               for owner, units in missing.items()]
+                    require(False, "LIABILITY_CREDIT_RECEIPT_PURPOSE_MISMATCH",
+                            "混合到账须先恢复原预付用途，个人收入不能掩盖本金改用途：\n" + "\n".join(details),
+                            _source(assets[0].meta or entry.meta))
+                self.last_income_receipt = {"credit_returns": restored,
+                    "personal_income": {owner: units - restored.get(owner, Fraction(0))
+                                        for owner, units in cash.items() if units > restored.get(owner, Fraction(0))}}
         if self.pure_return(entry) and any(self.coordinate(p) in self.joint_pending for p in returning):
             issue = "LIABILITY_CREDIT_GROUP_UNSUPPORTED"
         if issue is None and cash and self.pure_return(entry) and len(returning) == len(moving) == 1:
@@ -451,8 +504,9 @@ def audit_rule_accounts(fin, facts, cutover, as_of, rules, cash_accounts, *, bef
         kinds = {e["kind"] for e in group if Fraction(e["signed_units"]) != 0}
         if "credit_return" in kinds and (len(kinds) > 1 or any(
                 p.account.split(":", 1)[0] == fin.options["name_income"] and exact(p.units.number) != 0 for p in entry.postings)):
-            for event in group:
-                event.update(status="UNSUPPORTED", reason_codes=["LIABILITY_CREDIT_MIXED_UNSUPPORTED"])
+            if not certify_credit_income_receipt(fin, entry, group):
+                for event in group:
+                    event.update(status="UNSUPPORTED", reason_codes=["LIABILITY_CREDIT_MIXED_UNSUPPORTED"])
     debts, advances, pending, opening = [], [], [], []
     for coordinate, balance in sorted(signed.items()):
         ident, rule = pools[coordinate]

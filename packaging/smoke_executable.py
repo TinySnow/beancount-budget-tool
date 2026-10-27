@@ -107,6 +107,20 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert tagged["report"]["max_spendable"]["max_spendable"] == "310", tagged
         assert not tagged["report"]["actual_spendable"]["booked_debts"], tagged
         assert not (posting_budgets / ".budget-state").exists(), "Posting budgets must not require saved approvals"
+        mixed_receipts = directory / "个人收入及预付收回"
+        shutil.copytree(posting_budgets, mixed_receipts)
+        mixed_ledger = mixed_receipts / "main.bean"
+        mixed_ledger.write_text(mixed_ledger.read_text(encoding="utf-8").replace(
+            '2026-09-06 * "转交同事款项', '2026-09-04 * "转交同事款项'), encoding="utf-8")
+        mixed = document("--config", mixed_receipts / "config.yml", "--transactions")
+        assert mixed["status"] == "CERTIFIED_SCOPED", mixed
+        assert mixed["report"]["actual_spendable"]["actual_spendable"] == "2050", mixed
+        assert mixed["report"]["max_spendable"]["max_spendable"] == "310", mixed
+        assert mixed["report"]["default_outflows"]["totals"][0]["credit_returns"] == "240", mixed
+        assert mixed["report"]["default_outflows"]["totals"][0]["net_outflow"] == "190", mixed
+        receipts = [row["credit_income_receipt"] for row in mixed["report"]["transactions"]["rows"]
+                    if "credit_income_receipt" in row]
+        assert len(receipts) == 1 and receipts[0]["income_native"] == "240", mixed
         if os.name == "nt" and not onedir:
             # The bootloader must use its own per-user runtime base, even if
             # the caller's system TEMP settings cannot contain a directory.

@@ -115,6 +115,9 @@ def project_transactions(fin, month: str, expense: dict, purpose: dict, pools: d
             leg["k_purpose"] = {"basis": "K_book_flow_not_holdings_or_market_value", "slices": [
                 {"owner_id": slice_["k_owner_id"], "name": names[slice_["k_owner_id"]],
                  "signed_units": slice_["signed_k_units"]} for slice_ in protocol["slices"]]}
+    for receipt in funds.get("credit_income_receipts", []):
+        if _key(receipt["asset_ref"]) in by_posting:
+            by_posting[_key(receipt["asset_ref"])]["credit_income_receipt"] = receipt
     for event in funds["liabilities"]:
         record = by_posting[_key(event["liability_ref"])]
         owner = event["owner_id"] or funds["responsibility_owners"].get(event["obligation_id"])
@@ -141,6 +144,15 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
         lines.append(f"显式同日顺序 budget-order：{record['budget_order']}（未填为 0）")
     if record["generated"]:
         lines.append("由 Beancount pad 生成；以下位置是原始 pad 指令。")
+    receipt = record.get("credit_income_receipt")
+    if receipt:
+        lines.append(f"混合到账核对：实收 {amount_text(receipt['receipt_native'])} {receipt['commodity']}＝"
+                     f"原预付收回 {amount_text(receipt['credit_native'])}＋个人收入 {amount_text(receipt['income_native'])}；"
+                     "只将 Income 计为收入，原预付收回不作第二次收入。")
+        for kind, label in (("credit_returns", "原预付恢复用途"), ("personal_income", "个人收入现金用途")):
+            lines.append(f"  {label}：" + "，".join(
+                f"{owner_names.get(part['owner_id'], '预算外')} {amount_text(part['units'])} {receipt['commodity']}"
+                for part in receipt[kind]))
     for posting in record["postings"]:
         lines.extend(["", f"{posting['account']}  {amount_text(posting['signed_units'])} {posting['commodity']}",
                       f"  位置：{location(posting['source'])}"])
