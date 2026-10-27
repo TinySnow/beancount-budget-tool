@@ -58,6 +58,21 @@ def _book_weight(posting: data.Posting, currency: str) -> Fraction:
     return exact(posting.units.number) * exact(posting.cost.number)
 
 
+def allocate_nominal(per_account, order, principal, allow_negative=False, source=None):
+    """One display allocation shared by reports and explanatory history."""
+    remaining = principal
+    assignments = {}
+    for name in order:
+        assigned = min(remaining, per_account[name])
+        assignments[name] = assigned
+        remaining -= assigned
+    if remaining and allow_negative:
+        assignments[order[0]] += remaining
+        remaining = Fraction(0)
+    require(remaining == 0, "POOL_PRINCIPAL_UNCOVERED", "资金池账户分配后没有足额保护本金", source)
+    return assignments
+
+
 def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                         declarations: Path) -> dict:
     """Audit nominal purpose accounting at every booked transaction boundary.
@@ -198,18 +213,7 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                 "资金池 booked 成本曾不足覆盖受保护本金", source)
         require(all(value >= 0 for value in per_account.values()),
                 "POOL_NEGATIVE_ACCOUNT_BOOK", "资金池账户日末 booked 成本为负", source)
-        remaining = principal
-        assignments = {}
-        for name in order:
-            assigned = min(remaining, per_account[name])
-            assignments[name] = assigned
-            remaining -= assigned
-        # When losses have exhausted the remainder, retain the full nominal
-        # principal and show its uncovered part on the first reserve account.
-        # This signed display is neither a physical lot claim nor a guarantee.
-        if remaining and policy == "allow_negative":
-            assignments[order[0]] += remaining
-            remaining = Fraction(0)
+        assignments = allocate_nominal(per_account, order, principal, policy == "allow_negative", source)
         by_account = []
         for name in order:
             assigned = assignments[name]
@@ -221,8 +225,6 @@ def audit_purpose_pools(root: Path, cutover: date, as_of: date,
                                "remainder_owner_id": remainder,
                                "remainder_label": row["remainder_label"],
                                "remainder_book_cost": exact_text(per_account[name] - assigned)})
-        require(remaining == 0, "POOL_PRINCIPAL_UNCOVERED",
-                "资金池账户分配后没有足额保护本金", source)
         reports.append({"id": ident, "accounts": names,
                         "reserve_order": order,
                         "remainder_policy": policy,

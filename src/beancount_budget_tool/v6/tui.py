@@ -531,6 +531,9 @@ HELP = [
     "/：输入关键词筛选；支持中文、账户、用途、原因码和来源路径。空查询清除筛选。",
     "t：切换完整报告文本和待审列表。待审状态只显示未通过项目，不显示局部正式数字。",
     "a：已签发后切换交易来源列表；可按类别、资金用途、责任 ID、摘要或账户筛选。",
+    "h：追查完整会计科目内某预算用途的历史，显示每笔增减、交易后余额、原因和原行；可留空预算看全部。",
+    "d：输入 YYYY-MM-DD，查看该日日末的用途分布；两种查询都要求该日所在月份当前能签出月报。",
+    "查询不使用截止日之后的交易／还款，不签发当天最多能花；弹窗是本次静态查询，Esc 返回后再次打开会重算。",
     "↑↓ 或 j/k：滚动文本；在待审列表选择项目。PgUp/PgDn 或空格翻页，g/G 到首尾。",
     "Enter：打开所选待审／交易详情；交易显示逐腿原币、分类、用途、责任及原始账本内容。",
     "待审项分行显示：日期与本笔金额、文件名与行号、账户、原因。Enter 查看完整路径；详情可用 ↑↓／PgUp／PgDn 滚动。",
@@ -717,7 +720,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         _put(stdscr, row, line, styles[browser.offset + row - 3])
     footer = ("w 工资周期 p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
-              "w 工资周期 p 区间 m 跳月 n 下一月 f 月末 x 导出 c 比较 r 重算 / 筛选 e 审阅 ? 帮助 q 退出")
+              "h 科目流水 d 日末分布 w 工资周期 p 区间 m 跳月 n 下一月 f 月末 x 导出 r 重算 ? 帮助 q 退出")
     if listing and browser.view == "reviews":
         footer = "↑↓ 选项 Enter 详情 e 审阅 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
     elif browser.detail:
@@ -1148,6 +1151,47 @@ def _select_period(stdscr, browser: ReportBrowser):
         _message(stdscr, "未切换查询范围", [str(exc), "请核对起止月份后再次按 p；当前结果不代表新范围。"])
 
 
+def _inspect_account(stdscr, browser: ReportBrowser, *, history=False):
+    if browser.help:
+        return
+    from .account_queries import query, render_text
+    from .project import _metadata
+    from .salary_plan import month_end
+    try:
+        config = getattr(browser, 'user_config', browser.config)
+        month = getattr(browser, 'selected_month', None) or _metadata(browser.config)[0]
+        context = ['查询该日日末；所在月份必须能签发月报。',
+                   '只显示原币用途；K 是申赎账面流量，证券池是名义分配，不代表当天最多能花。']
+        day = _read_field(stdscr, '科目用途历史' if history else '日末用途分布', context,
+                          '截止日 YYYY-MM-DD：', month_end(month).isoformat())
+        if day is None:
+            return
+        snapshot = query(config, day.strip())
+        if snapshot['report'] is None or not history:
+            _message(stdscr, '日末用途查询', render_text(snapshot).splitlines())
+            return
+        accounts = snapshot['report']['accounts']
+        value = _read_field(stdscr, '选择会计科目',
+            ['只查这个完整会计科目的直接记账；不自动合并子科目。',
+             *[f'{i+1}. {name}' for i,name in enumerate(accounts)]], '科目编号或完整名称：')
+        if value is None:
+            return
+        value = value.strip()
+        if value.isdigit():
+            require(1 <= int(value) <= len(accounts), 'QUERY_ACCOUNT_UNKNOWN', '科目编号超出范围')
+            value = accounts[int(value)-1]
+        purposes = [row['purpose'] for row in snapshot['report']['positions'] if row['account'] == value]
+        budget = _read_field(stdscr, '选择预算用途',
+            [f'会计科目：{value}', '当前非零份额：'+('、'.join(dict.fromkeys(purposes)) or '无'),
+             '资产查 fund，负债查责任用途，收支查 budget；空白显示全部。'], '预算名称（可留空）：')
+        if budget is None:
+            return
+        result = query(config, day.strip(), account=value, purpose=budget.strip() or None)
+        _message(stdscr, '科目用途历史', render_text(result).splitlines())
+    except (BudgetError, OSError, UnicodeError) as exc:
+        _message(stdscr, '未生成用途查询', [str(exc)])
+
+
 def _select_salary_cycle(stdscr, browser: ReportBrowser):
     if browser.help:
         return
@@ -1245,6 +1289,10 @@ def _report_browser(stdscr, browser: ReportBrowser):
             _select_period(stdscr, browser)
         elif key == "w":
             _select_salary_cycle(stdscr, browser)
+        elif key == "h":
+            _inspect_account(stdscr, browser, history=True)
+        elif key == "d":
+            _inspect_account(stdscr, browser)
         elif key == "m":
             if browser.period:
                 if browser.open_review_month():

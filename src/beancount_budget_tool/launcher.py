@@ -23,6 +23,8 @@ COMMANDS = {
     "next-month": ("beancount_budget_tool.tools.v6_next_month", "准备下一月／确认月末"),
     "audit": ("beancount_budget_tool.v6.cli", "分项审计"),
     "classification-proposals": ("beancount_budget_tool.tools.v6_classification_proposals", "导出分类候选"),
+    "history": ("beancount_budget_tool.v6.account_queries", "追查会计科目内预算用途的变动与余额"),
+    "snapshot": ("beancount_budget_tool.v6.account_queries", "查看指定日日末的预算用途分布"),
 }
 
 
@@ -48,4 +50,5 @@ def main(argv=None) -> int:
         return 0
     command = args.pop(0) if args[0] in COMMANDS else "monthly"
     module = import_module(COMMANDS[command][0])
-    return module.main(args) or 0
+    entry = getattr(module, command + "_main" if command in {"history", "snapshot"} else "main")
+    return entry(args) or 0

@@ -87,6 +87,19 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert len(rows) == 2 and all(row["net_allocations"] == {} for row in rows), redeemed
         gains = [row["purpose_events"][0]["protocol"]["income_native"] for row in rows]
         assert gains == ["1071/100", "1611/100"], gains
+        distribution = document("snapshot", "--config", redemptions / "config.yml", "--as-of", "2026-09-09")
+        assert distribution["status"] == "CERTIFIED_SCOPED", distribution
+        wealth = [r for r in distribution["report"]["positions"] if r["account"] == "Assets:Wealth"]
+        assert len(wealth) == 1 and wealth[0]["amount"] == "1200" and wealth[0]["basis"] == "H", wealth
+        history = document("history", "--config", redemptions / "config.yml", "--as-of", "2026-09-30",
+                           "--account", "Assets:Wealth", "--purpose", "额外储蓄")
+        assert history["report"]["closing_positions"] == [], history
+        assert [r["delta"] for r in history["report"]["events"]] == ["-1000", "-1200"], history
+        assert all("main.bean:" in r["source"] for r in history["report"]["events"]), history
+        query_export = directory / "科目用途流水.csv"
+        run("history", "--config", redemptions / "config.yml", "--as-of", "2026-09-30",
+            "--account", "Assets:Wealth", "--format", "csv", "--output", query_export)
+        assert query_export.read_bytes().startswith(b"\xef\xbb\xbf")
         posting_budgets = directory / "逐笔负债用途"
         shutil.copytree(source / "liabilities", posting_budgets)
         profile = yaml.safe_load((posting_budgets / "config.yml").read_text(encoding="utf-8"))
