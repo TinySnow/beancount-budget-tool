@@ -48,7 +48,7 @@ def enrich_metric_reviews(config: Path, document: dict, report: dict,
         for event in metric.get("pending_events", []):
             items.append(review_item(event["reason"], event.get("source") or fallback,
                                      event_kind=event["kind"],
-                                     **{key: event[key] for key in ("ref", "account", "commodity")
+                                     **{key: event[key] for key in ("ref", "account", "commodity", "signed_units")
                                         if key in event}))
         for position in metric.get("pending_positions", []):
             for reason in position["reasons"]:

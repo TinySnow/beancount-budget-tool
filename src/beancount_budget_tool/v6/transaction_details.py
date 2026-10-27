@@ -220,6 +220,16 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
         protocol = event.get("protocol", {})
         if protocol.get("protocol") == "inline_income_allocation_v1":
             lines.append("收入到账按显式 fund 直接分配；计入用途目标，后续同用途搬移不重复计数。")
+        if event["kind"] == "h_redemption":
+            currency = protocol["commodity"]
+            lines.append(f"H 赎回核对：实收 {amount_text(protocol['receipt_native'])} {currency}＝"
+                         f"真实原币本金 {amount_text(protocol['principal_native'])}＋收益／损失 "
+                         f"{amount_text(protocol['income_native'])}－内扣费用 {amount_text(protocol['fees_native'])}；正式划拨 G=0。")
+            for part in protocol["slices"]:
+                owner = part["owner_id"]
+                lines.append(f"  {owner_names.get(owner, '预算外')}：本金 {amount_text(part['principal_native'])}，"
+                             f"实收 {amount_text(part['receipt_native'])}，净变动 "
+                             f"{amount_text(protocol['net_purpose_changes'][owner])} {currency}。")
         if event["kind"] == "k_event" and protocol.get("shape") in ("book_redemption_income", "book_redemption_costs"):
             currency = protocol["commodity"]
             equation = (f"赎回核对：实收 {amount_text(protocol['signed_cash_units'])} {currency}＝账面本金 "

@@ -26,7 +26,7 @@ from .facts import FactIndex, GeneratedPostingRef, future_posting_refs, future_t
 from .inline_amounts import parse_inline_amounts
 from .liability_rules import validate_rules, native_rule_flow, cash_owner_parts, CreditOwners, receivable_cash_matches
 from .initialization import initial_pad_postings
-from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt, native_group_payment
+from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt, native_group_payment, native_book_redemption
 from .opening import audit_opening
 from .provenance import valid_digest
 from .source import _source, scan_v6_source
@@ -342,6 +342,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             card_purchase = native_card_purchase(fin, entry, semantics)
             receipt = native_payable_receipt(fin, entry, semantics)
             payment = native_group_payment(fin, entry, semantics)
+            h_redemption = native_book_redemption(fin, entry, semantics, source_mode="H")
             if rule_flow is not None:
                 default = defaults["income_owner_id"] if rule_flow == "receipt" else defaults["expense_owner_id"]
                 returning = rule_flow == "receipt" and credit_owners.returning(entry)
@@ -440,8 +441,9 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 after.update({owner: amount for owner, amount in before.items() if owner not in after})
                 # K subscriptions also spend real H cash voluntarily; report
                 # their source deficit here rather than a raw holdings ref.
-                if len(entry.postings) == 2 and all(
-                        p.account.split(":", 1)[0] == assets for p in entry.postings):
+                if (len(entry.postings) == 2 and all(p.account.split(":", 1)[0] == assets for p in entry.postings) or
+                        h_redemption is not None and coordinate == (h_redemption.book.account,
+                            h_redemption.book.units.currency, _lot(h_redemption.book))):
                     outgoing = next((posting for key, posting in leg_keys.items()
                                      if coordinates[key] == coordinate and posting.units.number < 0),
                                     next(posting for key, posting in leg_keys.items()

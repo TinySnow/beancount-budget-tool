@@ -17,7 +17,7 @@ from .classification import _key
 from .facts import FactIndex
 from .h_fx import audit_h_fx
 from .h_gains import audit_h_income_gains
-from .h_transfers import audit_h_transfers
+from .h_transfers import audit_h_transfers, compile_h_redemption
 from .holdings import audit_h_holdings
 from .initialization import initial_pad_postings
 from .k_events import audit_k_events
@@ -185,6 +185,30 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     pool_report = audit_purpose_pools(root, cutover, last, purpose_pools) if purpose_pools is not None else None
     pool_accounts = {name for row in pool_report["pools"] for name in row["accounts"]} if pool_report else set()
     facts = FactIndex(fin)
+    redemption_refs = set()
+    modes = {row["account"]: row["semantics"] for row in load_yaml(accounts)["accounts"]}
+    claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
+    for entry in fin.entries:
+        if not isinstance(entry, data.Transaction) or not first <= entry.date <= last or any(
+                posting.account in pool_accounts for posting in entry.postings):
+            continue
+        redemption = compile_h_redemption(fin, entry, facts, modes, claims)
+        if redemption is None:
+            continue
+        refs = [redemption["from_ref"], redemption["to_ref"]]
+        redemption_refs.update(_key(ref) for ref in refs)
+        if redemption["status"] == "CERTIFIED":
+            add("h_redemption", redemption, refs, {}, source_refs=[
+                *([redemption["income_ref"]] if redemption["income_ref"] else []), *redemption["fee_refs"]])
+        else:
+            unresolved = [ref for ref in refs if _key(ref) not in claims or any(
+                part["role"] != "hold" for part in claims[_key(ref)]["slices"])] or [redemption["to_ref"]]
+            for ref in unresolved:
+                outgoing = ref == redemption["from_ref"]
+                pending.append({"kind": "h_redemption", "ref": ref, "reason": redemption["reason_code"],
+                                "account": redemption["from_account"] if outgoing else redemption["to_account"],
+                                "commodity": redemption["commodity"], "signed_units":
+                                exact_text(-Fraction(redemption["principal_native"])) if outgoing else redemption["receipt_native"]})
     initial_pads = initial_pad_postings(fin, cutover)
     by_ref = {_key(row["ref"]): row for row in owner_audit["ownership"]}
     for posting_id, entry in initial_pads.items():
@@ -272,14 +296,15 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
             month_sources[key] = f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
     for row in owner_audit["ownership"]:
         key = _key(row["ref"])
-        if key not in month_sources or key in used_h:
+        if key not in month_sources or key in used_h or key in redemption_refs:
             continue
         if any(part["owner_id"] != "-" or part["role"] != "hold"
                for part in row["slices"]):
             pending.append({"kind": "named_h_without_protocol", "ref": row["ref"],
+                            "account": row["account"], "commodity": row["commodity"], "signed_units": row["signed_units"],
                             "reason": "NAMED_H_EVENT_UNSUPPORTED"})
     for row in owner_audit["missing_h_ownership"]:
-        if _key(row["ref"]) in month_sources and _key(row["ref"]) not in used_h:
+        if _key(row["ref"]) in month_sources and _key(row["ref"]) not in used_h and _key(row["ref"]) not in redemption_refs:
             pending.append({"kind": "h_ownership", "ref": row["ref"],
                             "reason": "H_OWNER_PENDING"})
     for row in owner_audit["unknown_account_semantics"]:

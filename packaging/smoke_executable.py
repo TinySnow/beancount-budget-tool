@@ -63,6 +63,30 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert credit["report"]["max_spendable"]["max_spendable"] == "410", credit
         assert credit["report"]["default_outflows"]["totals"][0]["credit_returns"] == "50", credit
         assert credit["report"]["default_outflows"]["totals"][0]["net_outflow"] == "330", credit
+        redemptions = directory / "H理财本金及收益"
+        shutil.copytree(liabilities, redemptions)
+        profile = yaml.safe_load((redemptions / "config.yml").read_text(encoding="utf-8"))
+        profile["accounts"]["Assets:Wealth"] = {"semantics": "H", "payment_scope": {"CNY": "excluded"},
+                                                "opening": {"CNY": {"额外储蓄": "2200"}}}
+        (redemptions / "config.yml").write_text(yaml.safe_dump(profile, allow_unicode=True), encoding="utf-8")
+        redemption_ledger = redemptions / "main.bean"
+        redemption_ledger.write_text(
+            '2026-08-01 open Assets:Wealth\n2026-08-01 open Income:Gain\n'
+            '2026-08-31 * "wealth opening"\n  Assets:Wealth 2200 CNY\n  Equity:Opening -2200 CNY\n' +
+            redemption_ledger.read_text(encoding="utf-8") +
+            '\n2026-09-09 * "H redemption 1"\n  Assets:Bank 1010.71 CNY\n    fund: "额外储蓄"\n'
+            '  Assets:Wealth -1000 CNY\n    fund: "额外储蓄"\n  Income:Gain -10.71 CNY\n'
+            '2026-09-10 * "H redemption 2"\n  Assets:Bank 1216.11 CNY\n    fund: "额外储蓄"\n'
+            '  Assets:Wealth -1200 CNY\n    fund: "额外储蓄"\n  Income:Gain -16.11 CNY\n', encoding="utf-8")
+        redeemed = document("--config", redemptions / "config.yml", "--transactions")
+        assert redeemed["status"] == "CERTIFIED_SCOPED", redeemed
+        assert redeemed["report"]["actual_spendable"]["actual_spendable"] == "2150", redeemed
+        assert redeemed["report"]["max_spendable"]["max_spendable"] == "410", redeemed
+        rows = [row for row in redeemed["report"]["transactions"]["rows"]
+                if any(event["kind"] == "h_redemption" for event in row["purpose_events"])]
+        assert len(rows) == 2 and all(row["net_allocations"] == {} for row in rows), redeemed
+        gains = [row["purpose_events"][0]["protocol"]["income_native"] for row in rows]
+        assert gains == ["1071/100", "1611/100"], gains
         if os.name == "nt" and not onedir:
             # The bootloader must use its own per-user runtime base, even if
             # the caller's system TEMP settings cannot contain a directory.

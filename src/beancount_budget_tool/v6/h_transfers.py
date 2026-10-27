@@ -17,6 +17,7 @@ from ..yamlstrict import load_yaml, require_yaml
 from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex, future_transaction_refs
+from .native_flows import native_book_redemption
 from .ownership import _owners, audit_ownership
 from .provenance import validate_event_declaration
 from .source import scan_v6_source
@@ -24,6 +25,44 @@ from .source import scan_v6_source
 
 ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
+
+
+def compile_h_redemption(fin, entry, facts, modes, claims):
+    """An exact H/H principal-income equation preserves named purposes, G=0.
+
+    Both H legs need their own source-bound ownership. Same-name differences
+    express net gain/fees, following the existing redemption convention;
+    changing the purpose set needs a separate explicit virtual allocation.
+    """
+    native = native_book_redemption(fin, entry, modes, source_mode="H")
+    if native is None:
+        return None
+    source_ref, cash_ref = (facts.for_posting(p).as_dict() for p in (native.book, native.cash))
+    source, cash = (claims.get(_key(ref)) for ref in (source_ref, cash_ref))
+    event = {"protocol": "native_h_redemption_v1", "date": entry.date.isoformat(),
+             "commodity": native.cash.units.currency, "from_ref": source_ref, "to_ref": cash_ref,
+             "from_account": native.book.account, "to_account": native.cash.account,
+             "principal_native": exact_text(native.principal), "receipt_native": exact_text(native.receipt),
+             "income_native": exact_text(native.gain), "fees_native": exact_text(native.fee_total),
+             "income_ref": facts.for_posting(native.income).as_dict() if native.income is not None else None,
+             "fee_refs": [facts.for_posting(p).as_dict() for p in native.fees],
+             "status": "NEEDS_REVIEW", "reason_code": "H_REDEMPTION_OWNER_PENDING"}
+    if any(claim is None or any(part["role"] != "hold" for part in claim["slices"]) for claim in (source, cash)):
+        return event
+    def vector(claim, sign):
+        result = {}
+        for part in claim["slices"]:
+            if Fraction(part["signed_units"]) != 0:
+                owner = part["owner_id"]
+                result[owner] = result.get(owner, Fraction(0)) + sign * Fraction(part["signed_units"])
+        return result
+    principal, receipt = vector(source, -1), vector(cash, 1)
+    if set(principal) != set(receipt):
+        return {**event, "reason_code": "H_REDEMPTION_PURPOSE_MISMATCH"}
+    return {**event, "status": "CERTIFIED", "reason_code": None,
+            "net_purpose_changes": {owner: exact_text(receipt[owner] - principal[owner]) for owner in sorted(principal)},
+            "slices": [{"owner_id": owner, "principal_native": exact_text(principal[owner]),
+                        "receipt_native": exact_text(receipt[owner])} for owner in sorted(principal)]}
 
 
 def _number(value: object, path: Path, keys: tuple) -> Fraction:

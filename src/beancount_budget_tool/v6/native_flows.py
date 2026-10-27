@@ -61,12 +61,12 @@ def zero_native_record(fin, entry, currency: str) -> bool:
         for p in entry.postings))
 
 
-def native_book_redemption(fin, entry, modes: dict | None = None) -> NativeBookRedemption | None:
+def native_book_redemption(fin, entry, modes: dict | None = None, *, source_mode="K") -> NativeBookRedemption | None:
     """Prove receipt = book-flow principal + signed income - expenses.
 
     This is a complete native equation, not a claim about fund shares,
-    cost lots or market value. K event consumers additionally require reviewed
-    K/H semantics; the benefit projection only uses the booked source equation.
+    cost lots or market value. Callers explicitly select K book flow or H
+    native inventory for the source; the benefit projection uses no modes.
     """
     if not isinstance(entry, data.Transaction) or len(entry.postings) < 3:
         return None
@@ -77,12 +77,18 @@ def native_book_redemption(fin, entry, modes: dict | None = None) -> NativeBookR
             len(entry.postings) != 2 + len(incomes) + len(fees) or
             any(exact(p.units.number) < 0 for p in fees)):
         return None
+    # H cash out + cash in + Expenses alone can also be a purchase with
+    # change. It is not evidence of a redemption; keep that separate protocol.
+    if source_mode == "H" and not incomes:
+        return None
     outgoing = [p for p in assets if exact(p.units.number) < 0]
     incoming = [p for p in assets if exact(p.units.number) > 0]
     if len(outgoing) != 1 or len(incoming) != 1:
         return None
     book, cash = outgoing[0], incoming[0]
-    if modes is not None and (modes.get(book.account) != "K" or modes.get(cash.account) != "H"):
+    if modes is not None and (modes.get(book.account) != source_mode or modes.get(cash.account) != "H"):
+        return None
+    if source_mode == "H" and book.account == cash.account:
         return None
     if any(p.cost is not None or p.price is not None or fin.raw_price(p)[0] != "none" or
            p.units.currency != cash.units.currency for p in entry.postings):
