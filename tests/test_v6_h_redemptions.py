@@ -153,9 +153,12 @@ class HRedemptionTests(unittest.TestCase):
     def test_without_income_leg_does_not_silently_treat_a_purchase_with_change_as_redemption(self):
         result = self.audit(self.source(receipt="999", fee="1").replace('  Income:Gain -10.71 CNY\n', ''),
                             certified=False)
-        self.assertEqual(result["status"], "IMPLEMENTATION_BLOCKED")
-        self.assertIsNone(result["report"])
-        self.assertIn("NAMED_H_EVENT_UNSUPPORTED", {r["reason_code"] for r in result["review_items"]})
+        self.assertEqual(result['status'], 'CERTIFIED_SCOPED', result['review_items'])
+        tx = result['report']['transactions']['rows'][0]
+        self.assertEqual(tx['purpose_events'][0]['kind'], 'h_bundle')
+        self.assertEqual(tx['purpose_events'][0]['protocol']['expense_total'], '1')
+        self.assertEqual(tx['net_allocations'], {})
+        self.assertEqual(self.income(), '0')
 
     def test_zero_income_does_not_create_profit_or_allocation(self):
         report = self.audit(self.source(receipt="1000", income="0"))

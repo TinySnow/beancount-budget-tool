@@ -63,6 +63,27 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert credit["report"]["max_spendable"]["max_spendable"] == "410", credit
         assert credit["report"]["default_outflows"]["totals"][0]["credit_returns"] == "50", credit
         assert credit["report"]["default_outflows"]["totals"][0]["net_outflow"] == "330", credit
+        h_bundle = directory / "组合转账与手续费"
+        shutil.copytree(liabilities, h_bundle)
+        profile = yaml.safe_load((h_bundle / "config.yml").read_text(encoding="utf-8"))
+        profile["accounts"]["Assets:Wallet"] = {"semantics": "H", "payment_scope": {"CNY": "excluded"},
+                                                "opening": {"CNY": {"额外储蓄": "20"}}}
+        (h_bundle / "config.yml").write_text(yaml.safe_dump(profile, allow_unicode=True), encoding="utf-8")
+        bundle_ledger = h_bundle / "main.bean"
+        bundle_ledger.write_text('2026-08-01 open Assets:Wallet\n'
+            '2026-08-31 * "wallet opening"\n  Assets:Wallet 20 CNY\n  Equity:Opening -20 CNY\n' +
+            bundle_ledger.read_text(encoding="utf-8") +
+            '\n2026-09-07 * "withdraw and fee"\n  Assets:Bank 10 CNY\n    fund: "额外储蓄"\n'
+            '  Assets:Wallet -10 CNY\n    fund: "额外储蓄"\n  Expenses:Food 0.1 CNY\n'
+            '  Assets:Bank -0.1 CNY\n    fund: "生活费"\n'
+            '2026-09-08 * "multi leg inherited transfer"\n  Assets:Wallet -2 CNY\n'
+            '  Assets:Bank 1 CNY\n  Assets:Wallet 1 CNY\n', encoding="utf-8")
+        joint = document("--config", h_bundle / "config.yml", "--transactions")
+        assert joint["status"] == "CERTIFIED_SCOPED", joint
+        assert joint["report"]["default_outflows"]["totals"][0]["expenses_paid"] == "101/10", joint
+        group = [e for tx in joint["report"]["transactions"]["rows"] for e in tx["purpose_events"] if e["kind"] == "h_bundle"]
+        assert len(group) == 2 and all(e["net_allocations"] == {} for e in group), group
+        assert group[0]["protocol"]["asset_total"] == "-1/10" and group[0]["protocol"]["expense_total"] == "1/10", group
         redemptions = directory / "H理财本金及收益"
         shutil.copytree(liabilities, redemptions)
         profile = yaml.safe_load((redemptions / "config.yml").read_text(encoding="utf-8"))

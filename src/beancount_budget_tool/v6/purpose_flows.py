@@ -209,6 +209,21 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                                 "account": redemption["from_account"] if outgoing else redemption["to_account"],
                                 "commodity": redemption["commodity"], "signed_units":
                                 exact_text(-Fraction(redemption["principal_native"])) if outgoing else redemption["receipt_native"]})
+    bundle_refs = set()
+    for event in owner_audit.get('h_bundles', []):
+        if event['date'][:7] != month or set(event['asset_accounts']) & pool_accounts:
+            continue
+        refs = event['asset_refs']
+        keys = {_key(ref) for ref in refs}
+        if keys & used_h:
+            continue
+        bundle_refs.update(keys)
+        if event['status'] == 'CERTIFIED':
+            add('h_bundle', event, refs, event['net_allocations'], source_refs=event['expense_refs'])
+        else:
+            pending.append({'kind': 'h_bundle', 'date': event['date'], 'ref': event['ref'], 'reason': event['reason_code'],
+                            'account': event['account'], 'commodity': event['commodity'],
+                            'signed_units': event['signed_units']})
     initial_pads = initial_pad_postings(fin, cutover)
     by_ref = {_key(row["ref"]): row for row in owner_audit["ownership"]}
     for posting_id, entry in initial_pads.items():
@@ -296,7 +311,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
             month_sources[key] = f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
     for row in owner_audit["ownership"]:
         key = _key(row["ref"])
-        if key not in month_sources or key in used_h or key in redemption_refs:
+        if key not in month_sources or key in used_h or key in redemption_refs or key in bundle_refs:
             continue
         if any(part["owner_id"] != "-" or part["role"] != "hold"
                for part in row["slices"]):
@@ -304,7 +319,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                             "account": row["account"], "commodity": row["commodity"], "signed_units": row["signed_units"],
                             "reason": "NAMED_H_EVENT_UNSUPPORTED"})
     for row in owner_audit["missing_h_ownership"]:
-        if _key(row["ref"]) in month_sources and _key(row["ref"]) not in used_h and _key(row["ref"]) not in redemption_refs:
+        if _key(row["ref"]) in month_sources and _key(row["ref"]) not in used_h and _key(row["ref"]) not in redemption_refs and _key(row["ref"]) not in bundle_refs:
             pending.append({"kind": "h_ownership", "ref": row["ref"],
                             "reason": "H_OWNER_PENDING"})
     for row in owner_audit["unknown_account_semantics"]:

@@ -523,7 +523,8 @@ def render_text(report: dict) -> str:
             if row.get("credit_returns"):
                 lines.append(f"    预付／溢缴退回 {amount(row['credit_returns'])}（不记收入或冲减消费）")
             for position in row["accounts"]:
-                lines.append(f"    {position['account']}：净流出 {amount(position['net_outflow'])} {row['commodity']}")
+                label = position['account'] or '联合来源（未猜各账户分摊）：'+'、'.join(position['source_accounts'])
+                lines.append(f"    {label}：净流出 {amount(position['net_outflow'])} {row['commodity']}")
         lines.append("  刷卡在实际还款时计入；资产搬移、购汇和申赎不计入。此处汇总资金流向，余额和预算差额各按原口径计算。")
     lines += ["", "用途划拨（目标 Q − 实际 G；负数为超额划拨）"]
     for row in purpose["owners"]:

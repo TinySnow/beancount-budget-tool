@@ -26,7 +26,7 @@ from .facts import FactIndex, GeneratedPostingRef, future_posting_refs, future_t
 from .inline_amounts import parse_inline_amounts
 from .liability_rules import validate_rules, native_rule_flow, cash_owner_parts, CreditOwners, receivable_cash_matches, audit_rule_accounts
 from .initialization import initial_pad_postings
-from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt, native_group_payment, native_book_redemption
+from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt, native_group_payment, native_book_redemption, native_h_bundle, compile_h_bundle
 from .opening import audit_opening
 from .provenance import valid_digest
 from .source import _source, scan_v6_source
@@ -101,6 +101,24 @@ def _require_transfer_balance(coordinate: tuple[str, str, str],
     require(False, "H_OWNER_NEGATIVE", "\n".join(lines), source)
 
 
+def _transfer_source_parts(before, required, rule):
+    """Reuse the same reviewed inventory rule for two-leg and joint transfers."""
+    available = [(owner, amount) for owner, amount in before.items() if amount > 0]
+    nonzero = [owner for owner, amount in before.items() if amount]
+    if rule is not None:
+        remaining, parts = required, []
+        for owner in rule['owner_ids']:
+            amount = min(remaining, max(Fraction(0), before.get(owner, Fraction(0))))
+            if amount:
+                parts.append((owner, -amount)); remaining -= amount
+        return (None, 'FUND_SOURCE_INSUFFICIENT') if remaining else (parts, '已审转出顺序：'+rule['reason'])
+    if len(nonzero)==len(available)==1 and available[0][1] >= required:
+        return [(available[0][0], -required)], '交易前单一用途余额继承'
+    if len(nonzero)==len(available) and available and sum((amount for _,amount in available), Fraction(0))==required:
+        return [(owner,-amount) for owner,amount in available], '交易前全部用途余额搬移'
+    return None, 'FUND_MIXED_SOURCE' if len(available)>1 else 'FUND_SOURCE_INSUFFICIENT'
+
+
 @shared_audit
 def audit_ownership(root: Path, cutover: date, accounts: Path,
                     declarations: Path | None = None,
@@ -155,6 +173,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     budget_owners = None
     responsibilities = None
     credit_income_receipts = []
+    h_bundles = []
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
@@ -353,6 +372,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             card_purchase = native_card_purchase(fin, entry, semantics)
             receipt = native_payable_receipt(fin, entry, semantics)
             payment = native_group_payment(fin, entry, semantics)
+            bundle = native_h_bundle(fin, entry, semantics)
             h_redemption = native_book_redemption(fin, entry, semantics, source_mode="H")
             if rule_flow is not None:
                 default = defaults["income_owner_id"] if rule_flow == "receipt" else defaults["expense_owner_id"]
@@ -393,40 +413,79 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     if source_key not in compiled_by_key:
                         coordinate = coordinates[source_key]
                         before = running.get(coordinate, {}) if coordinate not in unknown_coordinates else {}
-                        available = [(owner, amount) for owner, amount in before.items() if amount > 0]
-                        nonzero_owners = [owner for owner, amount in before.items() if amount]
-                        required = -exact(negative[0].units.number)
-                        rule = transfer_orders.get(coordinate[:2])
                         if coordinate in unknown_coordinates:
-                            pending_reasons[source_key] = "FUND_SOURCE_OPENING_PENDING"
-                        elif rule is not None:
-                            remaining = required
-                            parts = []
-                            for owner in rule["owner_ids"]:
-                                amount = min(remaining, max(Fraction(0), before.get(owner, Fraction(0))))
-                                if amount:
-                                    parts.append((owner, -amount))
-                                    remaining -= amount
-                            if remaining:
-                                pending_reasons[source_key] = "FUND_SOURCE_INSUFFICIENT"
-                            else:
-                                inferred(source_key, parts, "已审转出顺序：" + rule["reason"])
-                        elif len(nonzero_owners) == 1 and len(available) == 1 and available[0][1] >= required:
-                            inferred(source_key, [(available[0][0], -required)],
-                                     "交易前单一用途余额继承")
-                        elif len(nonzero_owners) == len(available) and available and sum((amount for _, amount in available), Fraction(0)) == required:
-                            inferred(source_key, [(owner, -amount) for owner, amount in available],
-                                     "交易前全部用途余额搬移")
+                            pending_reasons[source_key] = 'FUND_SOURCE_OPENING_PENDING'
                         else:
-                            pending_reasons[source_key] = (
-                                "FUND_MIXED_SOURCE" if len(available) > 1 else
-                                "FUND_SOURCE_INSUFFICIENT")
+                            parts, reason = _transfer_source_parts(before, -exact(negative[0].units.number), transfer_orders.get(coordinate[:2]))
+                            if parts is None:
+                                pending_reasons[source_key] = reason
+                            else:
+                                inferred(source_key, parts, reason)
                     if target_key not in compiled_by_key and source_key in compiled_by_key:
                         source_slices = compiled_by_key[source_key]["slices"]
                         inferred(target_key, [(part["owner_id"], -Fraction(part["signed_units"]))
                                               for part in source_slices], "同用途资产搬移")
                     elif target_key not in compiled_by_key:
                         pending_reasons[target_key] = "FUND_SOURCE_UNRESOLVED"
+
+            if bundle is not None and not bundle.expense_total and sum((exact(p.units.number) for p in bundle.assets), Fraction(0))==0:
+                # Reserve declared outflows first. Inherited source slices must
+                # not reuse funds already consumed by another leg in this group.
+                reserved = {coordinate: dict(running.get(coordinate, {})) for coordinate in coordinates.values()}
+                for key,p in leg_keys.items():
+                    if p.units.number < 0 and key in compiled_by_key:
+                        for part in compiled_by_key[key]['slices']:
+                            owner = part['owner_id']; bucket = reserved[coordinates[key]]
+                            bucket[owner] = bucket.get(owner, Fraction(0)) + Fraction(part['signed_units'])
+                for key,p in leg_keys.items():
+                    if p.units.number >= 0 or key in compiled_by_key:
+                        continue
+                    coordinate = coordinates[key]
+                    if coordinate in unknown_coordinates:
+                        pending_reasons[key] = 'FUND_SOURCE_OPENING_PENDING'
+                        continue
+                    parts, reason = _transfer_source_parts(reserved[coordinate], -exact(p.units.number), transfer_orders.get(coordinate[:2]))
+                    if parts is None:
+                        pending_reasons[key] = reason
+                    else:
+                        inferred(key, parts, reason)
+                        for owner,amount in parts:
+                            reserved[coordinate][owner] = reserved[coordinate].get(owner, Fraction(0)) + amount
+                targets = [key for key,p in leg_keys.items() if p.units.number > 0 and key not in compiled_by_key]
+                if all(key in compiled_by_key for key,p in leg_keys.items() if p.units.number < 0):
+                    remainder = defaultdict(Fraction)
+                    for key in leg_keys:
+                        for part in compiled_by_key.get(key, {}).get('slices', []):
+                            remainder[part['owner_id']] -= Fraction(part['signed_units'])
+                    remainder = {owner:amount for owner,amount in remainder.items() if amount}
+                    if remainder and all(amount>0 for amount in remainder.values()) and sum(remainder.values(), Fraction(0)) == sum((exact(leg_keys[key].units.number) for key in targets), Fraction(0)):
+                        if len(targets)==1:
+                            inferred(targets[0], list(remainder.items()), '组合转账唯一未认领收款腿继承已审来源用途')
+                        elif len(remainder)==1:
+                            owner = next(iter(remainder))
+                            for key in targets:
+                                inferred(key, [(owner,exact(leg_keys[key].units.number))], '组合转账多户收款继承唯一来源用途')
+                for key in targets:
+                    if key not in compiled_by_key:
+                        pending_reasons[key] = 'FUND_SOURCE_UNRESOLVED'
+            if bundle is not None and bundle.expense_total:
+                # If declared H movement already cancels by purpose, remaining
+                # one-direction missing legs are ordinary default expenses or
+                # refunds. Never default a missing transfer destination.
+                missing = [key for key in leg_keys if key not in compiled_by_key]
+                declared = defaultdict(Fraction)
+                for key in leg_keys:
+                    for part in compiled_by_key.get(key, {}).get('slices', []):
+                        declared[part['owner_id']] += Fraction(part['signed_units'])
+                if (missing and not any(declared.values()) and
+                        all(exact(leg_keys[key].units.number) * bundle.expense_total < 0 for key in missing) and
+                        sum((exact(leg_keys[key].units.number) for key in missing), Fraction(0)) == -bundle.expense_total):
+                    for key in missing:
+                        inferred(key, [(defaults['expense_owner_id'], exact(leg_keys[key].units.number))],
+                                 '同用途转账已逐用途守恒；剩余消费／退款沿默认支出用途')
+            bundle_event = compile_h_bundle(bundle, entry, facts, compiled_by_key, account_audit['report_currency']) if bundle else None
+            if bundle_event is not None:
+                h_bundles.append(bundle_event)
 
             if credit_owners is not None:
                 credit_issue = credit_owners.advance(entry, rule_flow, {id(posting): compiled_by_key[key]["slices"]
@@ -454,6 +513,30 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             for key in leg_keys:
                 for part in compiled_by_key[key]["slices"]:
                     changes[coordinates[key]][part["owner_id"]] += Fraction(part["signed_units"])
+            if bundle_event is not None and bundle_event['status'] == 'CERTIFIED' and bundle.expense_total:
+                # Prove that all same-purpose transfers can be funded before
+                # consumption. Fees may cause a deficit; transfers may not.
+                for owner in {owner for parts in changes.values() for owner in parts}:
+                    movements = {coordinate: parts.get(owner, Fraction(0)) for coordinate, parts in changes.items()}
+                    sources = {coordinate: -delta for coordinate, delta in movements.items() if delta < 0}
+                    if any(coordinate in unknown_coordinates for coordinate in sources):
+                        continue
+                    charge = Fraction(bundle_event['expense_by_owner'].get(owner, '0'))
+                    needed = max(Fraction(0), sum(sources.values(), Fraction(0)) - max(charge, Fraction(0)))
+                    available = sum((min(amount, max(Fraction(0), running.get(coordinate, {}).get(owner, Fraction(0))))
+                                     for coordinate, amount in sources.items()), Fraction(0))
+                    if needed > available:
+                        lines = ['组合转账不能透支交易前用途余额', f'资金用途：{owner_names[owner]}',
+                                 f'本次主动划拨：{amount_text(needed)} {bundle.currency}',
+                                 f'来源合计可划出：{amount_text(available)} {bundle.currency}',
+                                 f'本次缺口：{amount_text(needed-available)} {bundle.currency}',
+                                 '转出账户的全部交易前用途余额：']
+                        for coordinate in sources:
+                            lines.append(f'  {coordinate[0]}：')
+                            for ident, units in sorted(running.get(coordinate, {}).items(), key=lambda row: owner_names[row[0]]):
+                                lines.append(f'    {owner_names[ident]}：{amount_text(units)} {bundle.currency}（可划出 {amount_text(max(units, Fraction(0)))} {bundle.currency}）')
+                        source = next((p.meta for key,p in leg_keys.items() if coordinates[key] in sources and exact(p.units.number)<0), entry.meta)
+                        require(False, 'H_OWNER_NEGATIVE', '\n'.join(lines), _source(source))
             for coordinate, deltas in changes.items():
                 if coordinate in unknown_coordinates:
                     continue
@@ -463,7 +546,8 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 after.update({owner: amount for owner, amount in before.items() if owner not in after})
                 # K subscriptions also spend real H cash voluntarily; report
                 # their source deficit here rather than a raw holdings ref.
-                if (len(entry.postings) == 2 and all(p.account.split(":", 1)[0] == assets for p in entry.postings) or
+                if (bundle_event is not None and bundle_event['status'] == 'CERTIFIED' and not bundle.expense_total or
+                        len(entry.postings) == 2 and all(p.account.split(":", 1)[0] == assets for p in entry.postings) or
                         h_redemption is not None and coordinate == (h_redemption.book.account,
                             h_redemption.book.units.currency, _lot(h_redemption.book))):
                     outgoing = next((posting for key, posting in leg_keys.items()
@@ -496,6 +580,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                for key in order if key not in compiled_by_key]
     return {"mode": "v6_ownership_audit_only", "cutover": cutover.isoformat(),
             **({"credit_income_receipts": credit_income_receipts} if credit_income_receipts else {}),
+            **({"h_bundles": h_bundles} if h_bundles else {}),
             "ledger_snapshot": fin.digest,
             "review_state": "complete" if not missing and not unknown else "pending",
             "h_postings": len(order), "claimed_h_postings": len(compiled),

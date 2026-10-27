@@ -73,6 +73,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
     if owner is None:
         return {**result, "status": "NOT_CONFIGURED"}
     nondefault_pool_accounts = set()
+    pool_accounts = set()
     if purpose_pools is not None:
         pools = audit_purpose_pools(root, cutover, last, purpose_pools)
         require(pools["ledger_snapshot"] == fin.digest and
@@ -80,6 +81,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                 "PURPOSE_POOL_MISMATCH", "资金池与资金收付汇总的来源或报告货币不一致")
         registered = {row["id"] for row in document["owners"]}
         for pool in pools["pools"]:
+            pool_accounts.update(pool["accounts"])
             members = {pool["protected_owner_id"], pool["remainder_owner_id"]}
             if not members <= registered:
                 item = review_item("PURPOSE_POOL_PENDING", yaml_key_location(purpose_pools, "pools"),
@@ -92,6 +94,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                                                  "owner_ids": sorted(members)})
     modes = {row["account"]: row.get("semantics") for row in account_audit["accounts"]}
     claims = {_key(row["ref"]): row for row in owned["ownership"]}
+    bundles = {_key(row['transaction_ref']): row for row in owned.get('h_bundles', []) if not set(row['asset_accounts']) & pool_accounts}
     mixed_receipts = {_key(row["asset_ref"]): row for row in owned.get("credit_income_receipts", [])}
     # Even without a declaration file, recognize supported shapes as data
     # awaiting review rather than labelling their cash share unsupported.
@@ -126,6 +129,30 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
         liability_legs = [p for p in entry.postings if p.account.split(":", 1)[0] == liability_root]
         if not expense_legs and not liability_legs:
             continue  # Includes all virtual allocations, transfers, K and FX.
+        bundle = bundles.get(_key(facts.for_transaction(entry).as_dict()))
+        if bundle is not None:
+            if bundle['status'] != 'CERTIFIED':
+                pending(bundle['reason_code'], bundle['ref'], bundle['account'])
+                continue
+            for payment in bundle['cash_expenses']:
+                if payment['owner_id'] != owner:
+                    continue
+                amount = Fraction(payment['signed_expense_units'])
+                kind = 'expenses_paid' if amount > 0 else 'expense_refunds'
+                members = payment['accounts']
+                key = members[0] if len(members) == 1 else tuple(members)
+                by_currency[bundle['commodity']][kind] += abs(amount)
+                by_account[(bundle['commodity'], key)][kind] += abs(amount)
+                ref = facts.for_posting(next(p for p in entry.postings if p.account == members[0] and
+                    any(part['owner_id']==owner and Fraction(part['signed_units'])*amount < 0
+                        for part in claims.get(_key(facts.for_posting(p).as_dict()), {}).get('slices', [])))).as_dict()
+                result['events'].append({'date': entry.date.isoformat(), 'narration': entry.narration,
+                    'account': members[0] if len(members)==1 else None, 'commodity': bundle['commodity'], 'owner_id': owner,
+                    'kind': kind, 'amount': exact_text(abs(amount)), 'signed_owner_units': exact_text(-amount),
+                    'asset_ref': ref, 'asset_refs': bundle['asset_refs'], 'counterpart_refs': bundle['expense_refs'],
+                    'source': sources[_key(ref)], 'proof': 'native_h_bundle_v1',
+                    **({'source_accounts': members, 'basis': 'joint_source_no_account_allocation'} if len(members)>1 else {})})
+            continue
         native = native_asset_flow(fin, entry, modes)
         receipt = native_payable_receipt(fin, entry, modes)
         if receipt is not None and _key(facts.for_posting(receipt.cash).as_dict()) not in mixed_receipts:
@@ -272,6 +299,8 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
         return {**result, "status": "NEEDS_REVIEW", "events": [],
                 "reason_codes": sorted({item["reason_code"] for item in result["review_items"]})}
     totals = [{"commodity": commodity, **_totals(amounts), "accounts": [
-        {"account": account, **_totals(parts)} for (currency, account), parts in sorted(by_account.items())
+        {**({'account': None, 'source_accounts': list(account), 'basis': 'joint_source_no_account_allocation'}
+            if isinstance(account, tuple) else {'account': account}), **_totals(parts)}
+        for (currency, account), parts in sorted(by_account.items(), key=lambda row: str(row[0]))
         if currency == commodity]} for commodity, amounts in sorted(by_currency.items())]
     return {**result, "status": "CERTIFIED", "totals": totals}

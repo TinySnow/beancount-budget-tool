@@ -23,7 +23,7 @@ from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
 from .classification import _key, audit_classification
 from .provenance import valid_digest
 from .facts import FactIndex, future_transaction_refs, reference_fact_index
-from .native_flows import native_asset_flow, native_book_redemption, native_payable_receipt
+from .native_flows import native_asset_flow, native_book_redemption, native_payable_receipt, native_h_bundle
 
 
 def costed_sale_candidate(entry: data.Transaction, income: data.Posting,
@@ -146,6 +146,17 @@ def audit_economic_benefits(root: Path, cutover: date,
                             "basis": "joint_native_totals_no_pairwise_allocation"}
                     proved.append({**record, "proof": "same_transaction_native_asset_group",
                                    "evidence_group": native_proof})
+                    continue
+                bundle = native_h_bundle(fin, entry, {p.account: 'H' for p in entry.postings
+                    if p.account.split(':', 1)[0] == fin.options['name_assets']})
+                if (bundle is not None and bundle.expense_total < 0 and
+                        sum((exact(p.units.number) for p in bundle.assets), Fraction(0)) == -bundle.expense_total):
+                    proved.append({**record, 'proof': 'same_transaction_native_transfer_refund_group',
+                        'evidence_group': {'transaction_ref': facts.for_transaction(entry).as_dict(),
+                            'asset_refs': [facts.for_posting(p).as_dict() for p in bundle.assets],
+                            'benefit_refs': [facts.for_posting(p).as_dict() for p in bundle.expenses],
+                            'asset_total': exact_text(-bundle.expense_total), 'benefit_total': exact_text(bundle.expense_total),
+                            'commodity': bundle.currency, 'basis': 'joint_native_totals_no_pairwise_allocation'}})
                     continue
                 receipt = native_payable_receipt(fin, entry)
                 if receipt is not None and any(p is posting for p in receipt.incomes):

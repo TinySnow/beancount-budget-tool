@@ -580,9 +580,9 @@ class NativeFlowTests(unittest.TestCase):
         self.assertEqual(proposal["unsupported_complex_benefits"], 2)
         self.assertEqual(proposal["proposed_groups"], 0)
 
-    def test_asset_change_or_compound_k_fee_does_not_become_an_ordinary_expense(self):
+    def test_h_change_uses_joint_protocol_while_k_fee_keeps_its_distinct_semantics(self):
         for name, transactions in (
-            ("change", '  Assets:Cash -20 CNY\n    fund: "储蓄"\n'
+            ("change", '  Assets:Cash -20 CNY\n    fund: "生活费"\n'
                         '  Assets:Bank 10 CNY\n    fund: "生活费"\n  Expenses:Food 10 CNY\n'),
             ("K fee", '  Assets:Cash -21 CNY\n    fund: "生活费"\n'
                        '  Assets:Book 20 CNY\n    fund: "生活费"\n  Expenses:Food 1 CNY\n'),
@@ -592,10 +592,13 @@ class NativeFlowTests(unittest.TestCase):
                 self.base = Path(folder)
                 self.configure(f'2026-09-02 * "{name}"\n' + transactions)
                 outcome = audit_month_workflow(self.config)
-                self.assertEqual(outcome["status"], "IMPLEMENTATION_BLOCKED")
-                self.assertIsNone(outcome["report"])
-                expected = "DEFAULT_OUTFLOW_EVENT_UNSUPPORTED" if name == "change" else "K_EVENT_SHAPE_UNSUPPORTED"
-                self.assertIn(expected, {row["reason_code"] for row in outcome["review_items"]})
+                if name == 'change':
+                    self.assertEqual(outcome['status'], 'CERTIFIED_SCOPED', outcome['review_items'])
+                    self.assertEqual(outcome['report']['default_outflows']['totals'][0]['expenses_paid'], '10')
+                else:
+                    self.assertEqual(outcome['status'], 'IMPLEMENTATION_BLOCKED')
+                    self.assertIsNone(outcome['report'])
+                    self.assertIn('K_EVENT_SHAPE_UNSUPPORTED', {row['reason_code'] for row in outcome['review_items']})
                 self.base = original
 
     def test_unsupported_named_event_is_an_implementation_limit(self):

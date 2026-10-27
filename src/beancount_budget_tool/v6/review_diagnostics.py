@@ -72,9 +72,14 @@ MESSAGES = {
     "LIABILITY_OPENING_PENDING": "cutover 前账面余额尚未分配到期初未结债务或代垫 ID；在 obligations 的 opening 中审定来源、剩余金额及债务用途。",
     "OBLIGATION_OPENING_REQUIRED": "这笔还款或报销指向切换前责任，先补 obligations.opening 的对应未结 ID，再重跑。",
     "OBLIGATION_OPENING_SOURCE_UNSUPPORTED": "这份期初往来缺少当前协议可绑定的简单消费、代垫或 Equity 结转来源；借款、复合及跨币期初责任需要继续实现，不应改账伪造来源。",
+    "H_BUNDLE_UNBALANCED": "组合交易原币总额不守恒；请核对所有资产腿与费用，不用 Beancount 容差抹平差额。",
+    "H_BUNDLE_OWNERSHIP_PENDING": "组合交易的资产用途尚未齐全；请在转账两边写明 fund，不能把转入资金默认当消费。",
+    "H_BUNDLE_PURPOSE_AMBIGUOUS": "转账与消费／退款混在同笔且不同用途净额相互抵补，无法区分消费承担与正式改用途；请把用途变更另记同账户虚拟调拨，保留原财务总额。",
+    "H_BUNDLE_ALLOCATION_CURRENCY_UNSUPPORTED": "该多分录转账改变了外币用途；报告货币的净划拨计价仍需有来源的兑换协议。",
     "NAMED_H_EVENT_UNSUPPORTED": "用途已声明，但当前资金事件没有可编译的用途协议；需要补程序支持，不能靠重复填写 fund 消除。",
 }
 IMPLEMENTATION_LIMITS = frozenset((
+    "H_BUNDLE_ALLOCATION_CURRENCY_UNSUPPORTED",
     "LIABILITY_CREDIT_MIXED_UNSUPPORTED",
     "LIABILITY_CREDIT_GROUP_UNSUPPORTED",
     "TRANSACTION_ORDER_UNSUPPORTED",

@@ -191,6 +191,8 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
         if posting["classification"] and not value and not settlement:
             lines.append("  本项仅显示原币分类；本月报未给出该分录的报告货币计价值。")
         for flow in posting["default_outflows"]:
+            if flow.get('source_accounts'):
+                lines.append('  联合收付来源：'+'、'.join(flow['source_accounts'])+'；没有猜各账户分摊。')
             lines.append(f"  默认支出资金收付：{FLOW_NAMES.get(flow['kind'], flow['kind'])} {amount_text(flow['amount'])} {flow['commodity']}")
     shown_purchase_groups = set()
     shown_payment_groups = set()
@@ -240,6 +242,12 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
         protocol = event.get("protocol", {})
         if protocol.get("protocol") == "inline_income_allocation_v1":
             lines.append("收入到账按显式 fund 直接分配；计入用途目标，后续同用途搬移不重复计数。")
+        if event['kind'] == 'h_bundle':
+            lines.append(f"组合转账核对：资产净变动 {amount_text(protocol['asset_total'])}＋费用净额 "
+                         f"{amount_text(protocol['expense_total'])}＝0 {protocol['commodity']}；同用途搬移抵消，不逐腿猜配对。")
+            for owner, value in protocol['purpose_residuals'].items():
+                lines.append(f"  {owner_names.get(owner, '预算外')}：资产净变动 {amount_text(value)} {protocol['commodity']}")
+            lines.append('正式用途净划拨单独按已审用途向量计算；消费／退款不当作 G。')
         if event["kind"] == "h_redemption":
             currency = protocol["commodity"]
             lines.append(f"H 赎回核对：实收 {amount_text(protocol['receipt_native'])} {currency}＝"
