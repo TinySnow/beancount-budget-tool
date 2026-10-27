@@ -272,9 +272,11 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                                          else row.get("reason_code", "OWNERSHIP_UNREVIEWED")})
         for row in obligations["events"]:
             day = date.fromisoformat(row["date"])
-            if row["status"] == "CERTIFIED" or not in_range(day):
+            dependency = row.get("responsibility_protocol") == "posting_liability_budget_v1" and day <= through
+            if row["status"] == "CERTIFIED" or not (in_range(day) or dependency):
                 continue
             items.append({"kind": "booked_obligation", "date": row["date"],
+                          **({"detail": row["detail"]} if "detail" in row else {}),
                           "account": row["account"], "commodity": row["commodity"],
                           "signed_units": row["signed_units"],
                           "ref": row["liability_ref"], "shape": row["shape"],

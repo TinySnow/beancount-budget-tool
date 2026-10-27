@@ -1,9 +1,9 @@
-"""Configured, homogeneous liability accounts; no purchase-by-purchase guesses.
+"""Native liability transaction proofs and cash-credit purpose tracking.
 
-A rule declares that one account/currency is one settlement pool with one
-responsibility purpose. Signed credit balances remain receivables, never cash.
-Expenses alone recognize consumption; liability budget labels only classify
-the debt movement. Unconfigured or structurally mixed events keep their review.
+Legacy rules use one responsibility purpose per account/currency. Explicit
+budget_owners delegates responsibility vectors to the posting-budget protocol.
+Signed credits remain receivables, never cash; Expenses recognize consumption.
+Unsupported transaction shapes retain their review rather than guessed splits.
 """
 
 from collections import defaultdict
@@ -55,7 +55,7 @@ def validate_rules(rules, owners, source, *, public=False, liability_root="Liabi
     return rules
 
 
-def native_rule_flow(fin, entry, rules, cash_accounts):
+def native_rule_flow(fin, entry, rules, cash_accounts, *, by_budget=False):
     """Recognize a complete exact native equation, never individual leg pairs."""
     if not isinstance(entry, data.Transaction):
         return None
@@ -84,13 +84,13 @@ def native_rule_flow(fin, entry, rules, cash_accounts):
     if assets and negative(debts) and positive(assets) and negative(incomes) and not expenses:
         return "receipt"
     if (not assets and not expenses and not incomes and
-            len({rules[p.account]["owner_id"] for p in debts}) == 1 and
+            (by_budget or len({rules[p.account]["owner_id"] for p in debts}) == 1) and
             (roles <= {"credit_card", "payable"} or roles == {"loan"})):
         return "refinance"
     return None
 
 
-def cash_owner_parts(fin, entry, flow, rules, default_owner, posting):
+def cash_owner_parts(fin, entry, flow, rules, default_owner, posting, responsibilities=None):
     """Use public cash defaults independently of the debt's responsibility.
 
     Income and borrowing receipts retain the public income default. Receivable
@@ -103,6 +103,10 @@ def cash_owner_parts(fin, entry, flow, rules, default_owner, posting):
         return [(default_owner, units)]
     parts = defaultdict(Fraction)
     for debt in debts:
+        if rules[debt.account]["role"] == "receivable" and responsibilities is not None:
+            for owner, amount in responsibilities.get(id(debt), []):
+                parts[owner] -= amount
+            continue
         owner = rules[debt.account]["owner_id"] if rules[debt.account]["role"] == "receivable" else default_owner
         parts[owner] -= exact(debt.units.number)
     for income in entry.postings:
@@ -114,12 +118,14 @@ def cash_owner_parts(fin, entry, flow, rules, default_owner, posting):
     return [(next(iter(parts)), units)] if len(parts) == 1 else None
 
 
-def receivable_cash_matches(fin, entry, rules, owned):
+def receivable_cash_matches(fin, entry, rules, owned, responsibilities=None):
     """Prove the combined owner vector, without assigning whole cash to each debt."""
     needed, cash = defaultdict(Fraction), defaultdict(Fraction)
     debts = [p for p in entry.postings if p.account in rules and rules[p.account]["role"] == "receivable"]
     for debt in debts:
-        needed[rules[debt.account]["owner_id"]] += abs(exact(debt.units.number))
+        for owner, units in (responsibilities.get(id(debt), []) if responsibilities is not None else
+                             [(rules[debt.account]["owner_id"], exact(debt.units.number))]):
+            needed[owner] += abs(units)
     for posting in entry.postings:
         if posting.account.split(":", 1)[0] != fin.options["name_assets"]:
             continue
@@ -140,20 +146,22 @@ class CreditOwners:
     None means unknown, never an automatic choice of income/default purpose.
     """
 
-    def __init__(self, fin, cutover, rules, defaults, owner_names=None):
+    def __init__(self, fin, cutover, rules, defaults, owner_names=None, responsibilities=None):
         self.fin, self.rules, self.defaults = fin, rules, defaults
         self.owner_names = owner_names or {}
+        self.responsibilities = responsibilities
         self.balances, self.credits = defaultdict(Fraction), {}
         self.credit_caps, self.joint_pending = {}, set()
         for entry in fin.entries:
             if isinstance(entry, data.Transaction) and entry.date < cutover:
-                for p in entry.postings:
-                    if p.account in rules:
-                        self.balances[self.coordinate(p)] += exact(p.units.number)
+                for p in self.movements(entry):
+                    self.balances[self.coordinate(p)] += exact(p.units.number)
 
     @staticmethod
     def coordinate(posting):
-        return posting.account, posting.units.currency, _lot(posting)
+        coordinate = (posting.account, posting.units.currency, _lot(posting))
+        owner = getattr(posting, "responsibility_owner", None)
+        return (*coordinate, owner) if owner is not None else coordinate
 
     def movements(self, entry):
         # Local exact sums only: the original booked postings and source refs
@@ -161,10 +169,17 @@ class CreditOwners:
         totals, first = defaultdict(Fraction), {}
         for posting in entry.postings:
             if posting.account in self.rules:
-                coordinate = self.coordinate(posting)
-                first.setdefault(coordinate, posting)
-                totals[coordinate] += exact(posting.units.number)
-        return [posting._replace(units=SimpleNamespace(number=totals[coordinate], currency=posting.units.currency))
+                parts = (self.responsibilities.get(id(posting), []) if self.responsibilities is not None else
+                         [(None, exact(posting.units.number))])
+                for owner, units in parts:
+                    proxy = SimpleNamespace(account=posting.account, cost=posting.cost, price=posting.price,
+                        meta=posting.meta, responsibility_owner=owner,
+                        units=SimpleNamespace(number=units, currency=posting.units.currency))
+                    coordinate = self.coordinate(proxy)
+                    first.setdefault(coordinate, proxy)
+                    totals[coordinate] += units
+        return [SimpleNamespace(**{**vars(posting), "units":
+                    SimpleNamespace(number=totals[coordinate], currency=posting.units.currency)})
                 for coordinate, posting in first.items()]
 
     def returning(self, entry):
@@ -364,7 +379,7 @@ def liability_budget(posting, names=None):
 
 
 def audit_rule_accounts(fin, facts, cutover, as_of, rules, cash_accounts, *, before_ref=None,
-                        budget_names=None):
+                        budget_names=None, budget_owners=None):
     """Replay declared settlement pools, retaining every source and original order."""
     signed = defaultdict(Fraction)
     origins, latest, pools, events = {}, {}, {}, []
@@ -382,7 +397,7 @@ def audit_rule_accounts(fin, facts, cutover, as_of, rules, cash_accounts, *, bef
         managed = [p for p in entry.postings if p.account in rules]
         if not managed:
             continue
-        flow = native_rule_flow(fin, entry, rules, cash_accounts) if entry.date >= cutover else None
+        flow = native_rule_flow(fin, entry, rules, cash_accounts, by_budget=budget_owners is not None) if entry.date >= cutover else None
         group_start = len(events)
         for posting in managed:
             ref = facts.for_posting(posting).as_dict()
@@ -459,10 +474,14 @@ def audit_rule_accounts(fin, facts, cutover, as_of, rules, cash_accounts, *, bef
         if originated < cutover.isoformat():
             opening.append({**common, "liability_ref": ref, "kind": "account_rule",
                             "reason": "配置声明单一用途清算池，期初余额直接取 cutover 前已记事实；不重算历史消费"})
-    return {"events": events, "obligations": debts, "clearing_advances": advances,
+    result = {"events": events, "obligations": debts, "clearing_advances": advances,
             "opening_pending": pending, "opening_declarations": opening, "keys": set(rules_by_ref),
             "rules_by_ref": rules_by_ref,
             "before_entry": before_entry}
+    if budget_owners is not None:
+        from .liability_budgets import apply_budget_responsibilities
+        return apply_budget_responsibilities(fin, facts, cutover, rules, budget_owners, result)
+    return result
 
 
 def activity_report(audit, month):
@@ -475,7 +494,9 @@ def activity_report(audit, month):
     for row in events:
         for part in row.get("budget_slices", []):
             totals[(row["kind"], part["name"], row["commodity"])] += Fraction(part["signed_units"])
+    by_budget = any(event.get("responsibility_protocol") == "posting_liability_budget_v1" for event in events)
     return {"events": events, "budget_totals": [
         {"kind": kind, "category": name, "commodity": currency, "signed_liability_units": exact_text(units)}
         for (kind, name, currency), units in sorted(totals.items(), key=lambda item: str(item[0]))],
-        "note": "负债 budget 只分类债务变动，不增加消费；正数减少负债／增加预付，负数增加负债／减少应收。利息费用取 Expenses。"}
+        "note": ("负债 budget 按逐笔用途分配责任，不增加消费；" if by_budget else "负债 budget 只分类债务变动，不增加消费；") +
+                "正数减少负债／增加预付，负数增加负债／减少应收。利息费用取 Expenses。"}

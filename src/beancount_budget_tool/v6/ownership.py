@@ -24,7 +24,7 @@ from .accounts import _lot, audit_accounts
 from .classification import _key
 from .facts import FactIndex, GeneratedPostingRef, future_posting_refs, future_transactions
 from .inline_amounts import parse_inline_amounts
-from .liability_rules import validate_rules, native_rule_flow, cash_owner_parts, CreditOwners, receivable_cash_matches
+from .liability_rules import validate_rules, native_rule_flow, cash_owner_parts, CreditOwners, receivable_cash_matches, audit_rule_accounts
 from .initialization import initial_pad_postings
 from .native_flows import native_asset_flow, native_card_purchase, native_payable_receipt, native_group_payment, native_book_redemption
 from .opening import audit_opening
@@ -152,10 +152,12 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     defaults = None
     transfer_orders = {}
     liability_rules = {}
+    budget_owners = None
+    responsibilities = None
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
-        unknown_fields = set(document) - required - {"defaults", "transfer_orders", "account_rules", "account_rule_assets"} if type(document) is dict else set()
+        unknown_fields = set(document) - required - {"defaults", "transfer_orders", "account_rules", "account_rule_assets", "budget_owners"} if type(document) is dict else set()
         require_yaml(type(document) is dict and required <= set(document) and not unknown_fields,
             "OWNERSHIP_DECLARATION_INVALID", "归属声明字段不完整或含未知字段", declarations,
             (sorted(unknown_fields, key=str)[0],) if unknown_fields else ())
@@ -171,6 +173,10 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
         names = _owners(document["owners"], source=declarations)
         owner_names.update({row["id"]: row["name"] for row in document["owners"]})
         ids = set(names.values())
+        budget_owners = document.get("budget_owners")
+        require(budget_owners is None or type(budget_owners) is dict and all(
+                    type(name) is str and type(owner) is str and owner in ids for name, owner in budget_owners.items()),
+                "OWNERSHIP_DECLARATION_INVALID", "budget_owners 须为名称到已登记用途的映射", str(declarations))
         liability_rules = validate_rules(document.get("account_rules", {}), ids, declarations,
                                          liability_root=fin.options["name_liabilities"])
         if "defaults" in document:
@@ -303,13 +309,17 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 running[coordinate] = reviewed_opening[coordinate]
                 unknown_coordinates.remove(coordinate)
         cash_accounts = {account for account, mode in semantics.items() if mode == "H"}
-        credit_owners = CreditOwners(fin, cutover, liability_rules, defaults, owner_names) if liability_rules else None
+        if liability_rules and budget_owners is not None:
+            responsibilities = audit_rule_accounts(fin, facts, cutover, None, liability_rules, cash_accounts,
+                budget_owners=budget_owners)["responsibility_parts"]
+        credit_owners = CreditOwners(fin, cutover, liability_rules, defaults, owner_names, responsibilities) if liability_rules else None
         # Unknown opening ownership limits inference only from that coordinate;
         # explicit post-cutover labels on other coordinates remain valid.
         for entry in fin.entries:
             if not isinstance(entry, data.Transaction) or entry.date < cutover:
                 continue
-            rule_flow = native_rule_flow(fin, entry, liability_rules, cash_accounts) if liability_rules else None
+            rule_flow = native_rule_flow(fin, entry, liability_rules, cash_accounts,
+                by_budget=budget_owners is not None) if liability_rules else None
             h_legs = [posting for posting in entry.postings
                       if semantics.get(posting.account) == "H"]
             if not h_legs:
@@ -348,7 +358,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 returning = rule_flow == "receipt" and credit_owners.returning(entry)
                 for key in missing_keys:
                     parts = credit_owners.receipt_parts(entry, leg_keys[key]) if returning else cash_owner_parts(
-                        fin, entry, rule_flow, liability_rules, default, leg_keys[key])
+                        fin, entry, rule_flow, liability_rules, default, leg_keys[key], responsibilities)
                     if parts is not None:
                         inferred(key, parts, "退回已证明的预付资金用途" if returning else
                                  "config 负债账户规则的现金用途；借入资金沿默认收入用途")
@@ -460,11 +470,11 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             if not isinstance(entry, data.Transaction) or entry.date < cutover or not any(
                     p.account in liability_rules and liability_rules[p.account]["role"] == "receivable" for p in entry.postings):
                 continue
-            if native_rule_flow(fin, entry, liability_rules, cash_accounts) is None:
+            if native_rule_flow(fin, entry, liability_rules, cash_accounts, by_budget=budget_owners is not None) is None:
                 continue
             cash_keys = {_key(facts.for_posting(p).as_dict()): p for p in entry.postings if p.account in cash_accounts}
             owned = {id(p): compiled_by_key[key]["slices"] for key, p in cash_keys.items() if key in compiled_by_key}
-            if receivable_cash_matches(fin, entry, liability_rules, owned) is False:
+            if receivable_cash_matches(fin, entry, liability_rules, owned, responsibilities) is False:
                 for key in cash_keys:
                     compiled_by_key.pop(key, None)
                     pending_reasons[key] = "LIABILITY_RULE_PURPOSE_MISMATCH"

@@ -94,7 +94,7 @@ def _documents(config: Path, inputs: dict | None = None):
     inputs.setdefault(config, config.read_bytes())
     doc = load_yaml(config)
     fields = {"schema", "ledger", "budgets", "cutover", "month", "report_currency", "defaults"}
-    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"accounts", "account_groups", "account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis", "liabilities"},
+    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"accounts", "account_groups", "account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis", "liabilities", "liability_budget_mode"},
                  "SIMPLE_CONFIG_INVALID", "config.yml 须含 schema: 1、ledger、budgets、cutover、month、report_currency、defaults，以及 accounts 或 account_groups", config)
     for key in ("ledger", "budgets", "cutover", "month", "report_currency"):
         require_yaml(type(doc[key]) is str and bool(doc[key].strip()), "SIMPLE_CONFIG_INVALID",
@@ -103,6 +103,8 @@ def _documents(config: Path, inputs: dict | None = None):
     require_yaml("accounts" in doc or "account_groups" in doc, "SIMPLE_CONFIG_INVALID",
                  "请用 account_groups 分组，或用 accounts 列出账户", config)
     defaults = doc["defaults"]
+    require_yaml(doc.get("liability_budget_mode", "classification") in ("classification", "purpose"),
+                 "SIMPLE_CONFIG_INVALID", "liability_budget_mode 须为 classification 或 purpose", config, ("liability_budget_mode",))
     require_yaml(type(defaults) is dict and {"income_purpose", "expense_purpose", "expense_category"} <= set(defaults) <=
                  {"income_purpose", "expense_purpose", "expense_category", "income_category"},
                  "SIMPLE_CONFIG_INVALID", "defaults 须指定默认收入用途、支出用途和费用类别", config, ("defaults",))
@@ -334,15 +336,34 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
     # This flag only lets the input compiler run. The final completeness
     # declaration is removed unless the user actually confirmed this month.
     filled["completeness_confirmed"] = True
-    from .liability_rules import validate_rules
-    liability_rules = doc.get("liabilities", {})
+    from .liability_rules import validate_rules, liability_budget
+    by_budget = doc.get("liability_budget_mode") == "purpose"
+    liability_rules = deepcopy(doc.get("liabilities", {}))
     # Validate before reading names out of an arbitrary YAML value.
     require_yaml(type(liability_rules) is dict and all(type(row) is dict for row in liability_rules.values()),
                  "LIABILITY_RULE_INVALID", "liabilities 须为负债账户到规则的映射", config, ("liabilities",))
-    rule_purposes = {row.get("purpose") for row in liability_rules.values() if type(row.get("purpose")) is str}
     fin = load_financial(root)
+    budget_purposes = set()
+    if by_budget:
+        for rule in liability_rules.values():
+            rule.setdefault("purpose", doc["defaults"]["expense_purpose"])
+        for entry in fin.entries:
+            if isinstance(entry, data.Transaction):
+                for posting in entry.postings:
+                    if posting.account.split(":", 1)[0] == fin.options["name_liabilities"]:
+                        liability_rules.setdefault(posting.account, {"role": "payable", "purpose": doc["defaults"]["expense_purpose"]})
+                        if entry.date < cutover:
+                            continue
+                        try:
+                            labels = liability_budget(posting)
+                        except BudgetError:
+                            # Name discovery is not approval: source preflight
+                            # reports malformed labels with their original line.
+                            labels = []
+                        budget_purposes.update(part["name"] for part in labels or [] if part["name"] != "-")
+    rule_purposes = {row.get("purpose") for row in liability_rules.values() if type(row.get("purpose")) is str}
     validate_rules(liability_rules, rule_purposes, config, public=True, liability_root=fin.options["name_liabilities"])
-    owners = set(filled["allocation_targets"]) | set(plans.get("purposes", [])) | rule_purposes
+    owners = set(filled["allocation_targets"]) | set(plans.get("purposes", [])) | rule_purposes | budget_purposes
     owners.update(row["name"] for row in state.get("ownership", {}).get("owners", []))
     filled["allocation_targets"] = {name: goals["allocation_targets"].get(name, "not_assessed")
                                      for name in owners | set(goals["allocation_targets"])}
@@ -446,7 +467,7 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
     generated["obligations"]["owners"] = owner_rows
     # These settings are authoritative in config.yml, never sticky approvals
     # recovered from .budget-state after a user removes a rule.
-    for key in ("account_rules", "account_rule_assets", "account_rule_defaults", "budget_categories"):
+    for key in ("account_rules", "account_rule_assets", "account_rule_defaults", "budget_categories", "budget_owners"):
         generated["obligations"].pop(key, None)
     if liability_rules:
         compiled_rules = {account: {"role": rule["role"], "owner_id": owner_names[rule["purpose"]],
@@ -457,6 +478,9 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
             document["account_rules"] = compiled_rules
             document["account_rule_assets"] = cash_accounts
         generated["obligations"]["account_rule_defaults"] = deepcopy(ownership["defaults"])
+    if by_budget:
+        for document in (generated["obligations"], ownership):
+            document["budget_owners"] = dict(owner_names)
     # Liability labels have their own projection, never consumption totals.
     if liability_rules or any(isinstance(entry, data.Transaction) and entry.date >= cutover and
             any(posting.account.split(":", 1)[0] == fin.options["name_liabilities"] and
@@ -615,6 +639,10 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
             public["liabilities"] = {account: {"role": rule["role"], "purpose": owner_names[rule["owner_id"]],
                                               **({"due_on": rule["due_on"]} if "due_on" in rule else {})}
                                      for account, rule in state["obligations"]["account_rules"].items()}
+        if "budget_owners" in state.get("obligations", {}):
+            public["liability_budget_mode"] = "purpose"
+            public["liabilities"] = {account: rule for account, rule in public.get("liabilities", {}).items()
+                                     if rule != {"role": "payable", "purpose": names["expense_purpose"]}}
         if old_config:
             if "defaults" not in state["classifications"]:
                 public["classification_defaults"] = False

@@ -119,6 +119,10 @@ def project_transactions(fin, month: str, expense: dict, purpose: dict, pools: d
         record = by_posting[_key(event["liability_ref"])]
         owner = event["owner_id"] or funds["responsibility_owners"].get(event["obligation_id"])
         record["liabilities"].append({**event, "responsibility_owner_id": owner,
+                                      **({"responsibility_slices": [{**part,
+                                          "name": funds["responsibility_names"][part["owner_id"]]}
+                                          for part in event["responsibility_slices"]]}
+                                         if "responsibility_slices" in event else {}),
                                       "responsibility_owner_name": funds["responsibility_names"][owner] if owner else None})
     return {"status": "SOURCE_OF_MONTH_REPORT", "month": month, "ledger_snapshot": fin.digest,
             "rows": rows, "count": len(rows),
@@ -194,11 +198,15 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
                 shown_purchase_groups.add(group)
         label = event["obligation_id"] or event["clearing_id"]
         owner = event["responsibility_owner_name"] or "单位代垫清算，不作本人消费责任"
-        identity = "" if for_search else "，按 config 账户清算" if event.get("claim_origin") == "account_rule" else f"，ID {label}"
+        per_posting = event.get("responsibility_protocol") == "posting_liability_budget_v1"
+        if per_posting:
+            owner = "，".join(f"{part['name']} {amount_text(part['signed_units'])} {event['commodity']}"
+                              for part in event["responsibility_slices"])
+        identity = "" if for_search else "，按逐笔 budget 清算" if per_posting else "，按 config 账户清算" if event.get("claim_origin") == "account_rule" else f"，ID {label}"
         lines.append(f"责任事件：{DEBT_NAMES.get(event['kind'], event['kind'])}{identity}，责任用途：{owner}")
         if event.get("review_reason"):
             lines.append(f"  责任依据：{event['review_reason']}")
-        if event.get("claim_origin") == "account_rule":
+        if event.get("claim_origin") == "account_rule" and not per_posting:
             lines.append("  config 账户规则自动清算；正数余额只作预付／应收，不增加可支付现金。")
         if "budget_slices" in event:
             lines.append("  负债 budget（不新增消费）：" + "，".join(

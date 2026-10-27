@@ -433,6 +433,7 @@ def render_text(report: dict) -> str:
         lines[2:2] = ["应收／预付余额（原币；不计入可支付现金）" if ruled_credit else "待报销代垫（应收原币；未到账，不计入可花现金）", *(
             f"  {row['account'] if row.get('origin') == 'account_rule' else row['clearing_id']}："
             f"{'待收／预付' if row.get('origin') == 'account_rule' else '待收'} {amount(row['remaining_native'])} "
+            + (f"（{report['owner_names'][row['owner_id']]}） " if row.get("responsibility_protocol") else "") +
             f"{row['commodity']}" + ("" if row.get("origin") == "account_rule" else f"，{row['account']}") +
             ("（期初结转）" if row.get("origin") == "opening" else "") + f" [{row['source']}]"
             for row in actual["clearing_receivables"]), ""]
@@ -440,8 +441,11 @@ def render_text(report: dict) -> str:
         coverage = {row["obligation_id"]: row for row in actual.get("obligation_coverage") or []}
         settlements = {row["obligation_id"]: row for row in actual.get("settlement_allocations") or []}
         has_loan = any("debt_kind" in row for row in actual["booked_debts"])
-        lines[2:2] = ["未清已记责任（消费全额；贷款按到期范围计入）" if has_loan else "未清已记消费责任（未覆盖部分占用实际可花）", *(
+        by_budget = any(row.get("responsibility_protocol") for row in actual["booked_debts"])
+        lines[2:2] = ["未清已记责任（消费全额；贷款按到期范围计入）" if has_loan else
+                     "未清已记责任（未覆盖部分占用实际可花）" if by_budget else "未清已记消费责任（未覆盖部分占用实际可花）", *(
             f"  {row['account'] if row.get('origin') == 'account_rule' else row['obligation_id']}：{amount(row['remaining_native'])} "
+            + (f"（{report['owner_names'][row['owner_id']]}） " if row.get("responsibility_protocol") else "") +
             f"{row['commodity']}" + ("" if row.get("origin") == "account_rule" else f"，{row['account']}") +
             (f"；本金到期 {row['due_on']}" if "due_on" in row else "") +
             ("（期初结转）" if row.get("origin") == "opening" else "") +

@@ -43,7 +43,7 @@ def _declarations(path, cutover, fin):
         return None, {}, None
     document = load_yaml(path)
     required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "events"}
-    optional = {"opening", "account_rules", "account_rule_assets", "account_rule_defaults", "budget_categories"}
+    optional = {"opening", "account_rules", "account_rule_assets", "account_rule_defaults", "budget_categories", "budget_owners"}
     unknown = set(document) - required - optional if type(document) is dict else set()
     require_yaml(type(document) is dict and required <= set(document) and not unknown,
                  "OBLIGATION_DECLARATION_INVALID", "责任侧文件字段不完整或含未知字段", path,
@@ -90,10 +90,15 @@ def audit_simple_obligations(root: Path, cutover: date,
             all(owner in rule_owners.values() for owner in rule_defaults.values()),
             "LIABILITY_RULE_INVALID", "账户规则须绑定 H 现金账户和明确的收入／支出默认用途", str(declarations))
     budget_names = document.get("budget_categories") if type(document) is dict else None
+    budget_owners = document.get("budget_owners") if type(document) is dict else None
+    require(budget_owners is None or type(budget_owners) is dict and all(
+                type(name) is str and type(owner) is str and owner in rule_owners.values() for name, owner in budget_owners.items()),
+            "OBLIGATION_DECLARATION_INVALID", "budget_owners 须为名称到已登记用途的映射", str(declarations))
     require(budget_names is None or type(budget_names) is list and all(type(name) is str for name in budget_names),
             "OBLIGATION_DECLARATION_INVALID", "budget_categories 须为类别名称列表", str(declarations))
     ruled = audit_rule_accounts(fin, facts, cutover, as_of, configured,
-                               rule_assets, before_ref=before_ref, budget_names=budget_names) if configured else None
+                               rule_assets, before_ref=before_ref, budget_names=budget_names,
+                               budget_owners=budget_owners) if configured else None
     opening = defaultdict(Fraction)
     historical_sources = {}
     candidates = {}

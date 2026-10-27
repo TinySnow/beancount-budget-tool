@@ -162,7 +162,8 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
             ruled = configured.get(_key(facts.for_transaction(entry).as_dict()))
             if ruled:
                 if any(row["status"] != "CERTIFIED" for row in ruled):
-                    pending("OBLIGATION_EVENT_UNSUPPORTED", ref, posting.account)
+                    reasons = [code for row in ruled for code in row["reason_codes"]]
+                    pending(next(iter(reasons), "OBLIGATION_EVENT_UNSUPPORTED"), ref, posting.account)
                     continue
                 event = ruled[0]
                 moving = [row for row in ruled if Fraction(row["signed_units"]) != 0]
@@ -188,7 +189,8 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                         principal = Fraction(0)
                         for row in ruled:
                             if row["kind"] == "advance_outflow":
-                                advances[row["owner_id"]] += Fraction(row["signed_units"])
+                                for part in row.get("responsibility_slices", [{"owner_id": row["owner_id"], "signed_units": row["signed_units"]}]):
+                                    advances[part["owner_id"]] += Fraction(part["signed_units"])
                             else:
                                 principal += Fraction(row["signed_units"])
                         available = abs(units) - advances[owner]

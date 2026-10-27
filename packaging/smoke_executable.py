@@ -87,6 +87,26 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert len(rows) == 2 and all(row["net_allocations"] == {} for row in rows), redeemed
         gains = [row["purpose_events"][0]["protocol"]["income_native"] for row in rows]
         assert gains == ["1071/100", "1611/100"], gains
+        posting_budgets = directory / "逐笔负债用途"
+        shutil.copytree(source / "liabilities", posting_budgets)
+        profile = yaml.safe_load((posting_budgets / "config.yml").read_text(encoding="utf-8"))
+        profile.pop("liabilities")
+        profile["liability_budget_mode"] = "purpose"
+        (posting_budgets / "config.yml").write_text(yaml.safe_dump(profile, allow_unicode=True), encoding="utf-8")
+        posting_ledger = posting_budgets / "main.bean"
+        body = posting_ledger.read_text(encoding="utf-8")
+        for old, new in (("卡债", "生活费"), ("偿债", "生活费"), ("代收代付", "同事差旅费")):
+            body = body.replace(f'budget: "{old}"', f'budget: "{new}"')
+        body += '\n2026-09-09 * "mixed purposes"\n  Expenses:Food 100 CNY\n'
+        body += '  Liabilities:Card -100 CNY\n    budget: "生活费60,旅游40"\n'
+        body += '2026-09-10 * "full payment"\n  Assets:Bank -100 CNY\n  Liabilities:Card 100 CNY\n'
+        posting_ledger.write_text(body, encoding="utf-8")
+        tagged = document("--config", posting_budgets / "config.yml", "--transactions")
+        assert tagged["status"] == "CERTIFIED_SCOPED", tagged
+        assert tagged["report"]["actual_spendable"]["actual_spendable"] == "2050", tagged
+        assert tagged["report"]["max_spendable"]["max_spendable"] == "310", tagged
+        assert not tagged["report"]["actual_spendable"]["booked_debts"], tagged
+        assert not (posting_budgets / ".budget-state").exists(), "Posting budgets must not require saved approvals"
         if os.name == "nt" and not onedir:
             # The bootloader must use its own per-user runtime base, even if
             # the caller's system TEMP settings cannot contain a directory.

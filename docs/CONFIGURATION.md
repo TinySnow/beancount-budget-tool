@@ -42,9 +42,12 @@ accounts:
 | `spendable_cap_category` | 否 | 用哪个费用类别及其子类的目标差限制最多能花；默认 expense_category。`null` 关闭此指标，不按现金假算上限 |
 | `classification_defaults` | 否 | 默认 `true`；`false` 禁用未写 budget 的默认分类。某些旧配置迁移后会保留 false，不影响资产默认 fund 用途 |
 | `expense_budget_basis` | 否 | 默认 `calendar_month` 沿用自然月消费上限；`salary_cycle` 改为按当前发薪周期剩余额度限制最多能花。账务审核和资金快照仍按自然月 |
-| `liabilities` | 否 | 普通负债账户的类型、单一责任用途和清算规则，见下节；不配置的账户继续沿用逐笔审阅 |
+| `liabilities` | 否 | 负债账户类型和责任用途默认值，见下节；逐笔模式允许由 budget 覆盖 |
+| `liability_budget_mode` | 否 | `purpose` 启用逐笔负债责任用途；省略或 `classification` 保持原有纯分类行为 |
 
 ### 普通负债：配置一次，自动计算
+
+本节先说明原有的单用途账户规则。同一账户有多种用途时，使用下一节的「逐笔负债用途」，无需为了用途不同拆账户。
 
 信用卡、应付款、代垫应收可以在 **config.yml 顶层**声明：
 
@@ -76,7 +79,42 @@ liabilities:
 
 规则直接读取账本、保持原顺序；同日先付款可以形成真实预付，不要求编造 `budget-order`。cutover 前的未结余额按配置用途结转，不把旧消费再算一次。删除 config 中的规则立即停止自动清算，不会从 `.budget-state` 偷偷恢复它。
 
-### Liabilities 上的 budget：可选分类，不增加消费
+### 逐笔负债用途：同一账户可以有多个预算用途
+
+在 config.yml **顶层**加一行，启用新语义：
+
+```yaml
+liability_budget_mode: purpose
+```
+
+普通即期应付款无需逐账户配置。在 Liabilities 分录上写 budget，就明确本次责任用途；名称自动登记，可沿用多用途金额写法，各金额须精确加回该分录。config 中已有的 purpose 只作默认值，行内 budget 优先；不设置默认值时沿用 `defaults.expense_purpose`。债务责任与资产 fund 各自计算，不会因预算名称相同就转移现金用途。
+
+```beancount
+2024-03-15 * "收到自己的报销及代同事收款"
+  Assets:Bank 520 CNY
+    fund: "生活费"
+  Liabilities:Payable:Colleague -260 CNY
+    budget: "同事差旅费"
+  Income:Work -260 CNY
+
+2024-03-15 * "转交同事款项"
+  Assets:Wallet -260 CNY
+    fund: "生活费"
+  Liabilities:Payable:Colleague 260 CNY
+    budget: "同事差旅费"
+```
+
+只有 Income 的 260 元是个人收入；代收、转交不增加消费或 G，无须逐笔挑责任 ID、填理由。转交前责任会占用实际可花，结清后释放；非生活费用途的专款覆盖、外币及到期贷款仍走各自的核对规则。
+
+例如同一账户借入 1000，负债腿写 `budget: "生活费600,旅游400"`。部分归还 500 时，可写 `budget: "生活费300,旅游200"`；剩余责任分别为 300、200。省略还款 budget 时，仅在单一用途或金额恰好完整清偿全部用途时自动分配。部分金额不能唯一分配会提示 `LIABILITY_BUDGET_AMBIGUOUS`，显示交易前各用途欠款，并定位到需要补标签的分录。程序不会用 FIFO 或比例猜。
+
+借款与还款的 **budget 名称应对应**。借入写「生活费」、还款写「旅游」，会保留生活费欠款和旅游预付，不能凭会计账户净额为零宣告两者结清。预付退回恢复原来付款的资产用途，不把责任 budget 当成收款 fund。不同人的往来仍应分子账户或用不同的责任预算名称明确区分，避免把多人债权债务写成同一个池。
+
+本模式中，消费仍只统计 Expenses；还本 1000＋Expenses 利息 10，消费只有 10。`budget: "-"` 不列预算分类，但不能抹掉已经发生的财务债务，责任沿默认／已知用途处理。已有单一用途可沿用；`role: receivable`、`role: loan` 及贷款 `due_on` 等账户性质可继续配置，purpose 可省略。未配置账户按普通即期应付款处理，不推断长期贷款的未来到期日。
+
+**兼容提醒**：旧版负债 budget 中「借款」「偿债」「退款」可能只是描述性分类；开启后它们各表示不同责任用途，需要核对并统一配对名称。省略开关时旧语义和已审月报保持不变；不会靠升级程序静默改变旧标签含义。关闭开关即停止新规则，不从内部状态恢复。
+
+### Liabilities 上的 budget：兼容分类模式
 
 ```beancount
 2026-09-20 * "还本金及利息"

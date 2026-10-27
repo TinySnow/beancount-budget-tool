@@ -79,6 +79,8 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
                              "origin": row["origin"],
                              "purchase_date": row["purchase_date"],
                              "purchase_ref": row["purchase_ref"],
+                             **({"responsibility_protocol": row["responsibility_protocol"]}
+                                if "responsibility_protocol" in row else {}),
                              **({"debt_kind": row["debt_kind"], "due_on": row["due_on"]}
                                 if "debt_kind" in row else {})})
     for row in unresolved_clearings:

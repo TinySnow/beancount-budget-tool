@@ -9,6 +9,8 @@ from .facts import FactIndex
 
 
 MESSAGES = {
+    "LIABILITY_BUDGET_AMBIGUOUS": "该负债账户有多个责任用途，或此前用途尚未确定；本次无法唯一分配。请在这条 Liabilities 分录填写 budget（可写多用途及金额），不用重复填逐笔审阅理由。",
+    "LIABILITY_BUDGET_TRANSFER_MISMATCH": "债务转移两侧的责任用途金额不一致；请核对各条 Liabilities 的 budget，债务搬移不能暗中改用途。",
     "H_REDEMPTION_OWNER_PENDING": "理财赎回本金与实收现金的 fund 尚未完整确定，或声明了不适用的划拨角色；先确认两条资产腿的持有用途。",
     "H_REDEMPTION_PURPOSE_MISMATCH": "理财赎回本金与实收现金的用途名称不一致；本金与损益按同名用途核对，改用途请另记明确的虚拟调拨。",
     "LIABILITY_CREDIT_PURPOSE_PENDING": "本次是预付／溢缴余额退回，原资金用途未能唯一确定；在收款资产腿明确 fund，不能把它当成新收入或自动挑一份用途。",
