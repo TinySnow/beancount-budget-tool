@@ -11,7 +11,6 @@ import yaml
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.period_report import audit_period, render_csv
-from beancount_budget_tool.v6.project import create_project, load_project
 from beancount_budget_tool.v6.tui import ReportBrowser, _draw_browser, _export_report, _report_browser, _select_period
 from test_v6_tui import FakeScreen
 
@@ -347,30 +346,6 @@ class IntervalBrowserTests(unittest.TestCase):
         self.assertEqual(exported.read_bytes(), render_csv(audit_period(self.configs[1:], "2026-11", "2026-12")).encode("utf-8-sig"))
         self.assertEqual(browser.query, "no matching row")
 
-    def test_fixed_range_follows_revised_project_paths_without_adding_new_month(self):
-        project_path = self.base / "range-project.yaml"
-        self.addCleanup(lambda: project_path.unlink(missing_ok=True))
-        project = create_project(self.configs, project_path)
-        browser = ReportBrowser(self.configs, audit_month_workflow, render_workflow_text,
-                                project=project, initial_config=self.configs[0])
-        browser.select_period("2026-11", "2026-12")
-        browser.refresh()
-        revised = self.configs[1].with_name("revised-november.yaml")
-        revised.write_bytes(self.configs[1].read_bytes())
-        self.addCleanup(revised.unlink)
-        future = self.configs[2].with_name("future-january.yaml")
-        document = yaml.safe_load(self.configs[2].read_text(encoding="utf-8"))
-        document["month"] = "2027-01"
-        self.runner["save"](future, document)
-        self.addCleanup(future.unlink)
-        load_project(project_path).register([revised, future], default_month="2027-01")
-        browser.refresh()
-        self.assertIsNone(browser.error)
-        self.assertEqual(browser.period_range, ("2026-11", "2026-12"))
-        self.assertEqual(browser.config, self.configs[0])
-        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
-        self.assertEqual([row["config"] for row in browser.outcome["months"]], [str(revised), str(self.configs[2])])
-        self.assertEqual(browser.period_inputs, [revised, self.configs[2]])
 
 
 if __name__ == "__main__":

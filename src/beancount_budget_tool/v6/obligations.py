@@ -91,14 +91,16 @@ def audit_simple_obligations(root: Path, cutover: date,
             "LIABILITY_RULE_INVALID", "账户规则须绑定 H 现金账户和明确的收入／支出默认用途", str(declarations))
     budget_names = document.get("budget_categories") if type(document) is dict else None
     budget_owners = document.get("budget_owners") if type(document) is dict else None
+    require(not configured or budget_owners is not None, "LIABILITY_MODE_REMOVED",
+            "自动负债只保留逐笔用途；旧账户模式须迁移，budget_owners 须完整声明", str(declarations))
     require(budget_owners is None or type(budget_owners) is dict and all(
-                type(name) is str and type(owner) is str and owner in rule_owners.values() for name, owner in budget_owners.items()),
+                type(name) is str and type(owner) is str and owner in rule_owners.values()
+                for name, owner in budget_owners.items()),
             "OBLIGATION_DECLARATION_INVALID", "budget_owners 须为名称到已登记用途的映射", str(declarations))
     require(budget_names is None or type(budget_names) is list and all(type(name) is str for name in budget_names),
             "OBLIGATION_DECLARATION_INVALID", "budget_categories 须为类别名称列表", str(declarations))
     ruled = audit_rule_accounts(fin, facts, cutover, as_of, configured,
-                               rule_assets, before_ref=before_ref, budget_names=budget_names,
-                               budget_owners=budget_owners) if configured else None
+                               rule_assets, before_ref=before_ref, budget_owners=budget_owners) if configured else None
     opening = defaultdict(Fraction)
     historical_sources = {}
     candidates = {}
@@ -207,7 +209,7 @@ def audit_simple_obligations(root: Path, cutover: date,
             for index, row in enumerate(opening_rows):
                 if type(row) is dict and _key(row.get("liability_ref", {})) in ruled["keys"] and "owner_id" in row:
                     check_event(row["owner_id"] == ruled["rules_by_ref"][_key(row["liability_ref"])]["owner_id"],
-                                "LIABILITY_RULE_OWNER_CONFLICT", "账户规则用途与原期初审阅不同；核对 config 的 purpose", ("opening", index))
+                                "LIABILITY_RULE_OWNER_CONFLICT", "默认期初责任用途与原审阅不同；核对 defaults.expense_purpose 和期初责任", ("opening", index))
             opening_rows = [row for row in opening_rows if type(row) is not dict or
                             _key(row.get("liability_ref", {})) not in ruled["keys"]]
         for row_index, row in enumerate(document["events"]):
@@ -238,11 +240,10 @@ def audit_simple_obligations(root: Path, cutover: date,
             check_event(len(set(ref_keys)) == len(ref_keys), "OBLIGATION_COUNTERPART_INVALID",
                         "负债对手来源不得重复", (*location, ref_field))
             if ruled is not None and key in ruled["keys"]:
-                # Opting into a single-purpose account rule replaces matching
-                # per-event clearing choices, but never silently changes an
-                # explicitly approved responsibility purpose.
+                # Automatic replay may supersede matching explicit claims,
+                # but cannot silently replace a previously approved purpose.
                 check_event("owner_id" not in row or row["owner_id"] == ruled["rules_by_ref"][key]["owner_id"],
-                            "LIABILITY_RULE_OWNER_CONFLICT", "账户规则用途与既有逐笔审阅不同；核对 config 的 purpose", location)
+                            "LIABILITY_RULE_OWNER_CONFLICT", "当前责任用途与既有逐笔审阅不同；核对负债 budget 和原审阅", location)
                 continue
             if key not in candidates or as_of is not None and candidates[key]["date"] > as_of.isoformat():
                 if future_pairs is None:

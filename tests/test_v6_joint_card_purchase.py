@@ -12,8 +12,8 @@ import yaml
 import test_v6_native_flows as native_tests
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.financial import booked_through, frozen_financial, load_financial
-from beancount_budget_tool.tools.v6_init import _SetupDumper
-from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
+from fixture_inputs import SetupDumper as _SetupDumper
+from fixture_months import create_next_month, compile_next_month
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.default_outflows import audit_default_outflows
 from beancount_budget_tool.v6.native_flows import native_card_purchase

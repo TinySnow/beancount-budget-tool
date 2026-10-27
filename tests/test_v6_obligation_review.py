@@ -12,7 +12,7 @@ import json
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.simple_config import create_files
-from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
+from fixture_months import ProtocolBrowser
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.obligation_review import prepare_review, save_review, validate_decision
 from beancount_budget_tool.v6.tui import _edit_review
@@ -45,7 +45,7 @@ class ObligationReviewTests(unittest.TestCase):
         self.originals = {path: path.read_bytes() for path in [self.ledger, *self.advanced.parent.glob('*.yaml')]}
 
     def browser(self):
-        value = SimpleReportBrowser(self.simple, '2026-09')
+        value = ProtocolBrowser(self.advanced)
         self.addCleanup(value.close)
         value.refresh()
         return value
@@ -67,7 +67,7 @@ class ObligationReviewTests(unittest.TestCase):
             message = self.submit(browser, '生活费', account=account)
             self.assertEqual(message.call_args.args[1], '已保存审阅决定')
 
-    def test_two_file_tui_reviews_purchases_then_partial_and_final_payments(self):
+    def test_explicit_protocols_review_purchases_then_partial_and_final_payments(self):
         browser = self.browser()
         self.assertEqual(browser.outcome['status'], 'NEEDS_REVIEW')
         self.submit(browser, '生活费')
@@ -92,7 +92,7 @@ class ObligationReviewTests(unittest.TestCase):
         browser.jump_month('2026-09'); browser.refresh()
         self.assertEqual(browser.outcome['report']['actual_spendable']['actual_spendable'], '110')
         self.assertEqual(len(browser.outcome['report']['actual_spendable']['booked_debts']), 2)
-        reopened = SimpleReportBrowser(self.simple, '2026-11')
+        reopened = ProtocolBrowser(browser.config, '2026-11')
         self.addCleanup(reopened.close); reopened.refresh()
         self.assertEqual(reopened.outcome['status'], 'CERTIFIED_SCOPED')
         self.assertEqual(reopened.outcome['report']['actual_spendable']['actual_spendable'], '110')
@@ -110,7 +110,6 @@ class ObligationReviewTests(unittest.TestCase):
         self.assertFalse(target.exists())
 
     def test_blank_reason_retries_reason_only_and_saved_reason_is_visible_and_persistent(self):
-        from beancount_budget_tool.v6.state_store import state_file
         browser = self.browser()
         browser.view = 'reviews'
         browser.selected = browser.items().index(self.selected(browser))
@@ -120,13 +119,13 @@ class ObligationReviewTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in field.call_args_list],
                          ['填写一项审阅决定', '填写审阅理由', '填写审阅理由', '填写审阅理由', '核对后明确批准'])
         self.assertIn('判断依据不能为空', '\n'.join(field.call_args_list[2].args[2]))
-        saved = state_file(self.simple)
-        document = json.loads(gzip.decompress(saved.read_bytes()))
-        self.assertEqual(document['shared']['obligations']['events'][-1]['reason'], '核对本人消费责任')
+        saved = browser.config.parent / 'obligations.yaml'
+        document = yaml.safe_load(saved.read_text(encoding='utf-8'))
+        self.assertEqual(document['events'][-1]['reason'], '核对本人消费责任')
         self.assertEqual(message.call_args.args[1], '已保存审阅决定')
         text = '\n'.join(message.call_args.args[2])
         self.assertIn('核对本人消费责任', text)
-        self.assertIn(str(saved), text)
+        self.assertIn(str(browser.config), text)
         self.submit(browser, '生活费', account='Liabilities:Other')
         self.assertEqual(browser.outcome['status'], 'CERTIFIED_SCOPED')
         from beancount_budget_tool.v6.transaction_details import render_transaction
@@ -136,9 +135,8 @@ class ObligationReviewTests(unittest.TestCase):
         self.assertTrue(all(path.read_bytes() == original for path, original in self.originals.items()))
 
     def test_cancel_after_blank_reason_does_not_save_or_restart_decision(self):
-        from beancount_budget_tool.v6.state_store import state_file
         browser = self.browser()
-        before = state_file(self.simple).read_bytes()
+        before = browser.config.read_bytes()
         browser.view = 'reviews'
         browser.selected = browser.items().index(self.selected(browser))
         with patch('beancount_budget_tool.v6.tui._read_field', side_effect=['生活费', '', None]) as field, \
@@ -146,7 +144,7 @@ class ObligationReviewTests(unittest.TestCase):
             _edit_review(FakeScreen(size=(30, 130)), browser)
         self.assertEqual(field.call_count, 3)
         message.assert_not_called()
-        self.assertEqual(state_file(self.simple).read_bytes(), before)
+        self.assertEqual(browser.config.read_bytes(), before)
 
     def test_purchase_rejects_unknown_split_and_outside_owners_and_missing_reason(self):
         browser = self.browser()

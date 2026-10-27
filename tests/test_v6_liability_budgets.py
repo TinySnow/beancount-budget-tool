@@ -91,7 +91,7 @@ class PostingLiabilityBudgetTests(unittest.TestCase):
         self.assertFalse(any(row['reason_kind']=='implementation_limit' for row in items))
 
     def test_budget_overrides_account_default_purpose(self):
-        self.fixture.doc['liabilities'] = {'Liabilities:Card': {'role':'credit_card', 'purpose':'生活费'}}
+        self.fixture.doc['liabilities'] = {'Liabilities:Card': {'role':'credit_card'}}
         _, debt = self.debt(self.purchase('旅游'))
         self.assertEqual(self.named_balances(debt), {'旅游': 100})
         self.audit(self.purchase('旅游') + self.payment('旅游'))
@@ -173,8 +173,8 @@ class PostingLiabilityBudgetTests(unittest.TestCase):
         self.assertEqual(report['actual_spendable']['actual_spendable'], '9930')
 
     def test_explicit_debt_transfers_preserve_each_purpose(self):
-        self.fixture.doc['liabilities'] = {'Liabilities:Card': {'role':'credit_card', 'purpose':'生活费'},
-                                          'Liabilities:Colleague': {'role':'payable', 'purpose':'旅游'}}
+        self.fixture.doc['liabilities'] = {'Liabilities:Card': {'role':'credit_card'},
+                                          'Liabilities:Colleague': {'role':'payable'}}
         body = self.purchase('生活费60,旅游40')
         body += '2026-09-03 * "transfer debt"\n  Liabilities:Card 100 CNY\n    budget: "生活费60,旅游40"\n'
         body += '  Liabilities:Colleague -100 CNY\n    budget: "旅游40,生活费60"\n'
@@ -212,16 +212,16 @@ class PostingLiabilityBudgetTests(unittest.TestCase):
         self.fixture.doc['liability_budget_mode'] = 'typo'
         with self.assertRaises(BudgetError) as error:
             self.audit(self.purchase())
-        self.assertEqual(error.exception.code,'SIMPLE_CONFIG_INVALID')
+        self.assertEqual(error.exception.code,'LIABILITY_MODE_REMOVED')
         self.assertIn('config.yml:',error.exception.source)
 
-    def test_off_switch_restores_legacy_semantics_without_sticky_rules(self):
+    def test_posting_responsibility_is_the_only_default_without_a_mode_switch(self):
         body = self.purchase('生活费60,旅游40') + self.payment()
         self.audit(body)
         self.fixture.doc.pop('liability_budget_mode')
         result = self.audit(body,certified=False)
-        self.assertEqual(result['status'], 'NEEDS_REVIEW')
-        self.assertIn('OBLIGATION_UNCLAIMED',{r['reason_code'] for r in result['review_items']})
+        self.assertEqual(result['status'], 'CERTIFIED_SCOPED')
+        self.assertEqual(result['report']['actual_spendable']['actual_spendable'],'9900')
 
     def test_config_export_preserves_posting_mode(self):
         self.audit(self.purchase('生活费60,旅游40') + self.payment())
@@ -232,7 +232,7 @@ class PostingLiabilityBudgetTests(unittest.TestCase):
             runtime.close()
         from beancount_budget_tool.yamlstrict import load_yaml
         doc = load_yaml(Path(converted['config']))
-        self.assertEqual(doc['liability_budget_mode'], 'purpose')
+        self.assertNotIn('liability_budget_mode',doc)
         self.assertEqual(doc.get('liabilities',{}), {})
         reopened = audit_simple(Path(converted['config']), include_transactions=True)
         self.assertEqual(reopened['status'], 'CERTIFIED_SCOPED')
@@ -313,7 +313,7 @@ class PostingLiabilityBudgetTests(unittest.TestCase):
         finally:
             runtime.close()
         from beancount_budget_tool.yamlstrict import load_yaml
-        self.assertEqual(load_yaml(Path(converted['config']))['liability_budget_mode'],'purpose')
+        self.assertNotIn('liability_budget_mode',load_yaml(Path(converted['config'])))
 
     def test_partly_ignored_budget_is_rejected_instead_of_dropping_a_financial_amount(self):
         result=self.audit(self.purchase('旅游60,-40'),certified=False)

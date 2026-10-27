@@ -13,7 +13,6 @@ from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.actual_snapshot import audit_actual_snapshot
 from beancount_budget_tool.v6.ownership import audit_ownership
 from beancount_budget_tool.v6.provenance import asset_opening_fingerprint, as_of_booked_fingerprint
-from beancount_budget_tool.tools.v6_upgrade_completeness import upgrade
 
 
 CUTOVER = date(2026, 9, 1)
@@ -123,9 +122,10 @@ class ActualSnapshotTests(unittest.TestCase):
             path.write_text(yaml.safe_dump(document, allow_unicode=True), encoding="utf-8")
         self.write_completeness()
         upgraded = self.completeness.with_name("complete-scoped.yml")
-        result = upgrade(self.root, CUTOVER, AS_OF, self.accounts, self.opening,
-                         self.ownership, self.obligations, self.completeness, upgraded)
-        self.assertEqual(result["actual_spendable"], "80")
+        document = yaml.safe_load(self.completeness.read_text(encoding='utf-8'))
+        document['as_of_booked_fingerprint'] = as_of_booked_fingerprint(load_financial(self.root), AS_OF)
+        upgraded.write_text(yaml.safe_dump(document, allow_unicode=True), encoding='utf-8')
+        self.assertEqual(self.audit(upgraded)['actual_spendable'], '80')
         before = as_of_booked_fingerprint(load_financial(self.root), AS_OF)
         self.root.write_text(self.root.read_text(encoding="utf-8") +
                              '2026-10-02 * "later purchase"\n'

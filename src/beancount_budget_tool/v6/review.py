@@ -1,4 +1,4 @@
-"""Shared category and H-purpose review, from worksheets to terminal decisions."""
+"""Source-bound category and H-purpose decisions used by the TUI."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from tempfile import TemporaryDirectory
 from beancount.core import data
 import yaml
 
-from ..console import command
 from ..errors import BudgetError, require
 from ..exact import exact_text
 from ..yamlstrict import load_yaml, yaml_path_location
@@ -62,20 +61,11 @@ def create_review(config: Path, output: Path, *, expected_inputs: dict[Path, byt
         choices = {"budget": [*sorted(_registry(categories)), "-"],
                    "fund": [*sorted(_owners(owners)), "-"]}
         instructions = (
-            "# 交易待审：只填写 decisions.yaml\n\n"
-            "每项已带入日期、摘要、原币金额和账本行号。kind=classification 填预算类别；"
-            "kind=asset_ownership 填资产资金用途。可用名称见 choices.yaml。\n\n"
-            "1. decision 填已登记名称，如 餐饮 或 储蓄；拆分写 '保险200，旅游900'，合计须等于分录绝对金额。"
-            "符号由原分录决定，不填负金额。'-' 表示预算外。\n"
-            "2. reason 写这次判断的依据。确定后把 approved 改为 true。不确定就保持 false；可以只批准部分。\n"
-            "3. 不要修改 ref、kind、日期、账户、币种和分录金额；无需手工复制来源引用。"
-            "改了原交易、加了行内标签或已有别人认领时，重新导出待审表。\n\n"
-            f"```\n{command('beancount-budget-review')} --apply decisions.yaml\n```\n\n"
-            "保存到新的 reviewed 目录，并自动重跑该月月报；原账本及原审阅文件只读。"
-            "已有 reviewed 时用 --output 另选目录。后续以新目录的 month.yaml 继续审核。\n\n"
-            "other-items.yaml 保留本轮不能通过这张表决定的项目，例如账户、期初、负债、转账协议、计价和目标。"
-            "它们不会被批准或隐藏；本表只覆盖当前已发现的分类和 H 用途待审。"
-            "保存后可能出现下一层待审，待审清零也须通过月报指标检查才能签发。\n")
+            "# 内部审阅暂存记录\n\n"
+            "由 TUI e 审阅自动生成、校验并保存，不是用户需要维护的配置。"
+            "日常只维护 config.yml、budgets.yml 与账本。\n\n"
+            "decision 是预算类别或资产用途，reason 是判断依据；ref 绑定原交易，不能手工替换。"
+            "原交易变更后须重新审阅；不确定的事项继续待审。\n")
     check_unchanged(before)
     check_unchanged(expected_inputs)
     publish_inputs(output, {"decisions.yaml": worksheet, "choices.yaml": choices,

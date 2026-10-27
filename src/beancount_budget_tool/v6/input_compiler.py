@@ -17,11 +17,11 @@ from tempfile import TemporaryDirectory
 from beancount.core import data
 import yaml
 
-from ..console import command
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import booked_through, frozen_financial, month_bounds
-from ..yamlstrict import load_yaml, yaml_path_location
+from ..yamlstrict import config_path, load_yaml, yaml_path_location, require_yaml
+from .targets import _month
 from .accounts import audit_accounts
 from .classification import _name, _registry
 from .facts import frozen_fact_indices
@@ -157,32 +157,6 @@ def draft_inputs(ledger: Path, month: str, *, cutover: date | None = None,
             "completeness_confirmed": False,
         }
         return worksheet, issues
-
-
-def create_setup(ledger: Path, month: str, output: Path, *, cutover: date | None = None,
-                 currency: str | None = None, income_purpose: str = "已收入资金",
-                 expense_purpose: str = "待支出资金", expense_category: str | None = None) -> dict:
-    worksheet, issues = draft_inputs(ledger, month, cutover=cutover, currency=currency,
-                                     income_purpose=income_purpose, expense_purpose=expense_purpose,
-                                     expense_category=expense_category)
-    worksheet["ledger"] = relative_reference(ledger.resolve(), output.resolve())
-    _, last = month_bounds(month)
-    files = {"setup.yaml": worksheet, "START_HERE.md": (
-        "# 首月配置：只填写 setup.yaml\n\n"
-        "1. defaults 是未标标签时的收入用途、支出用途和费用类别；确认后把 confirmed 改为 true。\n"
-        "   首次正数、无成本 Assets/Equity pad 初始化也归默认收入用途，不算收入或正式划拨，不用给生成分录补 fund；后续余额校正仍需审阅。\n"
-        "2. accounts 的 semantics 填 H（真实余额）或 K（只有累计申赎额）。payment_scope 每个币种填 payable、excluded 或 pending；K 必须全填 excluded。reason 写判断依据。\n"
-        "3. H 的非零期初在 owners 中按用途拆分，例如 `{自由资金: '100', 储蓄: '200'}`，合计必须等于 signed_units。K 的 owners 留空，reason 表示确认账面累计额。不要修改提取的账户、币种、lot 和期初数。\n"
-        "4. expense_targets 是本月各类别及其子类别的合计消费上限，金额填带引号的非负数字；历史目标无法确认或不考核时填 not_assessed，不计算目标差。allocation_targets 填划拨目标，或明确填 not_assessed。null 仍表示待决定；0 表示真实零额度。\n"
-        f"5. 确认导入资料覆盖到 {last}，无该截止日尚未入账的责任或付款后，completeness_confirmed 改为 true；报告不代表截止日之后的现实余额。\n\n"
-        "填不出来就保留 null 或 false。在本目录运行下列命令会列出待确认字段和行号，不会自动批准。\n\n"
-        f"```\n{command('beancount-budget-init')} --apply setup.yaml\n```\n\n"
-        f"全部首轮决定明确后生成 compiled/month.yaml，再运行 `{command('beancount-budget-tool')} --config compiled/month.yaml`。复杂转账、负债或缺价仍可能出现在后续待审清单中。\n"
-        "生成目录不会覆盖已有文件；如已生成 compiled，请用 --output 指定新的目录。账本始终只读。\n")}
-    publish_inputs(output, files)
-    return {"status": "DRAFT_CREATED", "setup": str((output / "setup.yaml").resolve()),
-            "accounts": len(worksheet["accounts"]), "source_issues": issues,
-            "note": "只生成填写表；没有批准账户、期初用途、目标或完整性。"}
 
 
 def compile_inputs(doc: dict, source: Path, output: Path, *, location=None) -> tuple[dict, list]:
@@ -389,17 +363,6 @@ def compile_inputs(doc: dict, source: Path, output: Path, *, location=None) -> t
     return files, []
 
 
-def compile_setup(setup: Path, output: Path | None = None) -> dict:
-    setup = setup.resolve()
-    output = (output or setup.parent / "compiled").resolve()
-    files, issues = compile_inputs(load_yaml(setup), setup, output)
-    if issues:
-        return {"status": "NEEDS_REVIEW", "setup": str(setup), "review_items": issues, "config": None}
-    publish_inputs(output, files)
-    return {"status": "CONFIG_CREATED", "config": str(output / "month.yaml"),
-            "review_items": [], "note": "只编译已填写的首轮决定；运行月报后仍可能出现交易、责任或计价待审。"}
-
-
 def read_month_config(config: Path):
     from .monthly_report import REQUIRED, OPTIONAL
 
@@ -448,3 +411,33 @@ def report_saved_inputs(result: dict, audit, before: dict[Path, bytes],
         return {**result, "workflow": workflow}
     except (BudgetError, OSError, UnicodeError) as exc:
         return saved_report_failure(result, exc, io_error)
+
+
+def config_metadata(path: Path) -> tuple[str, tuple]:
+    document = load_yaml(path)
+    require_yaml(type(document) is dict and document.get("schema") == 6 and type(document.get("schema")) is int,
+                 "MONTH_REPORT_CONFIG_INVALID", "内部月份输入须为 schema 6", path)
+    try:
+        month = _month(document.get("month"))
+    except BudgetError as exc:
+        raise BudgetError(exc.code, exc.message, yaml_path_location(path, ("month",))) from exc
+    for key in ("ledger", "cutover", "report_currency"):
+        require_yaml(type(document.get(key)) is str and bool(document[key].strip()),
+                     "MONTH_REPORT_CONFIG_INVALID", "月份配置缺少账本、cutover 或报告货币", path, (key,))
+    try:
+        cutover = date.fromisoformat(document["cutover"])
+    except ValueError as exc:
+        raise BudgetError("CUTOVER_INVALID", "cutover 须为自然月第一天", yaml_path_location(path, ("cutover",))) from exc
+    require_yaml(cutover.day == 1 and cutover <= date.fromisoformat(month + "-01"),
+                 "CUTOVER_INVALID", "cutover 须为不晚于报告月的自然月第一天", path, ("cutover",))
+    ledger = config_path(path, document["ledger"], "ledger")
+    require_yaml(ledger.is_file(), "MONTH_REPORT_CONFIG_INVALID", "月份配置引用的账本不存在", path, ("ledger",))
+    return month, (ledger, cutover, document["report_currency"])
+
+
+def default_config():
+    """Use the current two-file entry; no month-registration manifest."""
+    candidates = [Path.cwd()/name for name in ("config.yml", "budget/simple/config.yml", "budget/config.yml")]
+    found = [path.resolve() for path in candidates if path.is_file()]
+    require(len(found)<=1, "CONFIG_AMBIGUOUS", "找到多份 config.yml，请用 --config 指定："+"、".join(map(str,found)))
+    return found[0] if found else None

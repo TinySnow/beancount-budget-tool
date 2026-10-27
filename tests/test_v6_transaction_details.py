@@ -16,8 +16,8 @@ from beancount.core import data
 import yaml
 
 from beancount_budget_tool.financial import load_financial
-from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
-from beancount_budget_tool.tools.v6_review_decisions import create_review, apply_review
+from fixture_inputs import create_setup, compile_setup
+from beancount_budget_tool.v6.review import create_review, apply_review
 from beancount_budget_tool.v6.facts import FactIndex
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text, main
 from beancount_budget_tool.v6.purpose_pools import opening_fingerprint

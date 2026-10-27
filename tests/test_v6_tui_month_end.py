@@ -10,8 +10,8 @@ from unittest.mock import patch
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.tools.v6_init import _SetupDumper, compile_setup
-from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
+from fixture_inputs import SetupDumper as _SetupDumper, compile_setup
+from fixture_months import create_next_month, compile_next_month
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.tui import ReportBrowser, _confirm_month_end, _report_browser
 from beancount_budget_tool.v6.month_actions import prepare_month_end, save_month_end
@@ -23,7 +23,7 @@ class MonthEndTests(unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name).resolve()
-        example = Path(__file__).resolve().parents[1] / "examples/v6"
+        example = Path(__file__).resolve().parent / "fixtures"
         self.ledger = self.base / "账本.bean"
         self.ledger.write_text((example / "first-month.bean").read_text(encoding="utf-8") +
                                '\ninclude "extra*.bean"\n', encoding="utf-8")
@@ -132,8 +132,8 @@ class MonthEndTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "TUI_MONTH_CONTEXT_CHANGED")
 
     def test_context_changed_while_preparing_or_immediately_before_publish_is_rejected(self):
-        from beancount_budget_tool.tools.v6_review_decisions import _config
-        from beancount_budget_tool.tools.v6_next_month import confirm_month
+        from beancount_budget_tool.v6.input_compiler import read_month_config as _config
+        from fixture_months import confirm_month
         original = self.config.read_bytes()
         def changed_config(path):
             parsed = _config(path)
@@ -186,7 +186,7 @@ class MonthEndTests(unittest.TestCase):
         self.assert_originals()
 
     def test_error_after_backend_publication_is_reported_as_saved_not_lost(self):
-        from beancount_budget_tool.tools.v6_next_month import confirm_month
+        from fixture_months import confirm_month
         prepared = prepare_month_end(self.config, "2026-09")
         def publish_then_fail(*args, **kwargs):
             confirm_month(*args, **kwargs)

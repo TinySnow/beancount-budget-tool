@@ -21,7 +21,6 @@ from beancount_budget_tool.v6.facts import FactIndex
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.period_report import main as report_main
-from beancount_budget_tool.v6.project import create_project, load_project
 from beancount_budget_tool.v6.salary_cycle import audit_salary_cycle, cycle_bounds, render_text, render_csv
 from beancount_budget_tool.v6.tui import ReportBrowser, _select_salary_cycle, _report_browser
 from beancount_budget_tool.v6.tui_export import write_export
@@ -231,24 +230,6 @@ class SalaryCycleTests(unittest.TestCase):
         self.assertEqual(cycle_bounds("2024-02-29", "2024-03-07"), (date(2024, 2, 29), date(2024, 3, 6)))
         self.assertEqual(cycle_bounds("2026-12-20", "2027-01-03"), (date(2026, 12, 20), date(2027, 1, 2)))
 
-    def test_project_cli_and_csv_exports_preserve_scope_and_boundary(self):
-        self.configure()
-        project = self.base / "project.yaml"
-        create_project([self.september, self.config], project)
-        output = StringIO()
-        with redirect_stdout(output):
-            code = report_main(["--project", str(project), "--payday", "2026-09-08", "--next-payday", "2026-10-02",
-                                "--cycle-budget", "50", "--format", "json"])
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(output.getvalue())["report"]["cycle_budget"]["remaining"], "17")
-        result = self.audit()
-        for format in ("text", "json", "csv"):
-            target = self.base / ("周期." + format)
-            write_export(result, self.config, target, format, period=True)
-            self.assertTrue(target.is_file())
-            if format == "csv":
-                self.assertTrue(target.read_bytes().startswith(b"\xef\xbb\xbf"))
-                self.assertIn("cycle_remaining,17", target.read_text(encoding="utf-8-sig"))
 
     def test_cli_rejects_month_range_mixed_with_salary_or_incomplete_paydays(self):
         for args in (["--payday", "2026-09-08"], ["--cycle-budget", "50"],

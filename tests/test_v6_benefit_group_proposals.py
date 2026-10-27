@@ -13,12 +13,12 @@ from beancount_budget_tool.v6.classification import audit_classification
 from beancount_budget_tool.v6.benefits import audit_economic_benefits
 from beancount_budget_tool.financial import load_financial, booked_through
 from beancount_budget_tool.exact import amount_text
-from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
+from fixture_inputs import create_setup, compile_setup
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.spending import audit_monthly_spending
 from beancount_budget_tool.v6.transaction_details import render_transaction
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.tools.v6_propose_benefit_groups import propose
+from fixture_benefits import propose_groups as propose
 
 
 class BenefitGroupProposalTests(unittest.TestCase):

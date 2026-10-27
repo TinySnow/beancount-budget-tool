@@ -10,8 +10,8 @@ import unittest
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.tools.v6_init import _SetupDumper, create_setup, compile_setup
-from beancount_budget_tool.tools.v6_review_decisions import create_review, apply_review, main
+from fixture_inputs import SetupDumper as _SetupDumper, create_setup, compile_setup
+from beancount_budget_tool.v6.review import create_review, apply_review
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 
 
@@ -199,17 +199,6 @@ class ReviewDecisionsTests(unittest.TestCase):
             apply_review(self.sheet)
         self.assertEqual(caught.exception.code, "REVIEW_CONTEXT_CHANGED")
 
-    def test_new_output_is_required_and_cli_renders_report(self):
-        self.create()
-        self.approve()
-        with redirect_stdout(StringIO()) as captured:
-            self.assertEqual(main(["--apply", str(self.sheet)]), 0)
-        self.assertIn("最多能花：40 CNY", captured.getvalue())
-        with self.assertRaises(BudgetError) as caught:
-            apply_review(self.sheet)
-        self.assertEqual(caught.exception.code, "SETUP_OUTPUT_EXISTS")
-        with self.assertRaises(BudgetError):
-            create_review(self.config, self.export)
 
     def test_later_plan_error_reports_saved_configuration_and_real_source(self):
         self.create()

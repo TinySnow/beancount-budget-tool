@@ -86,11 +86,10 @@ class PayableReceiptTests(unittest.TestCase):
         receipt = next(row for row in rows if row["narration"].startswith("own income"))
         payment = next(row for row in rows if row["narration"].startswith("forward"))
         event = receipt["liabilities"][0]
-        self.assertEqual((event["kind"], event["cash_received"], event["income_received"], event["payable_received"]),
-                         ("payable_receipt", "480", "240", "240"))
+        self.assertEqual((event['kind'],event['signed_units']),('payable_receipt','-240'))
         self.assertEqual(payment["liabilities"][0]["obligation_id"], event["obligation_id"])
         text = "\n".join(render_transaction(receipt, report["owner_names"]))
-        self.assertIn("480＝收入 240＋应付款 240", text)
+        self.assertIn("按逐笔 budget 清算", text)
         self.assertEqual(len(event["counterpart_refs"]), 2)
         self.assertEqual(self.income_total(), "240")
         self.assertEqual(report["default_outflows"]["totals"][0]["expenses_paid"], "0")
@@ -103,7 +102,7 @@ class PayableReceiptTests(unittest.TestCase):
                 report = self.report(self.audit(payment=payment))
                 self.assertEqual(report["actual_spendable"]["actual_spendable"], "480")
                 receipt = report["transactions"]["rows"][0]["liabilities"][0]
-                self.assertEqual(receipt["payable_received"], "240")
+                self.assertEqual(str(-int(receipt["signed_units"])), "240")
                 unsettled = report["actual_spendable"]["unresolved_obligations"]
                 self.assertEqual([row["remaining_native"] for row in unsettled], [remaining] if amount < 240 else [])
 
@@ -112,8 +111,8 @@ class PayableReceiptTests(unittest.TestCase):
             '  Income:Work -200 CNY\n    budget: "自由资金"\n  Income:Bonus -40 CNY\n')
         report = self.report(self.audit(receipt=receipt))
         event = report["transactions"]["rows"][0]["liabilities"][0]
-        self.assertEqual(event["income_received"], "240")
-        self.assertEqual(len(event["income_refs"]), 2)
+        self.assertEqual(self.income_total(), '240')
+        self.assertEqual(len(event['counterpart_refs']), 3)
 
     def test_cross_month_forwarding_does_not_recreate_income_or_release_cash_early(self):
         payment = PAYMENT.replace("2023-12-12", "2024-01-02")
@@ -126,8 +125,8 @@ class PayableReceiptTests(unittest.TestCase):
     def test_mixed_owners_and_nonexact_receipts_are_not_auto_approved(self):
         receipt = RECEIPT.replace('fund: "生活费"', 'fund: "生活费240，储蓄240"')
         outcome = self.audit(receipt=receipt)
-        self.assertNotEqual(outcome["status"], "CERTIFIED_SCOPED")
-        self.assertIsNone(outcome["report"])
+        self.assertEqual(outcome['status'], 'CERTIFIED_SCOPED')
+        self.assertEqual(outcome['report']['actual_spendable']['actual_spendable'], '240')
         receipt = 'option "inferred_tolerance_default" "CNY:1"\n' + RECEIPT.replace("480 CNY", "480.001 CNY")
         outcome = self.audit(receipt=receipt)
         self.assertNotEqual(outcome["status"], "CERTIFIED_SCOPED")
@@ -137,14 +136,15 @@ class PayableReceiptTests(unittest.TestCase):
         second = RECEIPT.replace("2023-12-12", "2023-12-13")
         payment = PAYMENT.replace("2023-12-12", "2023-12-14")
         outcome = self.audit(receipt=RECEIPT + second, payment=payment)
-        self.assertTrue(any(row["reason_code"] == "OBLIGATION_UNCLAIMED" for row in outcome["review_items"]))
-        self.assertIsNone(outcome["report"])
+        report=self.report(outcome)
+        self.assertEqual(self.income_total(), '480')
+        self.assertEqual(report['actual_spendable']['unresolved_obligations'][0]['remaining_native'],'240')
 
     def test_excess_payment_does_not_silently_reduce_or_clip_the_payable(self):
         payment = PAYMENT.replace("240", "250").replace("Assets:Wallet", "Assets:Bank")
         outcome = self.audit(payment=payment)
-        self.assertTrue(any(row["reason_code"] == "OBLIGATION_UNCLAIMED" for row in outcome["review_items"]))
-        self.assertIsNone(outcome["report"])
+        report=self.report(outcome)
+        self.assertEqual(report['actual_spendable']['clearing_receivables'][0]['remaining_native'],'10')
 
     def test_separate_partial_payments_do_not_charge_consumption_or_income_twice(self):
         payment = PAYMENT.replace("240", "120")

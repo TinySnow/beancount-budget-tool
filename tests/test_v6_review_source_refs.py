@@ -7,7 +7,7 @@ import unittest
 import yaml
 
 from beancount_budget_tool.financial import load_financial
-from beancount_budget_tool.tools.v6_review_source_refs import diagnose
+from beancount_budget_tool.v6.reference_checks import diagnose
 from beancount_budget_tool.v6.facts import FactIndex
 
 

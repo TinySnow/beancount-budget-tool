@@ -9,8 +9,8 @@ import yaml
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.financial import booked_through
-from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
-from beancount_budget_tool.tools.v6_propose_benefit_groups import propose
+from fixture_inputs import create_setup, compile_setup
+from fixture_benefits import propose_groups as propose
 from beancount_budget_tool.v6.k_events import audit_k_events
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_text
 from beancount_budget_tool.v6.review_diagnostics import review_item

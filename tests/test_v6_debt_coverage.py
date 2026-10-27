@@ -17,7 +17,7 @@ from beancount_budget_tool.v6.actual_snapshot import audit_actual_snapshot
 from beancount_budget_tool.v6.cli import main as audit_cli
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.obligations import audit_simple_obligations
-from beancount_budget_tool.tools.v6_review_source_refs import diagnose
+from beancount_budget_tool.v6.reference_checks import diagnose
 
 
 CUTOVER = date(2026, 9, 1)

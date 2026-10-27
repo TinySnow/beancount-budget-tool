@@ -16,8 +16,8 @@ from beancount_budget_tool.v6.tui import (
 )
 from beancount_budget_tool.v6.monthly_report import main, render_workflow_text
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
-from beancount_budget_tool.tools.v6_init import _SetupDumper, compile_setup
-from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
+from fixture_inputs import SetupDumper as _SetupDumper, compile_setup
+from fixture_months import create_next_month, compile_next_month
 
 
 class FakeScreen:
@@ -248,7 +248,7 @@ class LiveReportBrowserTests(unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name).resolve()
-        examples = Path(__file__).resolve().parents[1] / "examples" / "v6"
+        examples = Path(__file__).resolve().parent / "fixtures"
         self.ledger = self.base / "main.bean"
         self.ledger.write_bytes((examples / "first-month.bean").read_bytes())
         setup = yaml.safe_load((examples / "first-month-setup.yaml").read_text(encoding="utf-8"))

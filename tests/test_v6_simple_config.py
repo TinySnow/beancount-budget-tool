@@ -17,7 +17,7 @@ from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool import financial
 from beancount_budget_tool.yamlstrict import yaml_path_location
 from beancount_budget_tool.v6.input_compiler import compile_inputs
-from beancount_budget_tool.tools.v6_init import compile_setup, _SetupDumper
+from fixture_inputs import compile_setup, SetupDumper as _SetupDumper
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, create_files, save_snapshot
 from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
@@ -33,7 +33,7 @@ class SimpleConfigTests(unittest.TestCase):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.base = Path(temp.name)
-        examples = Path(__file__).resolve().parents[1] / "examples/v6"
+        examples = Path(__file__).resolve().parent / "fixtures"
         self.ledger = self.base / "main.bean"
         self.ledger.write_bytes((examples / "first-month.bean").read_bytes())
         setup = yaml.safe_load((examples / "first-month-setup.yaml").read_text(encoding="utf-8"))

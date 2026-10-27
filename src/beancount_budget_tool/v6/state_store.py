@@ -300,12 +300,23 @@ def main(argv=None):
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--export", type=Path, help="导出当前有效的高级配置副本")
     action.add_argument("--import-reviewed", type=Path, help="保存已审阅的高级 month.yaml")
+    action.add_argument("--check", action="store_true", help="核对当前审阅记录的来源引用，不签发财务数字")
     parser.add_argument("--month")
     args = parser.parse_args(argv)
     try:
         from .simple_config import is_simple, save_snapshot
         require(is_simple(load_yaml(args.config)), "SIMPLE_CONFIG_INVALID", "请指定两文件入口 config.yml", str(args.config))
-        if args.export:
+        if args.check:
+            from .simple_config import build_runtime
+            from .reference_checks import diagnose
+            runtime = build_runtime(args.config, args.month)
+            try:
+                require(runtime.config is not None, 'SIMPLE_CONFIG_REVIEW', '先补齐两份配置')
+                result = diagnose(runtime.config)
+                runtime.check()
+            finally:
+                runtime.close()
+        elif args.export:
             result = export(args.config, args.export, args.month)
         elif args.import_reviewed:
             save_snapshot(args.config, args.import_reviewed)

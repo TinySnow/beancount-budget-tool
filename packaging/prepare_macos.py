@@ -28,25 +28,17 @@ def prepare(executable: Path, output: Path, arch: str, revision: str, *, source:
         shutil.copy2(source / filename, package / filename)
     shutil.copy2(source / "packaging/THIRD-PARTY-NOTICES.md", package / "THIRD-PARTY-NOTICES.md")
     (package / "docs").mkdir()
-    for filename in ("CONFIGURATION.md", "v6-monthly-report.md"):
+    for filename in ("CONFIGURATION.md", "v6-monthly-report.md", "ARCHITECTURE.md"):
         shutil.copy2(source / "docs" / filename, package / "docs" / filename)
     (package / "example").mkdir()
     shutil.copytree(source / "examples/v6/simple", package / "example/simple",
                     ignore=shutil.ignore_patterns(".budget-state", "__pycache__"))
-    for filename in ("first-month.bean", "first-month-setup.yaml"):
-        shutil.copy2(source / "examples/v6" / filename, package / "example" / filename)
     start = (source / "packaging/MACOS-START.md").read_text(encoding="utf-8")
     for old, new in (("../QUICKSTART.md", "QUICKSTART.md"), ("../docs/", "docs/")):
         start = start.replace(old, new)
     (package / "START-HERE.md").write_text(start, encoding="utf-8")
     (package / "packaging").mkdir()
     shutil.copy2(source / "packaging/MACOS-START.md", package / "packaging/MACOS-START.md")
-    legacy_path = package / "LEGACY-WORKFLOWS.md"
-    legacy = legacy_path.read_text(encoding="utf-8")
-    base = f"https://github.com/TinySnow/beancount-budget-tool/blob/{revision}/"
-    for target in ("examples/v6/", "docs/budget-v6-review.md", "docs/v6-implementation-status.md"):
-        legacy = legacy.replace("(" + target, "(" + base + target)
-    legacy_path.write_text(legacy, encoding="utf-8")
     (package / "BUILD-COMMIT.txt").write_text(revision + "\n", encoding="utf-8")
     # Uploading a folder directly drops Unix permissions in Actions artifacts.
     # The binary embeds its libraries; no sibling runtime directories are copied.

@@ -11,8 +11,9 @@ import yaml
 from beancount_budget_tool.console import configure_output
 from beancount_budget_tool.errors import BudgetError, require
 from beancount_budget_tool.financial import load_financial
-from beancount_budget_tool.tools.v6_init import _SetupDumper, _publish, create_setup, compile_setup
-from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
+from beancount_budget_tool.v6.input_compiler import (SetupDumper as _SetupDumper, publish_inputs as _publish, draft_inputs, compile_inputs, read_month_config)
+from copy import deepcopy
+from beancount_budget_tool.financial import month_bounds
 from beancount_budget_tool.v6.facts import FactIndex
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 
@@ -30,9 +31,10 @@ def build_demo(output: Path) -> dict:
                       for name in ("main.bean", "decisions.yaml")})
     ledger = output / "main.bean"
     decisions = yaml.safe_load((output / "decisions.yaml").read_text(encoding="utf-8"))
-    setup = Path(create_setup(ledger, "2026-10", output / "initial",
-        income_purpose="自由资金", expense_purpose="生活费", expense_category="生活开销")["setup"])
-    sheet = yaml.safe_load(setup.read_text(encoding="utf-8"))
+    sheet, issues = draft_inputs(ledger, '2026-10', income_purpose='自由资金',
+                                  expense_purpose='生活费', expense_category='生活开销')
+    sheet['ledger'] = str(ledger)
+    setup = output/'inputs.yaml'
     sheet["defaults"]["confirmed"] = True
     sheet["completeness_confirmed"] = True
     for row in sheet["accounts"]:
@@ -43,9 +45,10 @@ def build_demo(output: Path) -> dict:
     sheet["expense_targets"] = decisions["expense_targets"]
     sheet["allocation_targets"] = decisions["allocation_targets"]
     save(setup, sheet)
-    initial = compile_setup(setup)
-    require(initial.get("config"), "DEMO_SETUP_FAILED", str(initial))
-    config = Path(initial["config"])
+    files, issues = compile_inputs(sheet, setup, output/'initial')
+    require(not issues, 'DEMO_SETUP_FAILED', str(issues))
+    _publish(output/'initial', files)
+    config = output/'initial/month.yaml'
     ownership = yaml.safe_load((config.parent / "ownership.yaml").read_text(encoding="utf-8"))
     owners = {row["name"]: row["id"] for row in ownership["owners"]}
     obligations = yaml.safe_load((config.parent / "obligations.yaml").read_text(encoding="utf-8"))
@@ -72,18 +75,25 @@ def build_demo(output: Path) -> dict:
     configs = {"2026-10": config}
     outcomes = {"2026-10": audit_month_workflow(config)}
     for month in ("2026-11", "2026-12"):
-        directory = output / month
-        create_next_month(config, directory)
-        worksheet = directory / "next-month.yaml"
-        sheet = yaml.safe_load(worksheet.read_text(encoding="utf-8"))
-        sheet.update(targets_confirmed=True, completeness_confirmed=True,
-                     completeness_reason="本公开虚构案例的全部交易均已列出，12 月没有新增交易")
-        save(worksheet, sheet)
-        prepared = compile_next_month(worksheet)
-        require(prepared.get("config"), "DEMO_NEXT_MONTH_FAILED", str(prepared))
-        config = Path(prepared["config"])
+        directory = output/month
+        directory.mkdir()
+        document, paths, _ = read_month_config(config)
+        old_month = document['month']
+        document.update({key:str(path) for key,path in paths.items()})
+        document['month'] = month
+        for key in ('expense_plans','purpose_plans'):
+            plan = yaml.safe_load(paths[key].read_text(encoding='utf-8'))
+            plan.setdefault('months',{})[month] = deepcopy(plan.get('months',{}).get(old_month,{}))
+            path = directory/(key+'.yaml')
+            save(path,plan); document[key] = str(path)
+        complete = directory/'completeness.yaml'
+        save(complete, {'schema':6, 'cutover':document['cutover'], 'as_of':month_bounds(month)[1].isoformat(),
+            'unbooked_obligations':'none', 'inflight_payments':'none','reason':'公开虚拟账本包含全部交易'})
+        document['completeness'] = str(complete)
+        config = directory/'month.yaml'
+        save(config,document)
         configs[month] = config
-        outcomes[month] = prepared["workflow"]
+        outcomes[month] = audit_month_workflow(config)
     for month, outcome in outcomes.items():
         (output / (month + ".txt")).write_text(render_workflow_text(outcome), encoding="utf-8")
         (output / (month + ".json")).write_text(json.dumps(outcome, ensure_ascii=False, indent=2), encoding="utf-8")

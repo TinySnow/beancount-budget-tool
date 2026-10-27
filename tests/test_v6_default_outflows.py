@@ -10,7 +10,7 @@ from beancount.core import data
 import yaml
 
 from beancount_budget_tool.financial import booked_through, load_financial
-from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
+from fixture_inputs import create_setup, compile_setup
 from beancount_budget_tool.v6.default_outflows import audit_default_outflows
 from beancount_budget_tool.v6.facts import FactIndex
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text

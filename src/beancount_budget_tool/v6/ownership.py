@@ -207,6 +207,8 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     for owner in defaults.values()),
                 "OWNERSHIP_DEFAULT_INVALID", "默认收入／支出用途须引用已登记的命名用途",
                 yaml_path_location(declarations, ("defaults",)))
+        require(not liability_rules or budget_owners is not None, 'LIABILITY_MODE_REMOVED',
+                '自动负债只保留逐笔用途；旧整户用途配置须先迁移', str(declarations))
         rules = document.get("transfer_orders", [])
         require(type(rules) is list and (not rules or defaults is not None),
                 "FUND_TRANSFER_ORDER_INVALID", "转出顺序须为列表，并同时配置默认用途以启用库存重放",
@@ -329,7 +331,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 running[coordinate] = reviewed_opening[coordinate]
                 unknown_coordinates.remove(coordinate)
         cash_accounts = {account for account, mode in semantics.items() if mode == "H"}
-        if liability_rules and budget_owners is not None:
+        if liability_rules:
             responsibilities = audit_rule_accounts(fin, facts, cutover, None, liability_rules, cash_accounts,
                 budget_owners=budget_owners)["responsibility_parts"]
         credit_owners = CreditOwners(fin, cutover, liability_rules, defaults, owner_names, responsibilities) if liability_rules else None
@@ -338,8 +340,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
         for entry in fin.entries:
             if not isinstance(entry, data.Transaction) or entry.date < cutover:
                 continue
-            rule_flow = native_rule_flow(fin, entry, liability_rules, cash_accounts,
-                by_budget=budget_owners is not None) if liability_rules else None
+            rule_flow = native_rule_flow(fin, entry, liability_rules, cash_accounts) if liability_rules else None
             h_legs = [posting for posting in entry.postings
                       if semantics.get(posting.account) == "H"]
             if not h_legs:
@@ -566,7 +567,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             if not isinstance(entry, data.Transaction) or entry.date < cutover or not any(
                     p.account in liability_rules and liability_rules[p.account]["role"] == "receivable" for p in entry.postings):
                 continue
-            if native_rule_flow(fin, entry, liability_rules, cash_accounts, by_budget=budget_owners is not None) is None:
+            if native_rule_flow(fin, entry, liability_rules, cash_accounts) is None:
                 continue
             cash_keys = {_key(facts.for_posting(p).as_dict()): p for p in entry.postings if p.account in cash_accounts}
             owned = {id(p): compiled_by_key[key]["slices"] for key, p in cash_keys.items() if key in compiled_by_key}

@@ -7,16 +7,14 @@ Formal sidecar audits and the monthly report must still pass independently.
 
 from __future__ import annotations
 
-import argparse
 from collections import defaultdict
 import json
 from pathlib import Path
-import sys
 
 from beancount.core import data
 import yaml
 
-from beancount_budget_tool.errors import BudgetError, require
+from beancount_budget_tool.errors import require
 from beancount_budget_tool.financial import load_financial
 from beancount_budget_tool.v6.facts import FactIndex
 from beancount_budget_tool.yamlstrict import StrictLoader, load_yaml
@@ -175,51 +173,3 @@ def diagnose(config: Path) -> dict:
             "inline_conflict_count": conflicts,
             "sidecars": reports,
             "note": "仅盘点引用与重复认领；候选不可自动替换。账本版本迁移仍须独立 booked 比对和正式审计。"}
-
-
-def main(argv=None) -> int:
-    from beancount_budget_tool.console import configure_output
-    configure_output()
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--format", choices=("text", "json"), default="text")
-    args = parser.parse_args(argv)
-    try:
-        result = diagnose(args.config)
-    except (BudgetError, OSError, ValueError) as exc:
-        if isinstance(exc, BudgetError):
-            error = {"code": exc.code, "message": exc.message, "source": exc.source}
-        else:
-            error = {"code": "REVIEW_DIAGNOSTIC_INVALID", "message": str(exc)}
-        print(json.dumps({"error": error}, ensure_ascii=False), file=sys.stderr)
-        return 2
-    if args.format == "json":
-        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        print(f"{result['status']}: {result['stale_reference_count']} 条过期引用，"
-              f"{result['loader_mismatch_count']} 份 loader 版本不符，"
-              f"{result['inline_conflict_count']} 条行内与侧文件重复认领")
-        for row in result["sidecars"]:
-            stale = row["stale_references"]
-            conflicts = row["inline_conflicts"]
-            if not stale and not conflicts and row["loader_matches_current"]:
-                continue
-            print(f"{row['field']}: {row['file']} "
-                  f"({len(stale)}/{row['references']} 条引用过期)")
-            if not row["loader_matches_current"]:
-                print(f"  loader {row['declared_loader']} -> {result['loader_version']} 须重验")
-            for item in stale:
-                print(f"  {item['review_source']} {item['document_path']}: "
-                      f"{item['ref'].get('path', '?')} "
-                      f"({item['candidate_count']} 个同文件同事实候选，均未批准)")
-                for hint in item["candidates_not_approved"]:
-                    print(f"    候选来源：{hint['source']}")
-            for item in conflicts:
-                print(f"  {item['review_source']} {item['document_path']}: 与 "
-                      f"{item['ledger_source']} 的行内 {item['metadata']} 重复认领，须逐笔审阅")
-        print(result["note"])
-    return 0 if result["status"] == "REFERENCES_CURRENT" else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -15,7 +15,7 @@ import yaml
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.financial import load_financial
-from beancount_budget_tool.tools.v6_review_source_refs import diagnose
+from beancount_budget_tool.v6.reference_checks import diagnose
 from beancount_budget_tool.v6.actual_snapshot import audit_actual_snapshot
 from beancount_budget_tool.v6.cli import main as audit_cli
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text

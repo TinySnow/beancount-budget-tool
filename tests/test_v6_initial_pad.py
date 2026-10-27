@@ -9,7 +9,7 @@ from beancount.core import data
 import yaml
 
 from beancount_budget_tool.financial import load_financial
-from beancount_budget_tool.tools.v6_init import create_setup, compile_setup, _SetupDumper
+from fixture_inputs import create_setup, compile_setup, SetupDumper as _SetupDumper
 from beancount_budget_tool.v6.initialization import initial_pad_postings
 from beancount_budget_tool.v6.facts import FactIndex
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow

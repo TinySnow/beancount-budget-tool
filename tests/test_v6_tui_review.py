@@ -9,8 +9,8 @@ from unittest.mock import patch
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.tools.v6_init import _SetupDumper, create_setup, compile_setup
-from beancount_budget_tool.tools.v6_review_decisions import apply_review
+from fixture_inputs import SetupDumper as _SetupDumper, create_setup, compile_setup
+from beancount_budget_tool.v6.review import apply_review
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.tui import ReportBrowser, _draw_browser, _read_field, _report_browser, _message
 from beancount_budget_tool.v6.review import prepare_review, save_review, validate_decision

@@ -1,21 +1,14 @@
-"""Export source-bound costed-sale equations without choosing budget or purpose."""
-
-from __future__ import annotations
-
-import argparse
-from datetime import date
-import json
+"""Assemble explicit costed-source fixtures for legacy proof acceptance tests."""
 from pathlib import Path
-
+from datetime import date
 from beancount.core import data
-
 from beancount_budget_tool.financial import load_financial
-from beancount_budget_tool.v6.benefits import audit_economic_benefits, costed_sale_candidate
-from beancount_budget_tool.v6.classification import _key
 from beancount_budget_tool.v6.facts import FactIndex
+from beancount_budget_tool.v6.classification import _key
+from beancount_budget_tool.v6.benefits import audit_economic_benefits, costed_sale_candidate
 
 
-def propose(root: Path, cutover: date, classifications: Path,
+def propose_groups(root: Path, cutover: date, classifications: Path,
             report_currency: str) -> dict:
     benefit_audit = audit_economic_benefits(root, cutover, classifications)
     pending = {_key(row["ref"]) for row in benefit_audit["pending_benefits"]
@@ -45,25 +38,3 @@ def propose(root: Path, cutover: date, classifications: Path,
                                                 for row in benefit_audit["pending_benefits"]),
             "proposals": proposals,
             "note": "只列明成本来源等式；明确模板由程序核对，不批准预算分类、资产用途或支付能力"}
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ledger", type=Path, required=True)
-    parser.add_argument("--cutover", type=date.fromisoformat, required=True)
-    parser.add_argument("--classifications", type=Path, required=True)
-    parser.add_argument("--report-currency", required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    result = propose(args.ledger, args.cutover, args.classifications,
-                     args.report_currency)
-    with args.output.open("x", encoding="utf-8") as stream:
-        json.dump(result, stream, ensure_ascii=False, indent=2, sort_keys=True)
-        stream.write("\n")
-    print(json.dumps({k: v for k, v in result.items() if k != "proposals"},
-                     ensure_ascii=False, sort_keys=True))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

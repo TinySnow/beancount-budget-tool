@@ -46,7 +46,7 @@ class LiabilityRuleTests(unittest.TestCase):
                     "defaults": {"income_purpose": "自由资金", "expense_purpose": "生活费", "expense_category": "生活开销"},
                     "accounts": {"Assets:Bank": {"semantics": "H", "payment_scope": {"CNY": "payable"},
                                                  "opening": {"CNY": {"生活费": "10000"}}}},
-                    "liabilities": {"Liabilities:Card": {"role": "credit_card", "purpose": "生活费"}}}
+                    "liabilities": {"Liabilities:Card": {"role": "credit_card"}}}
         self.budgets = {"schema": 1, "defaults": {"expense_targets": {"生活开销": "20000"}},
                         "months": {month: {"completeness_confirmed": True} for month in ("2026-09", "2026-10", "2026-11")}}
 
@@ -76,7 +76,7 @@ class LiabilityRuleTests(unittest.TestCase):
     def purchase(self, when="2026-09-02", amount="100"):
         return f'{when} * "purchase"\n  Expenses:Food {amount} CNY\n  Liabilities:Card -{amount} CNY\n'
 
-    def payment(self, when="2026-09-03", amount="100", label='    budget: "偿债"\n'):
+    def payment(self, when="2026-09-03", amount="100", label='    budget: "生活费"\n'):
         return f'{when} * "payment"\n  Assets:Bank -{amount} CNY\n  Liabilities:Card {amount} CNY\n' + label
 
     def test_purchase_and_repayment_charge_consumption_once(self):
@@ -86,7 +86,7 @@ class LiabilityRuleTests(unittest.TestCase):
         self.assertEqual(self.outflows(report)["debt_payments"], "100")
         self.assertEqual(self.outflows(report)["expenses_paid"], "0")
         activity = report["liability_activity"]
-        self.assertEqual(activity["budget_totals"], [{"kind": "payment", "category": "偿债", "commodity": "CNY", "signed_liability_units": "100"}])
+        self.assertEqual(activity["budget_totals"], [{"kind": "payment", "category": "生活费", "commodity": "CNY", "signed_liability_units": "100"}])
         self.assertIn("不重复计入消费", render_text(report))
         self.assertTrue(all(e["claim_origin"] == "account_rule" for e in activity["events"]))
         detail = "\n".join(render_transaction(report["transactions"]["rows"][-1], report["owner_names"]))
@@ -108,7 +108,7 @@ class LiabilityRuleTests(unittest.TestCase):
         self.assertEqual(october["actual_spendable"]["booked_debts"], [])
 
     def test_refund_to_card_and_excess_credit_never_manufacture_cash(self):
-        transactions = self.purchase() + '2026-09-04 * "refund"\n  Expenses:Food -120 CNY\n  Liabilities:Card 120 CNY\n    budget: "退款"\n'
+        transactions = self.purchase() + '2026-09-04 * "refund"\n  Expenses:Food -120 CNY\n  Liabilities:Card 120 CNY\n    budget: "生活费"\n'
         report = self.run_ledger(transactions)
         self.assertEqual(self.spent(report), -20)
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "10000")
@@ -123,16 +123,16 @@ class LiabilityRuleTests(unittest.TestCase):
         self.assertEqual([e["kind"] for e in report["liability_activity"]["events"]], ["payment", "consumer_purchase"])
 
     def test_principal_plus_interest_split_by_postings(self):
-        self.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "purpose": "生活费", "due_on": "2026-09-30"}}
+        self.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "due_on": "2026-09-30"}}
         report = self.run_ledger('2026-09-01 * "loan"\n  Assets:Bank 1000 CNY\n  Liabilities:Loan -1000 CNY\n'
-            '2026-09-20 * "repay"\n  Assets:Bank -1010 CNY\n  Liabilities:Loan 1000 CNY\n    budget: "偿债"\n  Expenses:Interest 10 CNY\n')
+            '2026-09-20 * "repay"\n  Assets:Bank -1010 CNY\n  Liabilities:Loan 1000 CNY\n    budget: "生活费"\n  Expenses:Interest 10 CNY\n')
         self.assertEqual(self.spent(report), 10)
         self.assertEqual(self.outflows(report)["expenses_paid"], "10")
         self.assertEqual(self.outflows(report)["debt_payments"], "1000")
         self.assertEqual(self.outflows(report)["gross_outflow"], "1010")
 
     def test_future_bullet_loan_is_disclosed_without_deducting_all_future_principal(self):
-        self.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "purpose": "生活费", "due_on": "2026-10-31"}}
+        self.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "due_on": "2026-10-31"}}
         transactions = '2026-09-01 * "loan"\n  Assets:Bank 1000 CNY\n  Liabilities:Loan -1000 CNY\n'
         september = self.run_ledger(transactions)
         self.assertEqual(september["actual_spendable"]["actual_spendable"], "10000")
@@ -141,16 +141,16 @@ class LiabilityRuleTests(unittest.TestCase):
         self.assertEqual(october["actual_spendable"]["actual_spendable"], "9000")
 
     def test_mixed_own_income_and_money_held_for_others_is_not_consumption(self):
-        self.doc["liabilities"] = {"Liabilities:Colleague": {"role": "payable", "purpose": "生活费"}}
+        self.doc["liabilities"] = {"Liabilities:Colleague": {"role": "payable"}}
         report = self.run_ledger('2026-09-02 * "mixed receipt"\n  Assets:Bank 480 CNY\n    fund: "生活费"\n'
-            '  Income:Work -240 CNY\n  Liabilities:Colleague -240 CNY\n    budget: "代收"\n'
-            '2026-09-03 * "forward"\n  Assets:Bank -240 CNY\n  Liabilities:Colleague 240 CNY\n    budget: "代付"\n')
+            '  Income:Work -240 CNY\n  Liabilities:Colleague -240 CNY\n    budget: "同事差旅费"\n'
+            '2026-09-03 * "forward"\n  Assets:Bank -240 CNY\n  Liabilities:Colleague 240 CNY\n    budget: "同事差旅费"\n')
         self.assertEqual(self.spent(report), 0)
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "10240")
         self.assertEqual(self.outflows(report)["debt_payments"], "240")
 
     def test_many_payables_settle_as_declared_pool_without_matching_equal_receipts(self):
-        self.doc["liabilities"] = {"Liabilities:Colleague": {"role": "payable", "purpose": "生活费"}}
+        self.doc["liabilities"] = {"Liabilities:Colleague": {"role": "payable"}}
         transactions = ''.join(f'2026-09-02 * "receipt {i}"\n  Assets:Bank 260 CNY\n  Liabilities:Colleague -260 CNY\n' for i in range(2))
         transactions += '2026-09-03 * "forward"\n  Assets:Bank -520 CNY\n  Liabilities:Colleague 520 CNY\n'
         report = self.run_ledger(transactions)
@@ -158,7 +158,7 @@ class LiabilityRuleTests(unittest.TestCase):
         self.assertEqual(report["actual_spendable"]["booked_debts"], [])
 
     def test_receivable_reimbursement_restores_original_purpose_not_income_default(self):
-        self.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable", "purpose": "生活费"}}
+        self.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable"}}
         report = self.run_ledger('2026-09-02 * "advance"\n  Assets:Bank -500 CNY\n  Liabilities:Advance 500 CNY\n'
             '2026-09-03 * "reimburse"\n  Assets:Bank 500 CNY\n  Liabilities:Advance -500 CNY\n')
         self.assertEqual(self.spent(report), 0)
@@ -167,23 +167,23 @@ class LiabilityRuleTests(unittest.TestCase):
         self.assertEqual(self.outflows(report)["advance_reimbursements"], "500")
 
     def test_refinancing_does_not_create_consumption_or_payment(self):
-        self.doc["liabilities"]["Liabilities:Colleague"] = {"role": "payable", "purpose": "生活费"}
-        report = self.run_ledger(self.purchase() + '2026-09-03 * "refinance"\n  Liabilities:Card 100 CNY\n  Liabilities:Colleague -100 CNY\n    budget: "借新还旧"\n')
+        self.doc["liabilities"]["Liabilities:Colleague"] = {"role": "payable"}
+        report = self.run_ledger(self.purchase() + '2026-09-03 * "refinance"\n  Liabilities:Card 100 CNY\n  Liabilities:Colleague -100 CNY\n    budget: "生活费"\n')
         self.assertEqual(self.spent(report), 100)
         self.assertEqual(self.outflows(report)["gross_outflow"], "0")
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "9900")
 
     def test_consumer_debt_cannot_be_hidden_as_a_future_nonconsumer_loan(self):
-        self.doc["liabilities"]["Liabilities:Loan"] = {"role": "loan", "purpose": "生活费", "due_on": "2028-01-01"}
+        self.doc["liabilities"]["Liabilities:Loan"] = {"role": "loan", "due_on": "2028-01-01"}
         result = self.run_ledger(self.purchase() + '2026-09-03 * "refinance"\n  Liabilities:Card 100 CNY\n  Liabilities:Loan -100 CNY\n', certified=False)
         self.assertIsNone(result["report"])
         self.assertIn("OBLIGATION_EVENT_UNSUPPORTED", {row["reason_code"] for row in result["review_items"]})
 
     def test_two_cards_share_one_cash_payment_once(self):
-        self.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card", "purpose": "生活费"}
+        self.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card"}
         report = self.run_ledger('2026-09-02 * "two cards"\n  Expenses:Food 300 CNY\n  Liabilities:Card -100 CNY\n'
             '  Liabilities:Colleague -200 CNY\n2026-09-03 * "one payment"\n  Assets:Bank -300 CNY\n'
-            '  Liabilities:Card 100 CNY\n    budget: "偿债"\n  Liabilities:Colleague 200 CNY\n    budget: "偿债"\n')
+            '  Liabilities:Card 100 CNY\n    budget: "生活费"\n  Liabilities:Colleague 200 CNY\n    budget: "生活费"\n')
         self.assertEqual(self.spent(report), 300)
         self.assertEqual(self.outflows(report)["debt_payments"], "300")
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "9700")
@@ -198,8 +198,8 @@ class LiabilityRuleTests(unittest.TestCase):
         self.assertIn("未清已记", render_text(report))
 
     def test_receivable_rule_must_not_reassign_reimbursement_to_a_different_purpose(self):
-        self.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable", "purpose": "储蓄"}}
-        result = self.run_ledger('2026-09-02 * "advance"\n  Assets:Bank -500 CNY\n  Liabilities:Advance 500 CNY\n', certified=False)
+        self.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable"}}
+        result = self.run_ledger('2026-09-02 * "advance"\n  Assets:Bank -500 CNY\n  Liabilities:Advance 500 CNY\n    budget: "储蓄"\n', certified=False)
         self.assertIsNone(result["report"])
         self.assertIn("LIABILITY_RULE_PURPOSE_MISMATCH", {row["reason_code"] for row in result["review_items"]})
 
@@ -220,46 +220,10 @@ class LiabilityRuleTests(unittest.TestCase):
         self.doc.pop("liabilities")
         self.write(self.config, self.doc)
         result = audit_simple(self.config)
-        self.assertIsNone(result["report"])
-        self.assertIn("OBLIGATION_UNCLAIMED", {row["reason_code"] for row in result["review_items"]})
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED")
 
-    def approve_legacy(self):
-        runtime = build_runtime(self.config)
-        self.addCleanup(runtime.close)
-        path = runtime.config.parent / "obligations.yaml"
-        document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        audit = audit_simple_obligations(self.ledger, date(2026, 9, 1), path)
-        owner = next(row["id"] for row in document["owners"] if row["name"] == "生活费")
-        document["events"] = [{"liability_ref": row["liability_ref"], "counterpart_ref": row["counterpart_ref"],
-                                "kind": "consumer_purchase" if row["shape"] == "consumer_purchase" else "payment",
-                                "obligation_id": "legacy_purchase", "reason": "虚拟账本明确批准",
-                                **({"owner_id": owner} if row["shape"] == "consumer_purchase" else {})}
-                               for row in audit["events"]]
-        self.write(path, document)
-        save_snapshot(self.config, runtime.config)
 
-    def test_compatible_legacy_approvals_do_not_double_claim_automatic_pool(self):
-        self.doc.pop("liabilities")
-        self.run_ledger(self.purchase() + self.payment(), certified=False)
-        self.approve_legacy()
-        old = audit_simple(self.config)["report"]
-        self.assertIsNotNone(old)
-        self.doc["liabilities"] = {"Liabilities:Card": {"role": "credit_card", "purpose": "生活费"}}
-        self.write(self.config, self.doc)
-        result = audit_simple(self.config)
-        self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
-        self.assertEqual(result["report"]["actual_spendable"]["actual_spendable"], old["actual_spendable"]["actual_spendable"])
-        self.assertEqual(result["report"]["default_outflows"]["totals"], old["default_outflows"]["totals"])
 
-    def test_automatic_rule_cannot_overwrite_a_previously_approved_purpose(self):
-        self.doc.pop("liabilities")
-        self.run_ledger(self.purchase() + self.payment(), certified=False)
-        self.approve_legacy()
-        self.doc["liabilities"] = {"Liabilities:Card": {"role": "credit_card", "purpose": "储蓄"}}
-        self.write(self.config, self.doc)
-        with self.assertRaises(BudgetError) as error:
-            audit_simple(self.config)
-        self.assertEqual(error.exception.code, "LIABILITY_RULE_OWNER_CONFLICT")
 
     def test_editing_old_amounts_recomputes_pool_instead_of_preserving_an_old_approval(self):
         report = self.run_ledger(self.purchase() + self.payment())
@@ -284,33 +248,33 @@ class LiabilityRuleTests(unittest.TestCase):
         self.run_ledger(self.purchase() + self.payment())
         rows = csv_rows(audit_simple_period(self.config, "2026-09", "2026-09"))
         debt = [r for r in rows if r["section"] == "liability_budget"]
-        self.assertEqual([(r["name"], r["value"]) for r in debt], [("偿债", "100")])
+        self.assertEqual([(r["name"], r["value"]) for r in debt], [("生活费", "100")])
         expense = [r for r in rows if r["section"] == "expense_total" and r["metric"] == "direct_spent"]
         self.assertEqual(expense[0]["value"], "100")
 
     def test_multicategory_liability_budget_validates_total_but_not_as_expense(self):
-        report = self.run_ledger(self.purchase() + self.payment(label='    budget: "偿债.甲60,偿债.乙40"\n'))
+        report = self.run_ledger(self.purchase().replace('Liabilities:Card -100 CNY\n','Liabilities:Card -100 CNY\n    budget: \"偿债.甲60,偿债.乙40\"\n') + self.payment(label='    budget: "偿债.甲60,偿债.乙40"\n'))
         self.assertEqual(self.spent(report), 100)
-        self.assertEqual(len(report["liability_activity"]["budget_totals"]), 2)
+        self.assertEqual({r["category"] for r in report["liability_activity"]["budget_totals"]}, {"偿债.甲", "偿债.乙"})
         invalid = self.run_ledger(self.purchase() + self.payment(label='    budget: "偿债.甲60,偿债.乙39"\n'), certified=False)
         self.assertIsNone(invalid["report"])
         self.assertTrue(all(row["reason_code"] == "TAG_SYNTAX_INVALID" for row in invalid["review_items"]))
         self.assertTrue(all("main.bean:" in row["source"] for row in invalid["review_items"]))
 
-    def test_unconfigured_account_remains_reviewable_not_automatically_net_zero(self):
+    def test_default_liability_account_needs_no_account_rule(self):
         self.doc.pop("liabilities")
         result = self.run_ledger(self.purchase() + self.payment(), certified=False)
-        self.assertIsNone(result["report"])
-        self.assertTrue(any(r["reason_code"] == "OBLIGATION_UNCLAIMED" for r in result["review_items"]))
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED")
+        self.assertEqual(result["review_items"], [])
 
     def test_receivable_cannot_hide_a_payable_by_overreimbursement(self):
-        self.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable", "purpose": "生活费"}}
+        self.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable"}}
         result = self.run_ledger('2026-09-02 * "unexpected receipt"\n  Assets:Bank 500 CNY\n  Liabilities:Advance -500 CNY\n', certified=False)
         self.assertIsNone(result["report"])
         self.assertIn("LIABILITY_RULE_BALANCE_INVALID", {r["reason_code"] for r in result["review_items"]})
 
     def test_loan_requires_due_date_and_reports_config_line(self):
-        self.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "purpose": "生活费"}}
+        self.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan"}}
         with self.assertRaises(BudgetError) as error:
             self.run_ledger('')
         self.assertEqual(error.exception.code, "LIABILITY_RULE_INVALID")

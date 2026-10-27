@@ -9,17 +9,18 @@
 | Windows exe／Mac 从零开始，逐月清理历史账本 | [操作步骤](QUICKSTART.md) |
 | 查询每个配置项、默认值、目标含义 | [配置参考](docs/CONFIGURATION.md) |
 | 清理旧缓存，判断哪些文件必须保留 | [文件与清理](QUICKSTART.md#哪些文件要保留) |
-| 使用旧 month.yaml、分项工具或高级协议 | [旧入口兼容说明](LEGACY-WORKFLOWS.md)、[高级月报](docs/v6-monthly-report.md) |
+| 查询复杂协议和已审状态 | [高级状态](docs/v6-monthly-report.md) |
+| 理解代码结构与本轮删减 | [架构导读](docs/ARCHITECTURE.md) |
 | 参与开发、核对需求 | [开发文档导航](docs/README.md) |
 
-已有旧月报配置，复制迁移一次：
+从零创建两份配置：
 
 ```bash
-python -m beancount_budget_tool configure --from-config budget/2023-07/compiled/month.yaml --output budget/simple
+python -m beancount_budget_tool configure --ledger main.bean --month 2023-07 --output budget/simple
 python -m beancount_budget_tool --config budget/simple/config.yml --month 2023-07 --format tui
 ```
 
-原配置保留。Windows exe 将 `python -m beancount_budget_tool` 换成 PowerShell 的 `& $Exe`。
+创建后按操作步骤填写账户与预算目标；已有旧配置可查[迁移说明](LEGACY-WORKFLOWS.md)。Windows exe 将 `python -m beancount_budget_tool` 换成 PowerShell 的 `& $Exe`。
 
 [Actions 可执行包](https://github.com/TinySnow/beancount-budget-tool/actions/workflows/windows-exe.yml)提供 Windows x64，以及 Mac 的 Apple Silicon（arm64）／Intel（x64）单文件版。Mac 解压 Artifact 后再解压 tar.gz，在终端使用 `./beancount-budget-tool`；可单独移动程序，无需外置 `_internal` 或安装 Python。详见 [Mac 启动说明](packaging/MACOS-START.md)。
 

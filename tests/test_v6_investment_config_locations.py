@@ -13,7 +13,7 @@ from beancount import __version__ as BEANCOUNT_VERSION
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.tools.v6_propose_benefit_groups import propose
+from fixture_benefits import propose_groups as propose
 from beancount_budget_tool.v6.benefits import audit_economic_benefits
 from beancount_budget_tool.v6.classification import audit_classification
 from beancount_budget_tool.v6.cli import main

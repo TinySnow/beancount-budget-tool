@@ -14,10 +14,3 @@ accounts:
     payment_scope: {CNY: payable}
     opening:
       CNY: {生活费: '2000'}
-liabilities:
-  Liabilities:Card:
-    role: credit_card
-    purpose: 生活费
-  Liabilities:Colleague:
-    role: payable
-    purpose: 生活费

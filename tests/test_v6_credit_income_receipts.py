@@ -98,9 +98,9 @@ class CreditIncomeReceiptTests(unittest.TestCase):
         self.assertEqual(result['status'],'IMPLEMENTATION_BLOCKED')
         self.assertIn('LIABILITY_CREDIT_MIXED_UNSUPPORTED',{r['reason_code'] for r in result['review_items']})
 
-    def test_legacy_account_rule_also_handles_proved_income_and_prepaid_return(self):
+    def test_optional_payable_role_handles_proved_income_and_prepaid_return(self):
         self.case.doc.pop('liability_budget_mode')
-        self.case.doc['liabilities']={'Liabilities:Colleague':{'role':'payable','purpose':'生活费'}}
+        self.case.doc['liabilities']={'Liabilities:Colleague':{'role':'payable'}}
         report=self.run_source(self.prepay()+self.receipt())
         self.assertEqual(report['actual_spendable']['actual_spendable'],'10240')
         self.assertEqual(self.case.outflows(report)['credit_returns'],'240')

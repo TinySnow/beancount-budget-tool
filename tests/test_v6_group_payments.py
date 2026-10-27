@@ -13,7 +13,8 @@ from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.obligation_review import prepare_review, save_review
 from beancount_budget_tool.v6.obligations import audit_simple_obligations
 from beancount_budget_tool.v6.simple_config import create_files, audit_simple
-from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
+from fixture_months import ProtocolBrowser
+from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 from beancount_budget_tool.v6.transaction_details import render_transaction
 from beancount_budget_tool.v6.tui import _edit_review
 from test_v6_tui import FakeScreen
@@ -54,7 +55,7 @@ class GroupPaymentTests(unittest.TestCase):
         self.originals = {path: path.read_bytes() for path in [self.ledger, self.simple, Path(result['budgets'])]}
 
     def browser(self):
-        browser = SimpleReportBrowser(self.simple, '2026-09')
+        browser = ProtocolBrowser(self.config)
         self.addCleanup(browser.close)
         browser.refresh()
         return browser
@@ -110,7 +111,7 @@ class GroupPaymentTests(unittest.TestCase):
         self.assertEqual(native_tests.NativeFlowTests.income_total(self), '3000')
         detail = '\n'.join(render_transaction(tx, report['owner_names']))
         self.assertEqual(detail.count('合并付款核对：'), 1)
-        reopened = audit_simple(self.simple, include_transactions=True)
+        reopened = audit_month_workflow(browser.config, include_transactions=True)
         self.assertEqual(reopened['report'], report)
         self.assertTrue(all(path.read_bytes() == raw for path, raw in self.originals.items()))
 

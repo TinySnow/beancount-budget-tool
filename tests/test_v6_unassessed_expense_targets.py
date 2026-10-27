@@ -9,8 +9,8 @@ import unittest
 import yaml
 
 import test_v6_native_flows as native_tests
-from beancount_budget_tool.tools.v6_init import compile_setup, _SetupDumper
-from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
+from fixture_inputs import compile_setup, SetupDumper as _SetupDumper
+from fixture_months import create_next_month, compile_next_month
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.period_report import audit_period, csv_rows, render_text as period_text
 from beancount_budget_tool.v6.salary_cycle import audit_salary_cycle

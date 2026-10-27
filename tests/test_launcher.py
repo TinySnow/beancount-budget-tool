@@ -28,18 +28,18 @@ class LauncherTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 main([])
         self.assertEqual(caught.exception.code, 0)
-        self.assertIn("next-month", output.getvalue())
+        self.assertIn("history", output.getvalue())
+        self.assertNotIn("next-month", output.getvalue())
 
     def test_saved_instructions_use_the_frozen_binary_and_powershell_call_operator(self):
         binary = r"C:\预算 工具\beancount-budget-tool.exe"
         with patch("sys.frozen", True, create=True), patch("sys.executable", binary), patch("sys.platform", "win32"):
             self.assertEqual(command("beancount-budget-tool"), f'& "{binary}"')
-            self.assertEqual(command("beancount-budget-init"), f'& "{binary}" init')
-            self.assertEqual(command("classification-proposals"), f'& "{binary}" classification-proposals')
+            self.assertEqual(command("beancount-budget-configure"), f'& "{binary}" configure')
 
     def test_installed_commands_are_unchanged(self):
         with patch("sys.frozen", False, create=True):
-            self.assertEqual(command("beancount-budget-init"), "beancount-budget-init")
+            self.assertEqual(command("beancount-budget-configure"), "beancount-budget-configure")
 
 
 if __name__ == "__main__":

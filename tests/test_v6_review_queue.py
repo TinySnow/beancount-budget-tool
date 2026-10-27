@@ -15,7 +15,6 @@ from beancount_budget_tool.v6.provenance import asset_opening_fingerprint
 from beancount_budget_tool.v6.purpose_pools import opening_fingerprint
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.review_queue import audit_review_queue, render_text
-from beancount_budget_tool.tools.v6_refresh_review import refresh
 
 
 CUTOVER = date(2026, 9, 1)
@@ -117,29 +116,6 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertEqual(quiet["source_review_state"], "NO_SOURCE_ITEMS")
             self.assertIn("最近已记交易日 2026-08-31", render_text(quiet))
 
-            rules = base / "rules.yaml"
-            rules.write_text(yaml.safe_dump({
-                "schema": 6, "cutover": CUTOVER.isoformat(),
-                "ledger_snapshot": snapshot, "loader_version": BEANCOUNT_VERSION,
-                "categories": [{"id": "food", "name": "餐饮", "parent": None,
-                                "aliases": []}], "rules": [],
-                "expense_default": {"first_date": CUTOVER.isoformat(),
-                                    "last_date": "9999-12-31", "category_id": "food",
-                                    "reason": "approved default"}}, allow_unicode=True),
-                encoding="utf-8")
-            output = base / "new-classifications.yaml"
-            result = refresh(config, rules, date(2026, 10, 1), date(2026, 10, 12), output)
-            self.assertEqual(result["classification_expansion"]["generated_claims"], 1)
-            self.assertEqual(result["classification_expansion"]["still_unreviewed"], 0)
-            self.assertEqual(result["review_queue"]["counts"],
-                             {"asset_ownership": 2, "h_transfer": 1,
-                              "pool_boundary": 1})
-            self.assertTrue(output.is_file())
-            self.assertEqual(yaml.safe_load(classifications.read_text(encoding="utf-8"))
-                             ["classifications"], [])
-            with self.assertRaises(BudgetError) as caught:
-                refresh(config, rules, date(2026, 10, 1), date(2026, 10, 12), output)
-            self.assertEqual(caught.exception.code, "OUTPUT_EXISTS")
 
 
 if __name__ == "__main__":

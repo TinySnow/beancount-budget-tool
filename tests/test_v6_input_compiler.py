@@ -9,11 +9,11 @@ import unittest
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.tools.v6_init import create_setup, compile_setup, main
+from fixture_inputs import create_setup, compile_setup
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
 
 
-class InitTests(unittest.TestCase):
+class InputCompilerTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -136,19 +136,6 @@ class InitTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "SETUP_OUTPUT_EXISTS")
         self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
 
-    def test_cli_json_draft_and_pending_apply(self):
-        output = StringIO()
-        with redirect_stdout(output):
-            code = main(["--ledger", str(self.ledger), "--month", "2026-09",
-                         "--output", str(self.destination), "--format", "json"])
-        self.assertEqual(code, 0)
-        import json
-        self.assertEqual(json.loads(output.getvalue())["status"], "DRAFT_CREATED")
-        output = StringIO()
-        with redirect_stdout(output):
-            code = main(["--apply", str(self.destination / "setup.yaml"), "--format", "json"])
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(output.getvalue())["status"], "NEEDS_REVIEW")
 
     def test_negative_k_opening_stays_book_flow_and_can_reach_report(self):
         source = self.ledger.read_text(encoding="utf-8")
@@ -207,7 +194,7 @@ class InitTests(unittest.TestCase):
         self.assertFalse((self.destination / "compiled").exists())
 
     def test_public_first_month_example_reaches_documented_report(self):
-        example = Path(__file__).resolve().parents[1] / "examples/v6/first-month-setup.yaml"
+        example = Path(__file__).resolve().parents[1] / "tests/fixtures/first-month-setup.yaml"
         result = compile_setup(example, self.base / "public-example")
         outcome = audit_month_workflow(Path(result["config"]))
         self.assertEqual(outcome["status"], "CERTIFIED_SCOPED")

@@ -58,7 +58,7 @@ class LiabilityCornerTests(unittest.TestCase):
     def test_cash_purchase_does_not_trigger_a_pending_credit_return_group(self):
         c = self.case
         c.doc["accounts"]["Assets:Bank"]["opening"]["CNY"] = {"生活费": "9900", "储蓄": "100"}
-        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card", "purpose": "生活费"}
+        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card"}
         report = c.run_ledger('2026-09-02 * "joint mixed prepay"\n  Assets:Bank -100 CNY\n    fund: "生活费60,储蓄40"\n'
             '  Liabilities:Card 50 CNY\n  Liabilities:Colleague 50 CNY\n'
             '2026-09-03 * "purchase not return"\n  Expenses:Food 100 CNY\n  Assets:Bank -50 CNY\n  Liabilities:Card -50 CNY\n')
@@ -102,7 +102,7 @@ class LiabilityCornerTests(unittest.TestCase):
 
     def test_equal_and_opposite_balances_in_different_accounts_never_cancel_debt(self):
         c = self.case
-        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "payable", "purpose": "生活费"}
+        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "payable"}
         report = c.run_ledger(c.purchase() +
             '2026-09-03 * "prepay other creditor"\n  Assets:Bank -100 CNY\n  Liabilities:Colleague 100 CNY\n')
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "9800")
@@ -112,12 +112,12 @@ class LiabilityCornerTests(unittest.TestCase):
     def test_joint_receivable_purposes_are_proved_by_exact_fund_slices(self):
         c = self.case
         c.doc["accounts"]["Assets:Bank"]["opening"]["CNY"] = {"生活费": "9900", "储蓄": "100"}
-        c.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable", "purpose": "生活费"},
-                                "Liabilities:Colleague": {"role": "receivable", "purpose": "储蓄"}}
+        c.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable"},
+                                "Liabilities:Colleague": {"role": "receivable"}}
         report = c.run_ledger('2026-09-02 * "two advances"\n  Assets:Bank -100 CNY\n    fund: "生活费60,储蓄40"\n'
-            '  Liabilities:Advance 60 CNY\n  Liabilities:Colleague 40 CNY\n'
+            '  Liabilities:Advance 60 CNY\n  Liabilities:Colleague 40 CNY\n    budget: "储蓄"\n'
             '2026-09-03 * "two reimbursements"\n  Assets:Bank 100 CNY\n    fund: "生活费60,储蓄40"\n'
-            '  Liabilities:Advance -60 CNY\n  Liabilities:Colleague -40 CNY\n')
+            '  Liabilities:Advance -60 CNY\n  Liabilities:Colleague -40 CNY\n    budget: "储蓄"\n')
         self.assertEqual(c.spent(report), 0)
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "9900")
         self.assertEqual(c.outflows(report)["advances_paid"], "60")
@@ -125,7 +125,7 @@ class LiabilityCornerTests(unittest.TestCase):
 
     def test_future_maturity_loan_becomes_overdue_in_following_month(self):
         c = self.case
-        c.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "purpose": "生活费", "due_on": "2026-10-02"}}
+        c.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "due_on": "2026-10-02"}}
         transactions = '2026-09-02 * "borrow"\n  Assets:Bank 1000 CNY\n  Liabilities:Loan -1000 CNY\n'
         transactions += '2026-10-05 * "partial repayment"\n  Assets:Bank -200 CNY\n  Liabilities:Loan 200 CNY\n'
         september = c.run_ledger(transactions)
@@ -136,17 +136,6 @@ class LiabilityCornerTests(unittest.TestCase):
         self.assertEqual(november["actual_spendable"]["actual_spendable"], "9000")
         self.assertEqual(november["actual_spendable"]["booked_debts"][0]["remaining_native"], "800")
 
-    def test_label_only_change_revalidates_old_manual_approval_instead_of_reusing_it(self):
-        c = self.case
-        c.doc.pop("liabilities")
-        c.run_ledger(c.purchase() + c.payment(), certified=False)
-        c.approve_legacy()
-        body = c.ledger.read_text(encoding="utf-8")
-        body = body.replace('  Liabilities:Card -100 CNY\n', '  Liabilities:Card -100 CNY\n    budget: "卡债"\n')
-        c.ledger.write_text(body, encoding="utf-8")
-        with self.assertRaises(BudgetError) as error:
-            audit_simple(c.config)
-        self.assertEqual(error.exception.code, "OBLIGATION_REF_INVALID")
 
     def test_one_cent_partial_repayments_remain_exact(self):
         c = self.case
@@ -213,7 +202,7 @@ class LiabilityCornerTests(unittest.TestCase):
 
     def test_full_returns_from_two_known_credit_pools_validate_combined_purpose(self):
         c = self.case
-        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card", "purpose": "生活费"}
+        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card"}
         transactions = c.payment(amount="100") + '2026-09-04 * "other prepayment"\n  Assets:Bank -100 CNY\n  Liabilities:Colleague 100 CNY\n'
         report = c.run_ledger(transactions + '2026-09-05 * "joint return"\n  Assets:Bank 200 CNY\n'
             '  Liabilities:Card -100 CNY\n  Liabilities:Colleague -100 CNY\n')
@@ -241,7 +230,7 @@ class LiabilityCornerTests(unittest.TestCase):
     def test_joint_mixed_prepayment_source_is_an_explicit_program_gap_when_returned(self):
         c = self.case
         c.doc["accounts"]["Assets:Bank"]["opening"]["CNY"] = {"生活费": "9900", "储蓄": "100"}
-        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card", "purpose": "生活费"}
+        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card"}
         result = c.run_ledger('2026-09-02 * "mixed joint prepay"\n  Assets:Bank -100 CNY\n    fund: "生活费60,储蓄40"\n'
             '  Liabilities:Card 50 CNY\n  Liabilities:Colleague 50 CNY\n'
             '2026-09-03 * "cannot override source by labeling return"\n  Assets:Bank 100 CNY\n    fund: "储蓄"\n'
@@ -251,7 +240,7 @@ class LiabilityCornerTests(unittest.TestCase):
 
     def test_pure_credit_transfer_keeps_proved_purpose_without_new_income(self):
         c = self.case
-        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card", "purpose": "生活费"}
+        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card"}
         report = c.run_ledger(c.payment(amount="100") + '2026-09-04 * "credit transferred"\n'
             '  Liabilities:Card -100 CNY\n  Liabilities:Colleague 100 CNY\n'
             '2026-09-05 * "return credit"\n  Assets:Bank 100 CNY\n  Liabilities:Colleague -100 CNY\n')
@@ -269,9 +258,9 @@ class LiabilityCornerTests(unittest.TestCase):
     def test_external_approved_cash_purpose_is_used_for_receivable_validation(self):
         c = self.case
         c.doc["accounts"]["Assets:Bank"]["opening"]["CNY"] = {"生活费": "9000", "储蓄": "1000"}
-        c.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable", "purpose": "储蓄"}}
-        c.run_ledger('2026-09-02 * "advance"\n  Assets:Bank -100 CNY\n  Liabilities:Advance 100 CNY\n'
-            '2026-09-03 * "reimburse"\n  Assets:Bank 100 CNY\n  Liabilities:Advance -100 CNY\n', certified=False)
+        c.doc["liabilities"] = {"Liabilities:Advance": {"role": "receivable"}}
+        c.run_ledger('2026-09-02 * "advance"\n  Assets:Bank -100 CNY\n  Liabilities:Advance 100 CNY\n    budget: "储蓄"\n'
+            '2026-09-03 * "reimburse"\n  Assets:Bank 100 CNY\n  Liabilities:Advance -100 CNY\n    budget: "储蓄"\n', certified=False)
         runtime = build_runtime(c.config)
         self.addCleanup(runtime.close)
         ownership = runtime.config.parent / "ownership.yaml"
@@ -312,7 +301,7 @@ class LiabilityCornerTests(unittest.TestCase):
 
     def test_zero_debt_leg_does_not_turn_credit_return_into_new_borrowing(self):
         c = self.case
-        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "payable", "purpose": "生活费"}
+        c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "payable"}
         report = c.run_ledger(c.payment(amount="50") +
             '2026-09-04 * "return with zero leg"\n  Assets:Bank 50 CNY\n  Liabilities:Card -50 CNY\n  Liabilities:Colleague 0 CNY\n')
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "10000")
@@ -321,7 +310,7 @@ class LiabilityCornerTests(unittest.TestCase):
     def test_joint_advance_and_debt_payment_use_known_purpose_constraints(self):
         c = self.case
         c.doc["accounts"]["Assets:Bank"]["opening"]["CNY"] = {"生活费": "9900", "储蓄": "100"}
-        c.doc["liabilities"]["Liabilities:Advance"] = {"role": "receivable", "purpose": "生活费"}
+        c.doc["liabilities"]["Liabilities:Advance"] = {"role": "receivable"}
         report = c.run_ledger(c.purchase(amount="40") +
             '2026-09-03 * "repay and advance"\n  Assets:Bank -100 CNY\n    fund: "生活费60,储蓄40"\n'
             '  Liabilities:Card 40 CNY\n  Liabilities:Advance 60 CNY\n')

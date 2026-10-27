@@ -15,19 +15,19 @@ option "operating_currency" "CNY"
   Expenses:Food 100 CNY
     budget: "生活开销"
   Liabilities:Card -100 CNY
-    budget: "卡债"
+    budget: "生活费"
 
 2026-09-03 * "退回信用卡：冲减消费，不增加银行卡现金"
   Expenses:Food -20 CNY
     budget: "生活开销"
   Liabilities:Card 20 CNY
-    budget: "卡债"
+    budget: "生活费"
 
 2026-09-04 * "还本金80及利息10：仅利息新增消费"
   Assets:Bank -90 CNY
     fund: "生活费"
   Liabilities:Card 80 CNY
-    budget: "偿债"
+    budget: "生活费"
   Expenses:Interest 10 CNY
     budget: "生活开销"
 
@@ -36,10 +36,10 @@ option "operating_currency" "CNY"
     fund: "生活费"
   Income:Work -240 CNY
   Liabilities:Colleague -240 CNY
-    budget: "代收代付"
+    budget: "生活费"
 
 2026-09-06 * "转交同事款项：不计个人消费"
   Assets:Bank -240 CNY
     fund: "生活费"
   Liabilities:Colleague 240 CNY
-    budget: "代收代付"
+    budget: "生活费"

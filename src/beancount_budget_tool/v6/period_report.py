@@ -15,12 +15,12 @@ import sys
 from ..console import configure_output
 from ..errors import BudgetError, require
 from ..exact import exact_text, amount_text as _fmt
-from ..yamlstrict import load_yaml, require_yaml, yaml_key_location
+from ..yamlstrict import load_yaml, yaml_key_location
 from .monthly_report import (
     OPTIONAL, REQUIRED, _config_month, audit_month_workflow, render_workflow_text,
 )
 from .review_diagnostics import IMPLEMENTATION_LIMITS
-from .project import DEFAULT_PROJECT, _metadata, load_project
+from .input_compiler import config_metadata as _metadata, default_config
 from .targets import _month
 
 
@@ -157,30 +157,6 @@ def audit_period(configs: list[Path], since: str | None = None, through: str | N
             "INPUT_CHANGED", "区间运行期间账本、配置或审阅资料发生变化；请重新运行")
     return _combine_months(ordered, months, reports, reviews, snapshots, warnings)
 
-
-def audit_project_period(path: Path, since: str | None = None, through: str | None = None) -> dict:
-    """Select registered months, then freshly audit the exact complete range."""
-    project = load_project(path)
-    require((since is None) == (through is None), "PERIOD_RANGE_INVALID",
-            "--from 和 --through 须同时提供", str(project.path))
-    first = _month(since) if since is not None else min(project.months)
-    last = _month(through) if through is not None else max(project.months)
-    require(first <= last, "PERIOD_MONTHS_INCOMPLETE", "起始月份不能晚于结束月份", str(project.path))
-    ordered = _months(first, last)
-    missing = [month for month in ordered if month not in project.months]
-    require_yaml(not missing, "PERIOD_MONTHS_INCOMPLETE",
-                 f"项目缺少月份：{', '.join(missing)}。请先登记各月配置；缺月不能当作零交易。",
-                 project.path, ("months",))
-    configs = [project.months[month] for month in ordered]
-    before = {config: config.read_bytes() for config in configs}
-    for month, config in zip(ordered, configs):
-        require(_metadata(config) == (month, project.identity), "INPUT_CHANGED",
-                "项目引用的月份或账本范围发生变化；请重新运行", str(config))
-    outcome = audit_period(configs, first, last)
-    require(project.path.read_bytes() == project.original and
-            all(config.read_bytes() == content for config, content in before.items()),
-            "INPUT_CHANGED", "区间运行期间项目或月份入口发生变化；请重新运行", str(project.path))
-    return outcome
 
 
 def _single_month_period(outcome: dict, config: Path) -> dict:
@@ -434,7 +410,6 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="重新审计连续月份，比较月报并导出区间流量")
     inputs = parser.add_mutually_exclusive_group()
     inputs.add_argument("--config", type=Path, action="append", help="每月最新配置，可重复；不能缺月")
-    inputs.add_argument("--project", type=Path, help=f"项目入口；未指定输入时读取当前目录的 {DEFAULT_PROJECT}")
     parser.add_argument("--from", dest="since", help="起始月份 YYYY-MM；须与 --through 一起提供")
     parser.add_argument("--through", help="结束月份 YYYY-MM")
     parser.add_argument("--payday", help="工资周期起点 YYYY-MM-DD（含当天）；配合 --next-payday")
@@ -446,8 +421,14 @@ def main(argv=None) -> int:
     parser.add_argument("--format", choices=("text", "json", "csv"), default="text")
     parser.add_argument("--output", type=Path, help="保存到新文件；CSV 使用 UTF-8 BOM，便于 Windows 打开中文")
     args = parser.parse_args(argv)
-    if not args.config and not args.project and (Path.cwd() / "config.yml").is_file():
-        args.config = [Path.cwd() / "config.yml"]
+    if not args.config:
+        try:
+            chosen = default_config()
+        except BudgetError as exc:
+            parser.error(str(exc))
+        if chosen is None:
+            parser.error("请提供 --config config.yml")
+        args.config = [chosen]
     salary = any(value is not None for value in (args.payday, args.next_payday, args.cycle_budget, args.cycle_category))
     if args.cycle and (salary or args.since or args.through) or args.as_of and not args.cycle:
         parser.error("--cycle／--as-of 不与手填工资周期或自然月区间混用")
@@ -467,16 +448,11 @@ def main(argv=None) -> int:
             text_renderer, csv_renderer = salary_text, salary_csv
         elif salary:
             from .salary_cycle import audit_salary_cycle, select_config, render_text as salary_text, render_csv as salary_csv
-            project = load_project(args.project or Path.cwd() / DEFAULT_PROJECT) if not args.config else None
-            config = select_config(args.config or list(project.months.values()), args.payday, args.next_payday)
-            outcome = audit_salary_cycle(config, args.payday, args.next_payday, args.cycle_budget, args.cycle_category,
-                                         expected_identity=project.identity if project is not None else None)
-            require(project is None or project.path.read_bytes() == project.original,
-                    "INPUT_CHANGED", "工资周期查询期间项目入口发生变化")
+            config = select_config(args.config, args.payday, args.next_payday)
+            outcome = audit_salary_cycle(config, args.payday, args.next_payday, args.cycle_budget, args.cycle_category)
             text_renderer, csv_renderer = salary_text, salary_csv
         else:
-            outcome = (audit_period(args.config, args.since, args.through) if args.config else
-                       audit_project_period(args.project or Path.cwd() / DEFAULT_PROJECT, args.since, args.through))
+            outcome = audit_period(args.config, args.since, args.through)
         content = (text_renderer(outcome) if args.format == "text" else csv_renderer(outcome)
                    if args.format == "csv" else json.dumps(outcome, ensure_ascii=False, indent=2))
         if args.output:

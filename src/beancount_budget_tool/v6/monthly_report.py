@@ -620,8 +620,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="从 config.yml + budgets.yml 生成月报；兼容旧月报配置")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--config", type=Path, help="config.yml 两文件入口，或兼容旧 schema 6 月报配置")
-    source.add_argument("--project", type=Path, help="项目入口；省略输入时读取当前目录 budget-project.yaml")
-    parser.add_argument("--month", help="两文件入口或项目中选择 YYYY-MM；省略时使用配置默认月份")
+    parser.add_argument("--month", help="两文件入口选择 YYYY-MM；省略时使用配置默认月份")
     parser.add_argument("--format", choices=("text", "json", "tui"), default="text")
     parser.add_argument("--watch", action="store_true", help="保存账本、include 或配置后自动重算；支持 text 和 tui")
     parser.add_argument("--transactions", action="store_true", help="已签发时附逐笔来源详情；TUI 自动启用，可按 a 浏览")
@@ -632,8 +631,14 @@ def main(argv=None) -> int:
         parser.error("--watch 支持 text／tui；单次 JSON 请去掉 --watch")
     if args.tui_config and args.format != "tui":
         parser.error("--tui-config 仅用于 --format tui")
-    if not args.config and not args.project and (Path.cwd() / "config.yml").is_file():
-        args.config = Path.cwd() / "config.yml"
+    if not args.config:
+        from .input_compiler import default_config
+        try:
+            args.config = default_config()
+        except BudgetError as exc:
+            parser.error(str(exc))
+    if args.config is None:
+        parser.error("请提供 --config config.yml；日常不再登记月份项目")
     simple = False
     if args.config and args.config.is_file():
         try:
@@ -643,25 +648,9 @@ def main(argv=None) -> int:
             print(str(exc), file=sys.stderr)
             return 2
     if args.month is not None and args.config and not simple:
-        parser.error("--month 用于项目或两文件入口；旧 --config 已经指定月份")
+        parser.error("--month 用于两文件入口；旧 --config 已经指定月份")
     if simple and args.tui_config:
         parser.error("两文件入口用 m／--month 切换月份，不需要 --tui-config")
-    from .project import DEFAULT_PROJECT, load_project
-    project = None
-    if not args.config:
-        project_path = args.project or Path.cwd() / DEFAULT_PROJECT
-        if not args.project and not project_path.is_file():
-            parser.error("请提供 --config 或 --project，或先用 project 命令生成当前目录的 budget-project.yaml")
-        if args.tui_config:
-            parser.error("项目模式使用已登记的月份清单，不同时使用 --tui-config")
-        try:
-            project = load_project(project_path)
-            args.config = project.select(args.month)
-        except (BudgetError, OSError, UnicodeError) as exc:
-            print(json.dumps({"error": {"code": exc.code if isinstance(exc, BudgetError) else "PROJECT_IO_ERROR",
-                "message": exc.message if isinstance(exc, BudgetError) else str(exc),
-                "source": exc.source if isinstance(exc, BudgetError) else str(project_path)}}, ensure_ascii=False), file=sys.stderr)
-            return 2
     if args.format == "tui":
         from functools import partial
         from .tui import run_report_tui
@@ -669,9 +658,6 @@ def main(argv=None) -> int:
             if simple:
                 from .simple_tui import run_simple_tui
                 run_simple_tui(args.config, args.month, **({"watch": True} if args.watch else {}))
-            elif project:
-                run_report_tui(list(project.months.values()), partial(audit_month_workflow, include_transactions=True),
-                               render_workflow_text, project=project, initial_config=args.config, **({"watch": True} if args.watch else {}))
             else:
                 run_report_tui([args.config, *args.tui_config],
                                partial(audit_month_workflow, include_transactions=True), render_workflow_text, **({"watch": True} if args.watch else {}))

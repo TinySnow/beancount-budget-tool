@@ -14,7 +14,7 @@ from beancount_budget_tool.v6.monthly_report import audit_month_workflow, audit_
 from beancount_budget_tool.v6.review_queue import audit_review_queue
 from beancount_budget_tool.v6.targets import load_expense_targets
 from beancount_budget_tool.v6.purpose_targets import load_purpose_targets
-from beancount_budget_tool.tools.v6_init import create_setup, compile_setup
+from fixture_inputs import create_setup, compile_setup
 from beancount_budget_tool.v6.classification import _registry
 from beancount_budget_tool.v6.ownership import _owners
 

@@ -1,6 +1,6 @@
 # 从零开始，逐月核对账本
 
-只需要读本页。字段不清楚时再查[配置参考](docs/CONFIGURATION.md)。旧版的填写表、手工编译和项目登记命令移到了[兼容说明](LEGACY-WORKFLOWS.md)，不再是日常必经步骤。
+只需要读本页。字段不清楚时再查[配置参考](docs/CONFIGURATION.md)。旧版填写表、手工编译和项目登记命令已下线，已有旧配置见[迁移说明](LEGACY-WORKFLOWS.md)。
 
 ## 1. 准备程序和路径
 
@@ -47,7 +47,9 @@ python3 -m venv .venv
 & $Exe configure --ledger "$LedgerDir\main.bean" --month 2023-07 --output "$LedgerDir\budget\simple"
 ```
 
-输出目录须不存在。两种方式只选一种，不用接着运行 init 或 apply。
+普通负债直接在 Liabilities 分录写责任用途 budget；不需要整户 purpose 或 liability_budget_mode 开关。旧纯分类标签须核对后迁移，不能将“偿债”直接当资金用途。
+
+输出目录须不存在。两种方式只选一种，不用填表、编译或登记月份。
 
 ## 3. 确认 config.yml，填写 budgets.yml
 
@@ -58,7 +60,7 @@ python3 -m venv .venv
 - 每个账户的 `semantics` 选 `H`（账本数量代表真实余额）或 `K`（只有累计申赎，不能当持仓）。账户很多时可用[三组简写](docs/CONFIGURATION.md#账户多时按三组填写)，不用反复写相同属性。
 - `payment_scope` 每个币种选 `payable`（可以直接支付）、`excluded`（不能直接支付）；不确定可保留 `null`／`pending`，程序会列待审。
 - cutover 前有余额时，才需要 `opening` 的用途拆分。首次正数 Assets／Equity pad 初始化自动归默认收入用途，不算当月收入或正式划拨。
-- 有信用卡、应付款或单位代垫时，可在 config 顶层填写[负债账户规则](docs/CONFIGURATION.md#普通负债配置一次自动计算)，普通交易自动冲账，不必每笔选择责任 ID、写理由。只有确定该账户是单一用途的清算池才声明，混合往来继续拆分或审阅。Liabilities 可以写可选的 budget 分类；本金与利息用分录区分，还款不会重复计入消费额度。
+- 普通信用卡、应付款直接按 Liabilities 分录的 budget 责任用途自动计算，不用整户 purpose，也不用逐笔选择责任 ID。单位代垫应收、未来到期贷款才补必要的 role／due_on，见[配置参考](docs/CONFIGURATION.md)。本金与利息用分录区分，还款不重复计入消费额度。
 
 打开 `budgets.yml`，按月份填写目标。例如：
 

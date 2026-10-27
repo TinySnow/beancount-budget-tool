@@ -13,7 +13,7 @@ from beancount_budget_tool.v6.input_compiler import read_month_config, month_inp
 from beancount_budget_tool.v6.obligation_review import prepare_review, save_review, validate_decision
 from beancount_budget_tool.v6.obligations import audit_simple_obligations
 from beancount_budget_tool.v6.simple_config import audit_simple
-from beancount_budget_tool.v6.monthly_report import render_text
+from beancount_budget_tool.v6.monthly_report import render_text, audit_month_workflow
 from beancount_budget_tool.v6.transaction_details import render_transaction
 import test_v6_group_payments as grouped
 
@@ -82,8 +82,8 @@ class SameDayClearingTests(unittest.TestCase):
         self.assertEqual(payment['net_allocations'], {})
         self.assertEqual(len(payment['purpose_events']), 1)
         self.assertIn('不确认真实日内先后', '\n'.join(render_transaction(payment, report['owner_names'])))
-        self.assertEqual(audit_simple(self.fixture.simple, include_transactions=True)['report'], report)
-        plain = audit_simple(self.fixture.simple)['report']
+        self.assertEqual(audit_month_workflow(browser.config, include_transactions=True)['report'], report)
+        plain = audit_month_workflow(browser.config)['report']
         self.assertNotIn('transactions', plain)
         self.assertEqual(plain['actual_spendable']['same_day_clearings'], report['actual_spendable']['same_day_clearings'])
         self.assertEqual(self.fixture.ledger.read_bytes(), self.original)

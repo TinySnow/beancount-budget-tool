@@ -14,17 +14,11 @@ dependencies = [
 ]
 
 [project.scripts]
-beancount-budget-tool = "beancount_budget_tool.v6.monthly_report:main"
+beancount-budget-tool = "beancount_budget_tool.launcher:main"
 beancount-budget-report = "beancount_budget_tool.v6.period_report:main"
 beancount-budget-audit = "beancount_budget_tool.v6.cli:main"
-beancount-budget-review-month = "beancount_budget_tool.tools.v6_review_migration_month:main"
-beancount-budget-review-refs = "beancount_budget_tool.tools.v6_review_source_refs:main"
-beancount-budget-review = "beancount_budget_tool.tools.v6_review_decisions:main"
-beancount-budget-next-month = "beancount_budget_tool.tools.v6_next_month:main"
-beancount-budget-init = "beancount_budget_tool.tools.v6_init:main"
 beancount-budget-configure = "beancount_budget_tool.v6.simple_config:main"
 beancount-budget-state = "beancount_budget_tool.v6.state_store:main"
-beancount-budget-project = "beancount_budget_tool.v6.project:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

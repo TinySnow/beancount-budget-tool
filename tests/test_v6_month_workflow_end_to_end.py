@@ -15,7 +15,6 @@ from beancount_budget_tool.v6.monthly_report import (
     audit_month_workflow, main, render_workflow_text,
 )
 from beancount_budget_tool.v6.purpose_pools import opening_fingerprint
-from beancount_budget_tool.tools.v6_review_migration_month import review_month
 from beancount_budget_tool.v6.classification import audit_classification
 from beancount_budget_tool.v6.ownership import audit_ownership
 
@@ -214,15 +213,6 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
                              outcome["report"]["purpose_progress"]["owners"])
             save("purpose-pools.yaml", original_pool)
             ledger.write_text(original_ledger, encoding="utf-8")
-
-            checkpoint = base / "checkpoint" / "main.bean"
-            checkpoint.parent.mkdir()
-            checkpoint.write_bytes(ledger.read_bytes())
-            migrated = review_month(checkpoint, ledger, "2026-10",
-                                    date(2026, 10, 1), base / "month.yaml")
-            self.assertEqual((migrated["status"], migrated["stage"]),
-                             ("CERTIFIED_SCOPED", "report"))
-            self.assertTrue(migrated["structural_check"]["financial_facts_equal"])
 
             config = base / "month.yaml"
             document = yaml.safe_load(config.read_text(encoding="utf-8"))

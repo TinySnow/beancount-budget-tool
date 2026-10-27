@@ -10,9 +10,9 @@ import unittest
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.tools.v6_review_decisions import create_review, apply_review
-from beancount_budget_tool.tools.v6_review_source_refs import diagnose
-from beancount_budget_tool.tools.v6_next_month import create_next_month, compile_next_month
+from beancount_budget_tool.v6.review import create_review, apply_review
+from beancount_budget_tool.v6.reference_checks import diagnose
+from fixture_months import create_next_month, compile_next_month
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 
 

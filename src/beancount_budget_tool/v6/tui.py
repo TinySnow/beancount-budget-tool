@@ -199,19 +199,16 @@ def _review_root(path: Path) -> Path:
 class ReportBrowser:
     """Fresh workflow results and the current configuration for each supplied month."""
 
-    def __init__(self, configs: list[Path], loader: Callable, renderer: Callable, *, project=None,
+    def __init__(self, configs: list[Path], loader: Callable, renderer: Callable, *,
                  initial_config: Path | None = None):
         self.configs = list(dict.fromkeys(path.resolve() for path in configs))
         if not self.configs:
             raise BudgetError("TUI_CONFIG_REQUIRED", "至少提供一份月报配置")
         self.loader, self.renderer = loader, renderer
-        self.project = project
-        self.project_error = None
         # Reopening a saved configuration continues in the same record root;
         # repeated sessions must not grow paths indefinitely on Windows.
         self.review_roots = [_review_root(path) for path in self.configs]
         self.saved = set()
-        self.next_worksheets: dict[Path, Path] = {}
         self.index = self.configs.index(initial_config.resolve()) if initial_config is not None else 0
         self.period = False
         self.period_range: tuple[str, str] | None = None
@@ -239,15 +236,12 @@ class ReportBrowser:
     def refresh(self):
         self.clear()
         try:
-            self.sync_project()
-            project_before = self.project.original if self.project is not None and self.project_error is None else None
             if self.period:
                 from .period_report import audit_period, render_text
                 self.period_inputs = self.period_configs()
                 if self.salary_cycle is not None:
                     from .salary_cycle import audit_salary_cycle, render_text as salary_text
-                    outcome = audit_salary_cycle(self.period_inputs[0], *self.salary_cycle,
-                        expected_identity=self.project.identity if self.project is not None else None)
+                    outcome = audit_salary_cycle(self.period_inputs[0], *self.salary_cycle)
                     renderer = salary_text
                 else:
                     outcome = (audit_period(self.period_inputs, *self.period_range) if self.period_range is not None else
@@ -256,46 +250,11 @@ class ReportBrowser:
             else:
                 outcome = self.loader(self.config)
                 renderer = self.renderer
-            if project_before is not None:
-                require(self.project.path.read_bytes() == project_before, "INPUT_CHANGED",
-                        "计算期间项目入口发生变化；请重新重算", str(self.project.path))
             self._accept_outcome(outcome, renderer)
         except BudgetError as exc:
             self.error = exc
         except (OSError, UnicodeError) as exc:
             self.error = BudgetError("TUI_INPUT_ERROR", str(exc), str(getattr(exc, "filename", None) or self.config))
-
-    def sync_project(self):
-        """Follow external CLI saves, preserving the selected month and local work."""
-        if self.project is None:
-            return
-        from .project import _metadata, load_project
-        latest = load_project(self.project.path)
-        require(latest.identity == self.project.identity, "PROJECT_CONTEXT_CHANGED",
-                "项目的账本／cutover／报告货币已更换；请退出后重新打开项目", str(latest.path))
-        registered = set(self.project.months.values())
-        local = [self.configs[index] for index in self.saved if self.configs[index] not in registered]
-        for path in local:
-            month, _ = _metadata(path)
-            if latest.months.get(month) != path:
-                # A failed project save must not discard an already published
-                # financial config, even when a CLI session changes the manifest.
-                self.project_error = self.project_error or BudgetError(
-                    "PROJECT_LOCAL_SAVE_PENDING", "本次保存的配置尚未登记；请先登记新路径或显式打开它", str(path))
-                return
-        month = next((month for month, path in self.project.months.items() if path == self.config), None)
-        if month is None:
-            month, _ = _metadata(self.config)
-        require(month in latest.months, "PROJECT_MONTH_MISSING",
-                f"当前查看的 {month} 已从项目移除；请退出后重新选择月份", str(latest.path))
-        roots = dict(zip(self.configs, self.review_roots))
-        saved = {self.configs[index] for index in self.saved}
-        configs = list(latest.months.values())
-        self.review_roots = [roots.get(path, _review_root(path)) for path in configs]
-        self.saved = {index for index, path in enumerate(configs) if path in saved}
-        self.next_worksheets = {path: worksheet for path, worksheet in self.next_worksheets.items() if path in configs}
-        self.index = configs.index(latest.months[month])
-        self.configs, self.project, self.project_error = configs, latest, None
 
     def _accept_outcome(self, outcome: dict, renderer: Callable):
         """Display a fresh audit result, including one returned after publication."""
@@ -312,7 +271,6 @@ class ReportBrowser:
         """Keep the published path even if its following audit could not finish."""
         previous = self.config
         self.configs[self.index] = Path(result["config"]).resolve()
-        self.remember_current_config(previous)
         self.saved.add(self.index)
         self.period = False
         self.filter("")
@@ -328,45 +286,20 @@ class ReportBrowser:
         except (OSError, UnicodeError) as exc:
             self.error = BudgetError("TUI_INPUT_ERROR", str(exc), str(self.config))
 
-    def remember_current_config(self, previous: Path):
-        if self.project is None:
-            return
-        try:
-            self.project.remember(self.config, previous)
-            self.project_error = None
-        except (BudgetError, OSError, UnicodeError) as exc:
-            self.project_error = exc
-
-    def project_messages(self) -> list[str]:
-        if self.project_error is None:
-            return []
-        return ["新配置已保存，但项目入口尚未更新；重启前请核对项目文件或显式使用新配置路径。",
-                f"项目入口：{self.project.path}", str(self.project_error)]
-
     def month_choices(self) -> list[tuple[str, Path]]:
-        from .project import _metadata
+        from .input_compiler import config_metadata as _metadata
         return [(_metadata(path)[0], path) for path in self.configs]
 
     def jump_month(self, month: str):
         from .targets import _month
         month = _month(month)
         matches = [index for index, (label, _) in enumerate(self.month_choices()) if label == month]
-        require(bool(matches), "TUI_MONTH_MISSING", f"没有载入 {month}；请先准备该月配置或登记到项目入口")
+        require(bool(matches), "TUI_MONTH_MISSING", f"没有载入 {month}；请使用 config.yml 切月，或载入该月导出的快照")
         require(len(matches) == 1, "TUI_MONTH_DUPLICATE", f"{month} 有多份配置；请保留该月最新入口")
         self.index = matches[0]
         self.period = False
         self.filter("")
         self.clear()
-
-    def show_next_month(self, result: dict):
-        """Retain the current month's latest path, then select its successor."""
-        target = self.index + 1
-        path = Path(result["config"]).resolve()
-        self.configs.insert(target, path)
-        self.review_roots.insert(target, path.parent / "tui-reviews")
-        self.saved = {index + (index >= target) for index in self.saved}
-        self.index = target
-        self.show_saved_month(result)
 
     def switch(self, direction: int) -> bool:
         target = max(0, min(len(self.configs) - 1, self.index + direction))
@@ -418,8 +351,7 @@ class ReportBrowser:
         missing = sorted(set(_months(since, through)) - {month for month, _ in rows})
         require_yaml(not missing, "PERIOD_MONTHS_INCOMPLETE",
                      f"所选区间缺少月份：{', '.join(missing)}。请先载入各月配置；缺月不能当作零交易。",
-                     self.project.path if self.project is not None else self.config,
-                     ("months",) if self.project is not None else ("month",))
+                     self.config, ("month",))
         return [path for _, path in rows]
 
     def period_label(self) -> str:
@@ -617,8 +549,6 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         subtitle = "包含 TUI 已保存的新配置；" + subtitle
     elif browser.index in browser.saved:
         subtitle = "已保存，正使用新配置（? 看完整路径）；" + subtitle
-    if browser.project_error is not None:
-        subtitle = "项目入口未更新（? 看详情）；" + subtitle
     if browser.query:
         subtitle += f"；筛选：{browser.query}"
     listing = browser.outcome is not None and browser.view in {"reviews", "transactions"} and not (
@@ -638,8 +568,6 @@ def _draw_browser(stdscr, browser: ReportBrowser):
                      f"用户配置：{browser.user_config}"]
             if browser.runtime is not None:
                 lines.append(f"预算目标：{browser.runtime.budgets}")
-        if browser.project is not None:
-            lines += [f"项目入口：{browser.project.path}", *browser.project_messages()]
         if browser.period:
             lines += [browser.period_label(), "区间使用的最新配置：", *map(str, browser.period_inputs)]
         subtitle = "帮助；Esc 返回"
@@ -910,11 +838,10 @@ def _edit_review(stdscr, browser: ReportBrowser):
         else:
             previous = browser.config
             browser.configs[browser.index] = Path(result["config"]).resolve()
-            browser.remember_current_config(previous)
             browser.saved.add(browser.index)
             browser.filter("")
             browser.refresh()
-        lines = ["本项决定已保存；当前月份已切换到新配置并重新审计。",
+        lines = ["本项决定已保存；当前月份已切换到新配置并重新审计。", f"本次判断依据：{reason.strip()}",
                  f"以后请使用：{browser.config}", f"审阅记录：{output}"]
         if hasattr(browser, "user_config"):
             from .state_store import state_file
@@ -925,7 +852,7 @@ def _edit_review(stdscr, browser: ReportBrowser):
             lines += ["决定已保存，但月报计算仍有错误：", str(browser.error)]
         else:
             lines += [f"本月状态：{browser.outcome['status']}；待审 {len(browser.outcome.get('review_items', []))} 项。"]
-        _message(stdscr, "已保存审阅决定", [*lines, *browser.project_messages()])
+        _message(stdscr, "已保存审阅决定", lines)
     except (BudgetError, OSError, UnicodeError) as exc:
         # Refresh after a stale source or rejected ownership decision. No old
         # report/detail should survive while the user repairs the input.
@@ -979,71 +906,14 @@ def _export_report(stdscr, browser: ReportBrowser):
 
 
 def _next_month(stdscr, browser: ReportBrowser):
-    from .month_actions import load_next_month, month_workspace, next_month_context, prepare_next_month
-
-    if browser.period or browser.error or browser.help or not browser.outcome:
+    if browser.period or browser.help:
         return
-    if hasattr(browser, "advance_month"):
+    if hasattr(browser, 'advance_month'):
         browser.advance_month()
         _draw_browser(stdscr, browser)
         browser.refresh()
-        return
-    try:
-        month, _ = next_month_context(browser.config, browser.configs)
-        remembered = browser.next_worksheets.get(browser.config)
-        context = [f"当前最新配置：{browser.config}", f"下一月：{month}",
-                   "1：准备填写表。目标只是提议，账户变化及月末完整性都不自动批准。",
-                   "2：载入已填好的 next-month.yaml。沿原 cutover 重放，原月份配置保留。",
-                   "请先用编辑器填写该表；未填完时只列出字段及行号，不生成新月配置。"]
-        default_action = "2" if remembered else "1"
-        action = _read_field(stdscr, "准备／载入下一月", context, f"选择 1 或 2（Enter 采用 {default_action}）：")
-        if action is None:
-            return
-        action = action.strip() or default_action
-        require(action in {"1", "2"}, "TUI_NEXT_MONTH_ACTION_INVALID", "请输入 1（准备）或 2（载入）")
-        if action == "1":
-            suggested = month_workspace(browser.config, browser.review_roots[browser.index]) / (
-                month + datetime.now().strftime("-%Y%m%d-%H%M%S-") + uuid4().hex[:8])
-            destination = _read_field(stdscr, "保存下一月填写表", context, "新的输出目录：", str(suggested))
-            if destination is None:
-                return
-            require(bool(destination.strip()), "TUI_NEXT_MONTH_PATH_INVALID", "请填写新的输出目录")
-            output = Path(destination.strip()).expanduser().resolve()
-            result = prepare_next_month(browser.config, browser.configs, output)
-            browser.next_worksheets[browser.config] = Path(result["worksheet"])
-            lines = [f"填写表：{result['worksheet']}", f"说明：{output / 'START_HERE.md'}",
-                     f"待确认账户／币种 {result['changed_accounts']} 户；本月已记交易 {result['booked_transactions_in_month']} 条。",
-                     "用编辑器填好并保存后，回到这里按 n，选择 2 载入；当前月报仍保留。",
-                     "生成填写表不等于批准目标、月末完整性或签发下一月月报。"]
-            if not result["booked_transactions_in_month"]:
-                lines.append("下一月没有已记交易：请核对账单是否确已导入；零笔不能证明资料完整。")
-            _message(stdscr, "下一月填写表已准备", lines)
-        else:
-            filename = _read_field(stdscr, "载入已填写的下一月表", context, "next-month.yaml 完整路径：", str(remembered or ""))
-            if filename is None:
-                return
-            require(bool(filename.strip()), "TUI_NEXT_MONTH_PATH_INVALID", "请填写 next-month.yaml 路径")
-            worksheet = Path(filename.strip()).expanduser().resolve()
-            result = load_next_month(browser.config, browser.configs, worksheet)
-            browser.next_worksheets[browser.config] = worksheet
-            if not result.get("config"):
-                _message(stdscr, "下一月填写仍待确认", [f"填写表：{worksheet}",
-                    *[f"{item['detail']} [{item['source']}]" for item in result["review_items"]],
-                    "尚未生成下一月配置；填好保存后再次按 n 选择 2。"])
-                return
-            browser.show_next_month(result)
-            lines = [f"下一月配置已保存并载入：{browser.config}",
-                     "按 [ 可返回原月份；重启时请使用这里的新配置路径。"]
-            if browser.error:
-                lines += ["配置已保存，月报计算仍有错误；修正后按 r 重算：", str(browser.error)]
-            else:
-                lines.append(f"{result['month']} 状态：{browser.outcome['status']}；待审 {len(browser.reviews())} 项。")
-                if any(item.get("reason_code") == "EXTERNAL_SCOPE_PENDING" for item in browser.reviews()):
-                    lines.append("月末资料尚未确认；核对该截止日资料后可按 f。")
-            _message(stdscr, "下一月已载入", [*lines, *browser.project_messages()])
-    except (BudgetError, OSError, UnicodeError, ValueError) as exc:
-        browser.refresh()
-        _message(stdscr, "下一月操作未完成", [str(exc), "核对填写表、配置与输出目录后可再次按 n。"])
+    else:
+        _message(stdscr, '使用两文件配置切月', ['请使用 config.yml；按 m／[／] 直接切月，不再创建下一月填写表。'])
 
 
 def _confirm_month_end(stdscr, browser: ReportBrowser):
@@ -1099,7 +969,7 @@ def _confirm_month_end(stdscr, browser: ReportBrowser):
             lines += ["新配置已保存，月报仍未通过：", str(browser.error)]
         else:
             lines += [f"本月状态：{browser.outcome['status']}；待审 {len(browser.reviews())} 项。"]
-        _message(stdscr, "已保存月末核对", [*lines, *browser.project_messages()])
+        _message(stdscr, "已保存月末核对", lines)
     except (BudgetError, OSError, UnicodeError) as exc:
         browser.refresh()
         _message(stdscr, "未保存月末核对", [str(exc), "请重算并重新核对；本次没有批准月末声明。"])
@@ -1155,7 +1025,7 @@ def _inspect_account(stdscr, browser: ReportBrowser, *, history=False):
     if browser.help:
         return
     from .account_queries import query, render_text
-    from .project import _metadata
+    from .input_compiler import config_metadata as _metadata
     from .salary_plan import month_end
     try:
         config = getattr(browser, 'user_config', browser.config)
@@ -1211,10 +1081,11 @@ def _select_salary_cycle(stdscr, browser: ReportBrowser):
                 browser.select_saved_cycle(value.strip())
                 browser.refresh()
             return
-        from .project import _metadata
-        from .month_actions import next_month
+        from .input_compiler import config_metadata as _metadata
         month, _ = _metadata(browser.config)
-        previous = browser.salary_cycle or (month + "-01", next_month(month) + "-01", None, None)
+        year, number = map(int, month.split("-"))
+        following = f"{year + (number == 12):04d}-{number % 12 + 1:02d}"
+        previous = browser.salary_cycle or (month + "-01", following + "-01", None, None)
         context = ["本周期包含本次工资到账日，排除下次工资到账日；当天所有交易均归下一周期。",
                    "请输入真实日期，不按账户名称或固定几号猜工资。",
                    "周期额度单独填写，不复制、累加或按天折算自然月目标；留空只统计消费。",
@@ -1343,12 +1214,12 @@ def _report_browser(stdscr, browser: ReportBrowser):
             setattr(browser, attribute, max(0, value))
 
 
-def run_report_tui(configs: list[Path], loader: Callable, renderer: Callable, *, project=None,
+def run_report_tui(configs: list[Path], loader: Callable, renderer: Callable, *,
                    initial_config: Path | None = None, watch: bool = False) -> None:
     """Run foreground audits on demand; never carry numbers across config files."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise BudgetError("TUI_TERMINAL_REQUIRED", "TUI 需要交互式终端；脚本中请使用 text 或 json")
-    browser = ReportBrowser(configs, loader, renderer, project=project, initial_config=initial_config)
+    browser = ReportBrowser(configs, loader, renderer, initial_config=initial_config)
     browser.watch = watch
     try:
         curses.wrapper(_report_browser, browser)

@@ -13,7 +13,7 @@ import yaml
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.launcher import main
-from beancount_budget_tool.tools.v6_init import compile_setup
+from fixture_inputs import compile_setup
 from beancount_budget_tool.v6.classification import audit_classification
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow, render_workflow_text
 from beancount_budget_tool.v6.ownership import audit_ownership
@@ -25,7 +25,7 @@ class InlineReviewTests(unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name).resolve()
-        examples = Path(__file__).resolve().parents[1] / "examples/v6"
+        examples = Path(__file__).resolve().parent / "fixtures"
         self.ledger = self.base / "九月 流水.bean"
         self.original = (examples / "first-month.bean").read_text(encoding="utf-8")
         self.ledger.write_text(self.original, encoding="utf-8")

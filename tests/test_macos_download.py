@@ -48,8 +48,11 @@ class MacDownloadTests(unittest.TestCase):
             for relative in ('QUICKSTART.md', 'docs/CONFIGURATION.md', 'example/simple/config.yml', 'LICENSE'):
                 self.assertIn(name + '/' + relative, members)
             self.assertFalse(any('.budget-state' in path or 'private-ledger' in path for path in members))
-            legacy = tar.extractfile(name + '/LEGACY-WORKFLOWS.md').read().decode('utf-8')
-            self.assertIn('/blob/' + self.revision + '/examples/v6/', legacy)
+            self.assertIn(name + '/docs/ARCHITECTURE.md', members)
+            notice = tar.extractfile(name + '/LEGACY-WORKFLOWS.md').read().decode('utf-8')
+            self.assertIn('旧操作入口已下线', notice)
+            self.assertNotIn('beancount-budget-init --apply', notice)
+            self.assertNotIn(name + '/example/first-month-setup.yaml', members)
 
     def test_old_bundle_directory_is_rejected_instead_of_shipping_dependencies(self):
         with self.assertRaises(ValueError):

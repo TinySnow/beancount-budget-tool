@@ -6,8 +6,6 @@ import sys
 def command(name: str) -> str:
     """Render runnable worksheet instructions for installed or frozen tools."""
     if not getattr(sys, "frozen", False):
-        if name == "classification-proposals":
-            return "python -m beancount_budget_tool.tools.v6_classification_proposals"
         return name
     action = "" if name == "beancount-budget-tool" else name.removeprefix("beancount-budget-")
     prefix = "& " if sys.platform == "win32" else ""

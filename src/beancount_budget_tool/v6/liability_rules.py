@@ -1,7 +1,7 @@
 """Native liability transaction proofs and cash-credit purpose tracking.
 
-Legacy rules use one responsibility purpose per account/currency. Explicit
-budget_owners delegates responsibility vectors to the posting-budget protocol.
+One responsibility replay is keyed by account, commodity and posting budget.
+Account metadata carries roles and due dates, never a second purpose mode.
 Signed credits remain receivables, never cash; Expenses recognize consumption.
 Unsupported transaction shapes retain their review rather than guessed splits.
 """
@@ -9,7 +9,6 @@ Unsupported transaction shapes retain their review rather than guessed splits.
 from collections import defaultdict
 from datetime import date
 from fractions import Fraction
-from hashlib import sha256
 from types import SimpleNamespace
 
 from beancount.core import data
@@ -48,20 +47,23 @@ def validate_rules(rules, owners, source, *, public=False, liability_root="Liabi
     """Use the same contract for public names and compiled stable owner IDs."""
     prefix = "liabilities" if public else "account_rules"
     require_yaml(type(rules) is dict, "LIABILITY_RULE_INVALID", "负债账户规则须为账户映射", source, (prefix,))
-    field = "purpose" if public else "owner_id"
+    field = "owner_id"
     for account, rule in rules.items():
         keys = (prefix, account)
-        require_yaml(type(account) is str and account.startswith(liability_root + ":") and
-                     type(rule) is dict and {"role", field} <= set(rule) <= {"role", field, "due_on"},
-                     "LIABILITY_RULE_INVALID", "规则须含 role、purpose；仅简单到期贷款另填 due_on", source, keys)
+        if public and type(rule) is dict:
+            require_yaml('purpose' not in rule, 'LIABILITY_MODE_REMOVED',
+                         '整户 purpose 已取消；普通应付款可删除整项，责任用途写在 Liabilities 分录的 budget。贷款／应收只保留 role 和必要的 due_on。',
+                         source, (*keys, 'purpose'))
+        required = {'role'} if public else {'role', field}
+        allowed = required | {'due_on'}
+        require_yaml(type(account) is str and account.startswith(liability_root + ':') and
+                     type(rule) is dict and required <= set(rule) <= allowed,
+                     'LIABILITY_RULE_INVALID', '仅保留财务性质 role 和贷款到期日 due_on；用途由逐笔 budget 决定', source, keys)
         require_yaml(type(rule["role"]) is str and rule["role"] in ROLES,
                      "LIABILITY_RULE_INVALID", "role 须为 credit_card、payable、receivable 或 loan", source, (*keys, "role"))
-        require_yaml(type(rule[field]) is str and rule[field] in owners,
-                     "LIABILITY_RULE_INVALID", "责任用途须为已登记的单一资金用途", source, (*keys, field))
-        if public:
-            name = rule[field]
-            require_yaml(bool(name) and name == name.strip() and name != "-" and not any(c in name for c in "|｜,，;；"),
-                         "LIABILITY_RULE_INVALID", "purpose 须为一个规范的资金用途名称", source, (*keys, field))
+        if not public:
+            require_yaml(type(rule[field]) is str and rule[field] in owners,
+                         'LIABILITY_RULE_INVALID', '默认责任用途须引用已登记用途', source, (*keys, field))
         require_yaml((rule["role"] == "loan") == ("due_on" in rule),
                      "LIABILITY_RULE_INVALID", "loan 须填全部剩余本金的到期日 due_on；分期贷款须另行拆分到期份额", source, keys)
         if "due_on" in rule:
@@ -73,7 +75,7 @@ def validate_rules(rules, owners, source, *, public=False, liability_root="Liabi
     return rules
 
 
-def native_rule_flow(fin, entry, rules, cash_accounts, *, by_budget=False):
+def native_rule_flow(fin, entry, rules, cash_accounts):
     """Recognize a complete exact native equation, never individual leg pairs."""
     if not isinstance(entry, data.Transaction):
         return None
@@ -102,13 +104,12 @@ def native_rule_flow(fin, entry, rules, cash_accounts, *, by_budget=False):
     if assets and negative(debts) and positive(assets) and negative(incomes) and not expenses:
         return "receipt"
     if (not assets and not expenses and not incomes and
-            (by_budget or len({rules[p.account]["owner_id"] for p in debts}) == 1) and
             (roles <= {"credit_card", "payable"} or roles == {"loan"})):
         return "refinance"
     return None
 
 
-def cash_owner_parts(fin, entry, flow, rules, default_owner, posting, responsibilities=None):
+def cash_owner_parts(fin, entry, flow, rules, default_owner, posting, responsibilities):
     """Use public cash defaults independently of the debt's responsibility.
 
     Income and borrowing receipts retain the public income default. Receivable
@@ -121,12 +122,11 @@ def cash_owner_parts(fin, entry, flow, rules, default_owner, posting, responsibi
         return [(default_owner, units)]
     parts = defaultdict(Fraction)
     for debt in debts:
-        if rules[debt.account]["role"] == "receivable" and responsibilities is not None:
+        if rules[debt.account]["role"] == "receivable":
             for owner, amount in responsibilities.get(id(debt), []):
                 parts[owner] -= amount
             continue
-        owner = rules[debt.account]["owner_id"] if rules[debt.account]["role"] == "receivable" else default_owner
-        parts[owner] -= exact(debt.units.number)
+        parts[default_owner] -= exact(debt.units.number)
     for income in entry.postings:
         if income.account.split(":", 1)[0] == fin.options["name_income"]:
             parts[default_owner] -= exact(income.units.number)
@@ -136,13 +136,12 @@ def cash_owner_parts(fin, entry, flow, rules, default_owner, posting, responsibi
     return [(next(iter(parts)), units)] if len(parts) == 1 else None
 
 
-def receivable_cash_matches(fin, entry, rules, owned, responsibilities=None):
+def receivable_cash_matches(fin, entry, rules, owned, responsibilities):
     """Prove the combined owner vector, without assigning whole cash to each debt."""
     needed, cash = defaultdict(Fraction), defaultdict(Fraction)
     debts = [p for p in entry.postings if p.account in rules and rules[p.account]["role"] == "receivable"]
     for debt in debts:
-        for owner, units in (responsibilities.get(id(debt), []) if responsibilities is not None else
-                             [(rules[debt.account]["owner_id"], exact(debt.units.number))]):
+        for owner, units in responsibilities.get(id(debt), []):
             needed[owner] += abs(units)
     for posting in entry.postings:
         if posting.account.split(":", 1)[0] != fin.options["name_assets"]:
@@ -164,7 +163,7 @@ class CreditOwners:
     None means unknown, never an automatic choice of income/default purpose.
     """
 
-    def __init__(self, fin, cutover, rules, defaults, owner_names=None, responsibilities=None):
+    def __init__(self, fin, cutover, rules, defaults, owner_names, responsibilities):
         self.fin, self.rules, self.defaults = fin, rules, defaults
         self.owner_names = owner_names or {}
         self.responsibilities = responsibilities
@@ -188,8 +187,7 @@ class CreditOwners:
         totals, first = defaultdict(Fraction), {}
         for posting in entry.postings:
             if posting.account in self.rules:
-                parts = (self.responsibilities.get(id(posting), []) if self.responsibilities is not None else
-                         [(None, exact(posting.units.number))])
+                parts = self.responsibilities.get(id(posting), [])
                 for owner, units in parts:
                     proxy = SimpleNamespace(account=posting.account, cost=posting.cost, price=posting.price,
                         meta=posting.meta, responsibility_owner=owner,
@@ -432,16 +430,15 @@ def liability_budget(posting, names=None):
 
 
 def audit_rule_accounts(fin, facts, cutover, as_of, rules, cash_accounts, *, before_ref=None,
-                        budget_names=None, budget_owners=None):
-    """Replay declared settlement pools, retaining every source and original order."""
-    signed = defaultdict(Fraction)
-    origins, latest, pools, events = {}, {}, {}, []
-    sources, source_refs = {}, defaultdict(list)
+                        budget_owners):
+    """Build source-bound events, then replay responsibility vectors exactly once."""
+    from .liability_budgets import apply_budget_responsibilities
     transactions = [e for e in fin.entries if isinstance(e, data.Transaction)]
     rules_by_ref = {_key(facts.for_posting(p).as_dict()): rules[p.account]
                     for e in transactions for p in e.postings if p.account in rules}
     before_entry = next((e for e in transactions for p in e.postings
                          if before_ref == _key(facts.for_posting(p).as_dict())), None) if before_ref else None
+    events, opening, seen = [], [], set()
     for entry in transactions:
         if as_of is not None and entry.date > as_of:
             continue
@@ -450,92 +447,42 @@ def audit_rule_accounts(fin, facts, cutover, as_of, rules, cash_accounts, *, bef
         managed = [p for p in entry.postings if p.account in rules]
         if not managed:
             continue
-        flow = native_rule_flow(fin, entry, rules, cash_accounts, by_budget=budget_owners is not None) if entry.date >= cutover else None
-        group_start = len(events)
+        flow = native_rule_flow(fin, entry, rules, cash_accounts) if entry.date >= cutover else None
+        asset_refs = [facts.for_posting(p).as_dict() for p in entry.postings
+                      if p.account.split(':', 1)[0] == fin.options['name_assets']]
         for posting in managed:
             ref = facts.for_posting(posting).as_dict()
-            key = _key(ref)
             coordinate = (posting.account, posting.units.currency, _lot(posting))
             rule = rules[posting.account]
-            pool_id = "account_" + sha256(_key({"coordinate": coordinate, **rule}).encode()).hexdigest()
-            pools[coordinate] = (pool_id, rule)
-            origins.setdefault(coordinate, (ref, entry.date.isoformat()))
-            latest[coordinate] = ref
-            sources[coordinate] = _source(posting.meta or entry.meta)
-            source_refs[coordinate].append(ref)
-            before = signed[coordinate]
-            signed[coordinate] += exact(posting.units.number)
             if entry.date < cutover:
+                if coordinate not in seen:
+                    opening.append({'account': posting.account, 'commodity': posting.units.currency,
+                        'lot': coordinate[2], 'origin': 'account_rule', 'account_role': rule['role'],
+                        'liability_ref': ref, 'kind': 'account_rule',
+                        'reason': '配置声明单一用途清算池，期初余额直接取 cutover 前已记事实；不重算历史消费'})
+                    seen.add(coordinate)
                 continue
-            kind = flow
-            if flow == "payment" and rule["role"] == "receivable":
-                kind = "advance_outflow"
-            elif flow == "receipt":
-                kind = "advance_reimbursement" if rule["role"] == "receivable" else "payable_receipt"
-                if rule["role"] != "receivable" and before > 0 and exact(posting.units.number) < 0:
-                    kind = "credit_return"
-            asset_refs = [facts.for_posting(p).as_dict() for p in entry.postings
-                          if p.account.split(":", 1)[0] == fin.options["name_assets"]]
-            event = {"liability_ref": ref, "counterpart_ref": asset_refs[0] if len(asset_refs) == 1 else None,
-                     "counterpart_refs": [facts.for_posting(p).as_dict() for p in entry.postings if p is not posting],
-                     "asset_refs": asset_refs, "liability_refs": [facts.for_posting(p).as_dict() for p in managed],
-                     "expense_refs": [facts.for_posting(p).as_dict() for p in entry.postings
-                                      if p.account.split(":", 1)[0] == fin.options["name_expenses"]],
-                     "account": posting.account, "commodity": posting.units.currency, "lot": coordinate[2],
-                     "date": entry.date.isoformat(), "signed_units": exact_text(exact(posting.units.number)),
-                     "shape": flow or "unsupported", "kind": kind,
-                     "status": "CERTIFIED" if flow is not None else "UNSUPPORTED",
-                     "reason_codes": [] if flow is not None else ["OBLIGATION_EVENT_UNSUPPORTED"],
-                     "obligation_id": pool_id if rule["role"] != "receivable" else None,
-                     "clearing_id": pool_id if rule["role"] == "receivable" else None,
-                     "owner_id": rule["owner_id"], "claim_origin": "account_rule",
-                     "proof": "configured_liability_account_v1", "account_role": rule["role"],
-                     "transaction_ref": facts.for_transaction(entry).as_dict(),
-                     "review_reason": "config 账户规则：同一账户／币种为单一责任用途的清算池；保留原顺序，消费仅取 Expenses"}
-            if kind == "credit_return":
-                event["credit_return_native"] = exact_text(min(before, -exact(posting.units.number)))
-                if -exact(posting.units.number) > before:
-                    event.update(status="UNSUPPORTED", reason_codes=["LIABILITY_CREDIT_MIXED_UNSUPPORTED"])
-            labels = liability_budget(posting, budget_names)
+            event = {'liability_ref': ref, 'counterpart_ref': asset_refs[0] if len(asset_refs)==1 else None,
+                'counterpart_refs': [facts.for_posting(p).as_dict() for p in entry.postings if p is not posting],
+                'asset_refs': asset_refs, 'liability_refs': [facts.for_posting(p).as_dict() for p in managed],
+                'expense_refs': [facts.for_posting(p).as_dict() for p in entry.postings
+                                 if p.account.split(':', 1)[0]==fin.options['name_expenses']],
+                'account': posting.account, 'commodity': posting.units.currency, 'lot': coordinate[2],
+                'date': entry.date.isoformat(), 'signed_units': exact_text(exact(posting.units.number)),
+                'shape': flow or 'unsupported', 'kind': flow,
+                'status': 'CERTIFIED' if flow is not None else 'UNSUPPORTED',
+                'reason_codes': [] if flow is not None else ['OBLIGATION_EVENT_UNSUPPORTED'],
+                'obligation_id': None, 'clearing_id': None, 'owner_id': rule['owner_id'],
+                'claim_origin': 'account_rule', 'proof': 'configured_liability_account_v1',
+                'account_role': rule['role'], 'transaction_ref': facts.for_transaction(entry).as_dict()}
+            labels = liability_budget(posting, budget_owners)
             if labels is not None:
-                event["budget_slices"] = labels
+                event['budget_slices'] = labels
             events.append(event)
-        group = events[group_start:]
-        kinds = {e["kind"] for e in group if Fraction(e["signed_units"]) != 0}
-        if "credit_return" in kinds and (len(kinds) > 1 or any(
-                p.account.split(":", 1)[0] == fin.options["name_income"] and exact(p.units.number) != 0 for p in entry.postings)):
-            if not certify_credit_income_receipt(fin, entry, group):
-                for event in group:
-                    event.update(status="UNSUPPORTED", reason_codes=["LIABILITY_CREDIT_MIXED_UNSUPPORTED"])
-    debts, advances, pending, opening = [], [], [], []
-    for coordinate, balance in sorted(signed.items()):
-        ident, rule = pools[coordinate]
-        ref, originated = origins[coordinate]
-        account, commodity, lot = coordinate
-        common = {"account": account, "commodity": commodity, "lot": lot,
-                  "origin": "account_rule", "account_role": rule["role"]}
-        if balance < 0:
-            debts.append({**common, "obligation_id": ident, "owner_id": rule["owner_id"],
-                          "remaining_native": exact_text(-balance), "purchase_ref": latest[coordinate],
-                          "purchase_date": None, "source_refs": source_refs[coordinate],
-                          **({"debt_kind": "nonconsumer", "due_on": rule["due_on"]} if rule["role"] == "loan" else {})})
-        elif balance > 0:
-            advances.append({**common, "clearing_id": ident, "remaining_native": exact_text(balance),
-                             "outflow_ref": latest[coordinate]})
-        if rule["role"] == "receivable" and balance < 0 or lot != commodity + "/no-cost":
-            pending.append({**common, "signed_booked_units": exact_text(balance),
-                            "reason_code": "LIABILITY_RULE_BALANCE_INVALID", "origin_source": sources[coordinate]})
-        if originated < cutover.isoformat():
-            opening.append({**common, "liability_ref": ref, "kind": "account_rule",
-                            "reason": "配置声明单一用途清算池，期初余额直接取 cutover 前已记事实；不重算历史消费"})
-    result = {"events": events, "obligations": debts, "clearing_advances": advances,
-            "opening_pending": pending, "opening_declarations": opening, "keys": set(rules_by_ref),
-            "rules_by_ref": rules_by_ref,
-            "before_entry": before_entry}
-    if budget_owners is not None:
-        from .liability_budgets import apply_budget_responsibilities
-        return apply_budget_responsibilities(fin, facts, cutover, rules, budget_owners, result)
-    return result
+    opening.sort(key=lambda row: (row['account'], row['commodity'], row['lot']))
+    result = {'events': events, 'opening_declarations': opening, 'keys': set(rules_by_ref),
+              'rules_by_ref': rules_by_ref, 'before_entry': before_entry}
+    return apply_budget_responsibilities(fin, facts, cutover, rules, budget_owners, result)
 
 
 def activity_report(audit, month):
@@ -548,9 +495,8 @@ def activity_report(audit, month):
     for row in events:
         for part in row.get("budget_slices", []):
             totals[(row["kind"], part["name"], row["commodity"])] += Fraction(part["signed_units"])
-    by_budget = any(event.get("responsibility_protocol") == "posting_liability_budget_v1" for event in events)
     return {"events": events, "budget_totals": [
         {"kind": kind, "category": name, "commodity": currency, "signed_liability_units": exact_text(units)}
         for (kind, name, currency), units in sorted(totals.items(), key=lambda item: str(item[0]))],
-        "note": ("负债 budget 按逐笔用途分配责任，不增加消费；" if by_budget else "负债 budget 只分类债务变动，不增加消费；") +
+        "note": "负债 budget 按逐笔用途分配责任，不增加消费；" +
                 "正数减少负债／增加预付，负数增加负债／减少应收。利息费用取 Expenses。"}

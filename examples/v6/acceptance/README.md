@@ -6,7 +6,7 @@
 python examples/v6/acceptance/run.py --output demo-result
 ```
 
-`demo-result` 必须是新目录。脚本复制本目录的虚构账本，按 `decisions.yaml` 中明确列出的虚构决定，运行首月初始化、责任认领、下一月准备与完整月报。它没有真实账本参数；真实账本要按 QUICKSTART 自行确认事实。
+`demo-result` 必须是新目录。脚本复制本目录的虚构账本，按 `decisions.yaml` 中明确列出的虚构决定，直接构建内部输入和来源声明，核对连续月报；这是开发验收脚本，不是用户需要重复执行的初始化流程。它没有真实账本参数；真实账本要按 QUICKSTART 自行确认事实。
 
 ## 应该看到什么
 
@@ -21,7 +21,7 @@ python examples/v6/acceptance/run.py --output demo-result
 输出目录有每月的 `.txt`、`.json` 和配置文件。命令也会打印每个月的配置路径。继续用这些配置打开 TUI 或重算：
 
 ```sh
-beancount-budget-tool --config demo-result/initial/compiled/month.yaml --format tui --tui-config demo-result/2026-11/compiled/month.yaml --tui-config demo-result/2026-12/compiled/month.yaml
+beancount-budget-tool --config demo-result/initial/month.yaml --format tui --tui-config demo-result/2026-11/month.yaml --tui-config demo-result/2026-12/month.yaml
 ```
 
 `[`／`]` 切月份，`r` 重算，`/` 筛选。签发后按 `a` 看当月交易，再按 Enter 看逐腿分类、资金用途、责任和原始账本；待审时 Enter 仍打开待审详情。
@@ -29,7 +29,7 @@ beancount-budget-tool --config demo-result/initial/compiled/month.yaml --format 
 比较三个月并导出 CSV：
 
 ```sh
-beancount-budget-report --config demo-result/initial/compiled/month.yaml --config demo-result/2026-11/compiled/month.yaml --config demo-result/2026-12/compiled/month.yaml --format csv --output demo-result/quarter.csv
+beancount-budget-report --config demo-result/initial/month.yaml --config demo-result/2026-11/month.yaml --config demo-result/2026-12/month.yaml --format csv --output demo-result/quarter.csv
 ```
 
 区间原支出 2101、退款 760、净消费 1341 CNY；期末最多能花仍是 1160 CNY。月末可花及余额不相加，消费目标与 Q−G 逐月比较。
@@ -59,8 +59,8 @@ beancount-budget-report --config demo-result/initial/compiled/month.yaml --confi
 
 - 例 4 将 `旅游400` 改成 `旅游399`：合计少 1，待审指向该分录行号。
 - 例 5 只改转入一侧为 `电子产品50，储蓄250，旅游300`：总额仍是 600，但两侧用途不等，待审。
-- 删掉例 2 转出分录的 `fund`：Daily 有混合用途，部分转出无法推定，待审填写表可选择来源用途。
+- 删掉例 2 转出分录的 `fund`：Daily 有混合用途，部分转出无法推定，可在 TUI 审阅选择来源用途。
 
 这些情况不返回局部月报。主动划拨导致用途负数会报错，消费导致用途负数则保留已审月报和警告。
 
-`tests/test_v6_acceptance.py` 还验证“导出待审→批准→签发→修改旧交易→定位过期决定→重新审阅→签发下一月→重跑旧月”。它只覆盖此案例中的人民币 H 账户及简单责任；K、证券池、外币和复杂债务仍由各自测试与实施状态界定。
+`tests/test_v6_acceptance.py` 还验证“来源决定保存→签发→修改旧交易→定位过期决定→重新审阅→签发下一月→重跑旧月”。它只覆盖此案例中的人民币 H 账户及简单责任；K、证券池、外币和复杂债务仍由各自测试与实施状态界定。
