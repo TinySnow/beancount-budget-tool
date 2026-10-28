@@ -26,7 +26,7 @@ assert "beancount_budget_tool.v6.ownership" not in sys.modules
 assert "beancount" not in sys.modules
 '''
         result = subprocess.run([sys.executable, "-c", probe], capture_output=True,
-                                text=True, timeout=15)
+                                encoding="utf-8", timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--ownership-audit", result.stdout)
 

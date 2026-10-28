@@ -10,6 +10,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
+import os
 
 import yaml
 from .projection import freeze
@@ -24,8 +25,12 @@ class RuntimeDocument:
 
     @cached_property
     def content(self):
-        return yaml.dump(deepcopy(self.value), Dumper=self.dumper, allow_unicode=True,
-                         sort_keys=False).encode('utf-8')
+        rendered = yaml.dump(deepcopy(self.value), Dumper=self.dumper, allow_unicode=True,
+                             sort_keys=False)
+        # publish_inputs/_write use write_text(newline=None). Match those exact
+        # bytes on Windows too: evidence hashes must not change merely because
+        # a physical reviewed document is now represented in memory.
+        return rendered.replace('\n', os.linesep).encode('utf-8')
 
 
 @contextmanager

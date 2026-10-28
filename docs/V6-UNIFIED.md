@@ -46,6 +46,8 @@
 - macOS arm64真实PyInstaller单文件在Unicode与空格目录、移除源码和Python路径后通过完整`packaging/smoke_executable.py`验收，包含创建/默认启动、来源与状态、月报/工资/区间、CSV不覆盖、负债、H组合转账与赎回、历史/日末、跨平台路径、curses和来源定位。原生PTY另覆盖H失败页`h`诊断、返回后仍失败、日末/历史查询、详情和watch自动重算；CLI历史/日末JSON与源API一致。
 - Windows与macOS x64依赖远程CI构建和平台smoke；本地arm64结果不能代表其他平台真机交互验收。远程CI结果另行记录，不发布未经测试的新版本标签。
 
+首轮推送`8c5fe70`的三平台独立包构建及smoke全部通过，Linux1090项通过。Windows全套发现两处边界：帮助探针使用默认CP1252解码UTF-8输出；内存YAML使用LF而Windows物理发布使用CRLF，迁移后的证据摘要不同。已将探针显式设为UTF-8，并使内存文档字节遵循同平台`write_text(newline=None)`的行尾；新增LF/CRLF逐字节及SHA256对照。原迁移完整报表断言保持严格，未通过忽略摘要掩盖差异。最终平台结果以补强提交的CI记录为准。
+
 ## 明确的输出变化
 
 生成配置文件不再作为公开来源暴露。区间的`months[*].config`改为实际用户`config.yml`；部分过期人工claim诊断也从已经删除的临时`compiled/ownership.yaml:行号`映射到实际用户配置。错误码、错误正文和拒绝行为不变。这是来源展示修正，不修改金额、认领身份或批准内容。

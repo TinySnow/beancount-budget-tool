@@ -2,11 +2,13 @@
 
 from copy import deepcopy
 from datetime import date
+from hashlib import sha256
 import json
 import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import yaml
 from unittest.mock import patch
 
 from beancount import loader
@@ -123,6 +125,20 @@ class QueryArchitectureTests(unittest.TestCase):
         self.assertFalse(input_is_file(path))
         with self.assertRaises(BudgetError):
             load_yaml(path)
+
+    def test_generated_document_bytes_match_materialized_yaml_for_both_line_endings(self):
+        value = {'schema': 6, 'reason': '保留原批准理由', 'values': ['第一行\n第二行', 1]}
+        rendered = yaml.dump(value, Dumper=SetupDumper, allow_unicode=True, sort_keys=False)
+        for ending in ('\n', '\r\n'):
+            with self.subTest(ending=repr(ending)), document_scope(), patch(
+                    'beancount_budget_tool.runtime_inputs.os.linesep', ending):
+                physical = self.folder / 'materialized.yaml'
+                physical.write_text(rendered, encoding='utf-8', newline=ending)
+                directory = self.folder / 'virtual'
+                register_documents(directory, {'review.yaml': value}, SetupDumper)
+                virtual = input_bytes(directory / 'review.yaml')
+                self.assertEqual(virtual, physical.read_bytes())
+                self.assertEqual(sha256(virtual).hexdigest(), sha256(physical.read_bytes()).hexdigest())
 
     def test_public_input_files_are_rechecked_after_internal_document_queries(self):
         path = self.folder / 'actual.yaml'
