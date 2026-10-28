@@ -1,12 +1,14 @@
 """One official booking remains bound to the captured bytes and include graph."""
 
 from pathlib import Path
+from dataclasses import replace
 from tempfile import TemporaryDirectory
 import os
 import unittest
 from unittest.mock import patch
 
 from beancount.core import data
+from beancount import loader
 
 from beancount_budget_tool import financial
 from beancount_budget_tool.errors import BudgetError
@@ -118,6 +120,78 @@ class FinancialCaptureTests(unittest.TestCase):
                 with self.assertRaises(BudgetError) as caught:
                     load_financial(self.root)
                 self.assertEqual(caught.exception.code, "LOADER_ERROR")
+
+    def test_include_guard_rejects_a_capture_that_omits_a_reachable_file(self):
+        original = financial._capture_sources
+
+        def incomplete(root):
+            captured = original(root)
+            # Even mutually agreeing names/options cannot certify a capture
+            # that dropped a file named by the frozen official include syntax.
+            captured.sources.pop(self.child)
+            captured.names.pop(str(self.child))
+            captured.includes.clear()
+            captured.options['include'] = sorted(captured.names)
+            return captured
+
+        with patch.object(financial, '_capture_sources', side_effect=incomplete):
+            self.assert_input_changed(lambda: load_financial(self.root))
+
+    def test_include_guard_rejects_missing_edges_and_unreachable_extra_files(self):
+        fin = load_financial(self.root)
+        self.assert_input_changed(lambda: financial._verify_financial(replace(fin, include_globs={})))
+        extra = self.folder / 'extra.bean'
+        extra.write_text('; unreachable\n', encoding='utf-8')
+        source = financial.SourceFile(extra, extra.read_text(), '')
+        extra_fin = replace(fin, source_names={**fin.source_names, str(extra): extra},
+                            sources={**fin.sources, extra: source})
+        # Give the extra source an honest digest, so reachability is the only
+        # failing property rather than the ordinary file-content check.
+        from hashlib import sha256
+        source = replace(source, sha256=sha256(extra.read_bytes()).hexdigest())
+        extra_fin = replace(extra_fin, sources={**fin.sources, extra: source})
+        self.assert_input_changed(lambda: financial._verify_financial(extra_fin))
+
+    def assert_official_pipeline_equal(self):
+        from beancount_budget_tool.source_snapshot import capture, book
+        expected, errors, options = loader._uncached_load_file(str(self.root), None, None, None)
+        actual, actual_errors, actual_options = book(capture(self.root, financial.SourceFile))
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual_errors, errors)
+        before, after = dict(options), dict(actual_options)
+        self.assertEqual(str(before.pop('dcontext')), str(after.pop('dcontext')))
+        self.assertEqual(after, before)
+
+    def test_official_oracle_for_literal_recursive_duplicate_and_unmatched_includes(self):
+        nested = self.parts / 'nested'
+        nested.mkdir()
+        (nested / 'two.bean').write_text('option "operating_currency" "USD"\n'
+                                        '2026-01-01 open Assets:Other USD\n', encoding='utf-8')
+        for include in ('include "parts/one.bean"\n', 'include "parts/**/*.bean"\n',
+                        'include "parts/one.bean"\ninclude "parts/one.bean"\n',
+                        'include "missing/**/*.bean"\n'):
+            with self.subTest(include=include):
+                self.root.write_text(HEADER + include, encoding='utf-8')
+                self.assert_official_pipeline_equal()
+
+    def test_official_oracle_for_symlink_relative_includes(self):
+        actual = self.folder / 'actual'
+        actual.mkdir()
+        wrapper = actual / 'wrapper.bean'
+        wrapper.write_text('include "one.bean"\n', encoding='utf-8')
+        (actual / 'one.bean').write_text(TX.replace('10 CNY', '99 CNY'), encoding='utf-8')
+        self.symlink(self.parts / 'alias.bean', wrapper)
+        self.root.write_text(HEADER + 'include "parts/alias.bean"\n', encoding='utf-8')
+        self.assert_official_pipeline_equal()
+
+    def test_utf8_header_is_accepted_and_non_utf8_fails_closed(self):
+        self.root.write_text('; -*- coding: utf-8 -*-\n' + HEADER + 'include "parts/one.bean"\n', encoding='utf-8')
+        self.child.write_text(TX.replace('income', '工资'), encoding='utf-8')
+        self.assert_official_pipeline_equal()
+        self.child.write_bytes(TX.replace('income', 'café').encode('cp1252'))
+        with self.assertRaises(BudgetError) as caught:
+            load_financial(self.root)
+        self.assertEqual(caught.exception.code, 'SOURCE_MISSING')
 
     def symlink(self, link, target):
         try:

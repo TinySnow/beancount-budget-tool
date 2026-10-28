@@ -168,13 +168,41 @@ def _capture_sources(root: Path) -> ParsedSnapshot:
     return capture_snapshot(root, SourceFile)
 
 
+def _include_closure_matches(fin: FinancialInput) -> bool:
+    """Reconstruct reachability from frozen official syntax, not loader options.
+
+    The capture's names/options must not attest their own completeness. Walk
+    the original include directives independently and expand current globs;
+    omitted files, omitted edges and unreachable extras all fail closed. This
+    reuses official parser evidence without a second parse or booking pass.
+    """
+    pending, seen, patterns = [str(fin.root)], set(), {}
+    while pending:
+        name = os.path.normpath(pending.pop())
+        if name in seen:
+            continue
+        path = fin.source_names.get(name)
+        if path not in fin.sources:
+            return False
+        seen.add(name)
+        for raw in fin.sources[path]._syntax[1]:
+            pattern = raw if os.path.isabs(raw) else os.path.join(os.path.dirname(name), raw)
+            matches = _glob_matches(pattern)
+            if not matches:
+                return False
+            patterns[pattern] = matches
+            pending.extend(matches)
+    return (seen == set(fin.source_names) and patterns == dict(fin.include_globs) and
+            set(fin.source_names.values()) == set(fin.sources))
+
+
 def _verify_financial(fin: FinancialInput, message: str = "报表运行期间根账本或 include 来源发生变化") -> None:
     """Verify frozen bytes, aliases and glob membership without redoing booking."""
     try:
         unchanged = (all(Path(name).resolve() == path for name, path in fin.source_names.items()) and
                      all(sha256(path.read_bytes()).hexdigest() == source.sha256
                          for path, source in fin.sources.items()) and
-                     all(_glob_matches(pattern) == matches for pattern, matches in fin.include_globs.items()))
+                     _include_closure_matches(fin))
     except OSError:
         unchanged = False
     require(unchanged, "INPUT_CHANGED", message, str(fin.root))
@@ -247,8 +275,6 @@ def _load_financial_uncached(root: Path) -> FinancialInput:
     entries, errors, options = book_snapshot(captured)
     _check_loader_errors(errors, root)
     require(not options.get("plugin"), "PLUGIN_UNSUPPORTED", "首个实现阶段暂不认证外部插件代码", str(root))
-    require(set(options["include"]) == set(names), "INPUT_CHANGED",
-            "加载期间 include 来源集合发生变化", str(root))
     for path, source in sources.items():
         for lineno, line in enumerate(source.lines, 1):
             require(not RESERVED_PUSHMETA.match(line), "META_INJECTION", "禁止用 pushmeta 注入预算保留键", f"{path}:{lineno}")

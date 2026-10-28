@@ -17,7 +17,7 @@ from beancount_budget_tool.financial import booked_through, financial_session, f
 from beancount_budget_tool.identity import canonical_key, identity_scope
 from beancount_budget_tool.projection import freeze, FrozenDict
 from beancount_budget_tool.query import QuerySession
-from beancount_budget_tool.runtime_inputs import document_scope, register_documents, input_bytes, input_is_file
+from beancount_budget_tool.runtime_inputs import document_scope, register_documents, input_bytes, input_is_file, document
 from beancount_budget_tool.v6.facts import FactIndex, frozen_fact_indices
 from beancount_budget_tool.v6.input_compiler import SetupDumper
 from beancount_budget_tool.yamlstrict import load_yaml, yaml_path_location
@@ -111,6 +111,10 @@ class QueryArchitectureTests(unittest.TestCase):
             register_documents(directory, {'config.yaml': {'schema': 6, 'values': [1]}}, SetupDumper)
             self.assertFalse(path.exists())
             self.assertTrue(input_is_file(path))
+            content = input_bytes(path)
+            with self.assertRaises(TypeError):
+                document(path).value['values'].append(999)
+            self.assertEqual(input_bytes(path), content)
             value = load_yaml(path)
             value['values'].append(2)
             self.assertEqual(load_yaml(path)['values'], [1])
@@ -155,3 +159,33 @@ class QueryArchitectureTests(unittest.TestCase):
             self.assertEqual(result['months'][0]['config'], str(config))
         with self.assertRaises(RuntimeError):
             query.period(config)
+
+    def test_query_entry_failure_cleans_up_financial_and_document_contexts(self):
+        from contextlib import contextmanager
+        from beancount_budget_tool import financial, runtime_inputs
+
+        @contextmanager
+        def fail():
+            raise RuntimeError('injected fact-index setup failure')
+            yield
+
+        query = QuerySession()
+        with patch('beancount_budget_tool.v6.facts.frozen_fact_indices', fail):
+            with self.assertRaisesRegex(RuntimeError, 'fact-index setup failure'):
+                query.__enter__()
+        self.assertIsNone(financial._REPORT_INPUTS.get())
+        self.assertIsNone(runtime_inputs._DOCUMENTS.get())
+        self.assertIsNone(query._stack)
+        with query:
+            self.assertIsNotNone(financial._REPORT_INPUTS.get())
+
+    def test_typed_reference_keys_preserve_the_existing_claim_serialization(self):
+        with frozen_financial(self.root) as fin:
+            facts = FactIndex(fin)
+            for entry in fin.entries:
+                if not isinstance(entry, data.Transaction):
+                    continue
+                references = [facts.for_transaction(entry), *(facts.for_posting(p) for p in entry.postings)]
+                for reference in references:
+                    self.assertEqual(reference.as_key(), json.dumps(reference.as_dict(), ensure_ascii=False,
+                                                                   sort_keys=True, separators=(',', ':')))
