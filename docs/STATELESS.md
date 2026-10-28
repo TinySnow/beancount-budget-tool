@@ -71,4 +71,14 @@ TUI的`e`只显示所选待审项的来源及如何修改；`f`只显示月末YA
 
 本地当前验收：1078项完整测试通过（31.96秒）。同一路径的隔离账本在2023-07至2026-09的39个月完整JSON、待审和错误与0a8903c相同；14个月及区间共15份JSON、公开虚拟验收6份输出逐字节相同，859个账本文件清单与摘要不变。该账本原本没有隐藏批准，旧文件忽略及缺少公开声明转待审另外由专门用例验证，不能用结果相同推断旧状态仍会迁入。
 
-本机macOS arm64实际单文件包已验证：e/f只显示指引且输入文件不变；编辑budgets.yml后watch由待审转认证；失败页h保留未签发的诊断语义，组合交易详情和watch重算保持。包内归档不含state_store及旧批准/保存适配模块。远程Windows/Linux测试与三平台包验收待本次提交推送后记录，不能沿用旧提交的绿色状态。
+本机macOS arm64实际单文件包已验证：e/f只显示指引且输入文件不变；编辑budgets.yml后watch由待审转认证；失败页h保留未签发的诊断语义，组合交易详情和watch重算保持。包内归档不含state_store及旧批准/保存适配模块。
+
+最终源码为[`9d13e31`](https://github.com/TinySnow/beancount-budget-tool/commit/9d13e318a00200fdd51d5532e4864bd4d0fb1c8f)，已推送到`codex/v6-implementation`。对应本次源码的远程验收全部通过：
+
+| 验收 | 结果 |
+|---|---|
+| [Windows/Linux完整测试](https://github.com/TinySnow/beancount-budget-tool/actions/runs/40715756108) | 两平台均1078项；Linux41.42秒，Windows251.57秒且预期跳过2项 |
+| [三平台独立包](https://github.com/TinySnow/beancount-budget-tool/actions/runs/40715756121) | Windows x64单文件/目录包、macOS arm64/x64原生包构建与完整smoke通过 |
+| 下载与启动 | macOS解压后脱离源码运行通过；Windows目录包在TEMP/TMP不可用时仍启动 |
+
+独立包smoke包含两文件创建、污染旧记录不生效、旧保存命令退役、完整月报/周期/区间/导出、负债、H组合转账及赎回、历史和日末查询。以上是本次无状态代码的证据，不是历史stateful运行的结果。
