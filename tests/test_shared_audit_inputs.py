@@ -93,12 +93,18 @@ class SharedAuditInputTests(unittest.TestCase):
                 self.audit()
             self.assertEqual(caught.exception.code, 'OWNERSHIP_DECLARATION_INVALID')
 
-    def test_account_overlay_does_not_annotate_the_shared_source_rows(self):
+    def test_account_overlay_rechecks_same_stamp_without_annotating_source_rows(self):
         with QuerySession(), frozen_financial(self.root), \
                 patch.object(accounts, 'asset_opening_fingerprint', wraps=accounts.asset_opening_fingerprint) as fingerprint:
             raw = accounts.audit_accounts(self.root, self.cutover)
             approved = accounts.audit_accounts(self.root, self.cutover, self.accounts)
             self.assertTrue(all('semantics' not in row for row in raw['accounts']))
             self.assertTrue(all(row['semantics'] == 'H' for row in approved['accounts']))
+            self.assertEqual(accounts.audit_accounts(self.root, self.cutover), raw)
+            self.edit_same_stamp(self.accounts, 'CNY: payable', 'CNY: pending')
+            changed = accounts.audit_accounts(self.root, self.cutover, self.accounts)
+            self.assertEqual(changed['review_state'], 'pending')
+            self.assertEqual(len(changed['pending_payment_scope']), 2)
+            self.assertTrue(all(row['payment_scope']['CNY'] == 'payable' for row in approved['accounts']))
             self.assertEqual(accounts.audit_accounts(self.root, self.cutover), raw)
             self.assertEqual(fingerprint.call_count, 1)
