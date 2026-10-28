@@ -209,6 +209,30 @@ class StatelessInputsTests(unittest.TestCase):
                 self.assertFalse(target.exists())
                 path.write_bytes(before)
 
+    def test_custom_category_parent_and_wrong_month_confirmation_cannot_certify_during_migration(self):
+        from test_v6_simple_config import SimpleConfigTests
+        fixture = SimpleConfigTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        for filename, code in (('classifications.yaml', 'classifications.parent'),
+                               ('completeness.yaml', 'completeness.context')):
+            with self.subTest(filename=filename):
+                path = fixture.old.parent / filename
+                before = path.read_bytes()
+                document = yaml.safe_load(before)
+                if filename == 'classifications.yaml':
+                    next(row for row in document['categories'] if row['name'] == '日常开销.餐饮')['parent'] = None
+                else:
+                    document['as_of'] = '2026-10-31'
+                _write(path, document)
+                target = fixture.base / 'invalid-migration'
+                with self.assertRaises(BudgetError) as caught:
+                    create_files(target, old_config=fixture.old)
+                self.assertEqual(caught.exception.code, 'SIMPLE_IMPORT_UNSUPPORTED')
+                self.assertIn(code, caught.exception.message)
+                self.assertFalse(target.exists())
+                path.write_bytes(before)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -473,7 +473,7 @@ def audit_simple_period(config: Path, since=None, through=None):
         return query.period(config, since, through)
 
 
-def _check_import_supported(documents, source):
+def _check_import_supported(documents, source, context):
     """Reject old evidence that the existing public fields cannot express."""
     unsupported = []
     for name, fields in {
@@ -505,9 +505,23 @@ def _check_import_supported(documents, source):
     for name, rows in (('ownership', 'owners'), ('classifications', 'categories')):
         if any(row.get('aliases') for row in documents.get(name, {}).get(rows, [])):
             unsupported.append(name + '.aliases')
+    categories = documents.get('classifications', {}).get('categories', [])
+    names = {row['id']: row['name'] for row in categories}
+    if any(row.get('parent') is not None and row['parent'] not in names or names.get(row.get('parent')) !=
+           (row['name'].rsplit('.', 1)[0] if '.' in row['name'] else None) for row in categories):
+        unsupported.append('classifications.parent')
     statement = documents.get('completeness', {})
     if any(statement.get(key, 'none') != 'none' for key in ('unbooked_obligations', 'inflight_payments')):
         unsupported.append('completeness')
+    if statement:
+        from .salary_plan import month_end
+        fields = {'schema', 'cutover', 'as_of', 'unbooked_obligations', 'inflight_payments', 'reason'}
+        if (not fields <= set(statement) <= fields | {'ledger_snapshot', 'as_of_booked_fingerprint'} or
+                type(statement.get('schema')) is not int or statement['schema'] != 6 or
+                statement.get('cutover') != context['cutover'] or
+                statement.get('as_of') != month_end(context['month']).isoformat() or
+                type(statement.get('reason')) is not str or not statement['reason'].strip()):
+            unsupported.append('completeness.context')
     require(not unsupported, 'SIMPLE_IMPORT_UNSUPPORTED',
             '旧配置含现有两文件字段无法表达的外部证据：' + '、'.join(unsupported) +
             '；不迁入、不丢弃后签发。请明确改账本/现有配置；无法表达的协议暂不支持。', str(source))
@@ -531,7 +545,7 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
             path = config_path(old_config, old[key], key)
             watched[path] = input_bytes(path)
             state[key] = load_yaml(path)
-        _check_import_supported(state, old_config)
+        _check_import_supported(state, old_config, old)
         defaults = state["ownership"].get("defaults")
         require(type(defaults) is dict, "SIMPLE_IMPORT_DEFAULTS",
                 "旧配置没有默认收入／支出用途；请先明确这两个默认名称再迁移", str(old_config))
