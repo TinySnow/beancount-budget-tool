@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import sys
 
+from ..runtime_inputs import input_bytes, input_is_file
 from ..errors import BudgetError, require
 from ..exact import exact_text, amount_text
 from ..financial import booked_through, frozen_financial, load_financial, financial_session
@@ -146,14 +147,14 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
         return (config.parent / value).resolve() if value is not None else None
 
     root = path("ledger")
-    require(root.is_file(), "MONTH_REPORT_CONFIG_INVALID",
+    require(input_is_file(root), "MONTH_REPORT_CONFIG_INVALID",
             "月报配置引用了不存在的根账本", yaml_key_location(config, "ledger"))
     sidecar_keys = (REQUIRED | OPTIONAL) - {"schema", "ledger", "cutover", "month", "report_currency"}
     watched = [config, *(path(key) for key in sidecar_keys if key in document)]
     for key in sidecar_keys & set(document):
-        require(path(key).is_file(), "MONTH_REPORT_CONFIG_INVALID",
+        require(input_is_file(path(key)), "MONTH_REPORT_CONFIG_INVALID",
                 "月报配置引用了不存在的审阅文件", yaml_key_location(config, key))
-    before = {item: sha256(item.read_bytes()).hexdigest() for item in watched}
+    before = {item: sha256(input_bytes(item)).hexdigest() for item in watched}
     accounts, opening, ownership = path("accounts"), path("opening"), path("ownership")
     obligations, h_fx = path("obligations"), path("h_fx")
     with frozen_financial(root), frozen_fact_indices():
@@ -195,7 +196,7 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
             from .transaction_details import project_transactions
             details["transactions"] = project_transactions(load_financial(root), month, expense, purpose, pool,
                 tracking, outflows, owner_names, load_yaml(accounts))
-        require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
+        require(all(input_is_file(item) and sha256(input_bytes(item)).hexdigest() == digest
                     for item, digest in before.items()),
                 "INPUT_CHANGED", "月报运行期间配置或审阅文件发生变化", str(config))
     require(len({actual["ledger_snapshot"], expense["ledger_snapshot"],
@@ -640,7 +641,7 @@ def main(argv=None) -> int:
     if args.config is None:
         parser.error("请提供 --config config.yml；日常不再登记月份项目")
     simple = False
-    if args.config and args.config.is_file():
+    if args.config and input_is_file(args.config):
         try:
             from .simple_config import is_simple
             simple = is_simple(load_yaml(args.config))

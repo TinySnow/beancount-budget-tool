@@ -33,9 +33,7 @@ def audit_classification_valuation(root: Path, cutover: date, classifications: P
     require(report_currency in fin.options.get("operating_currency", []),
             "REPORT_CURRENCY_INVALID", "报告货币须选自账本 operating_currency")
     facts = FactIndex(fin)
-    postings = {_key(facts.for_posting(posting).as_dict()): (posting, entry.date)
-                for entry in fin.entries if isinstance(entry, data.Transaction)
-                for posting in entry.postings}
+    postings = facts.table.postings
     valued = []
     missing = []
     native_totals: dict[tuple[str, str, str, str], Fraction] = {}

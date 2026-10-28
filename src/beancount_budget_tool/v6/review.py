@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from beancount.core import data
 import yaml
 
+from ..runtime_inputs import input_bytes
 from ..errors import BudgetError, require
 from ..exact import exact_text
 from ..yamlstrict import load_yaml, yaml_path_location
@@ -36,11 +37,11 @@ def create_review(config: Path, output: Path, *, expected_inputs: dict[Path, byt
     config, output = config.resolve(), output.resolve()
     check_unchanged(expected_inputs)
     doc, paths, cutover = read_month_config(config)
-    before = {path: path.read_bytes() for path in {config, *paths.values()} if path != paths["ledger"]}
+    before = {path: input_bytes(path) for path in {config, *paths.values()} if path != paths["ledger"]}
     with month_inputs(paths["ledger"], doc["month"], cutover) as (fin, _):
         workflow = audit_month_workflow(config)
         facts = FactIndex(fin)
-        descriptions = {_key(facts.for_posting(p).as_dict()): entry
+        descriptions = {facts.for_posting(p).as_key(): entry
                         for entry in fin.entries if isinstance(entry, data.Transaction)
                         for p in entry.postings}
         rows, other = [], []
@@ -91,7 +92,7 @@ def apply_review(worksheet: Path, output: Path | None = None, *,
     doc, paths, cutover = read_month_config(config)
     require(document["month"] == doc["month"] and document["cutover"] == doc["cutover"],
             "REVIEW_CONTEXT_CHANGED", "原配置月份或 cutover 已变；请重新导出待审表", str(worksheet))
-    before = {path: path.read_bytes() for path in {worksheet, config, *paths.values()} if path != paths["ledger"]}
+    before = {path: input_bytes(path) for path in {worksheet, config, *paths.values()} if path != paths["ledger"]}
     classes, owners = load_yaml(paths["classifications"]), load_yaml(paths["ownership"])
     registries = {"classification": _registry(classes["categories"]),
                   "asset_ownership": _owners(owners["owners"])}
@@ -100,7 +101,7 @@ def apply_review(worksheet: Path, output: Path | None = None, *,
     with month_inputs(paths["ledger"], doc["month"], cutover) as (fin, _):
         current = audit_month_workflow(config)
         facts = FactIndex(fin)
-        descriptions = {_key(facts.for_posting(p).as_dict()): entry
+        descriptions = {facts.for_posting(p).as_key(): entry
                         for entry in fin.entries if isinstance(entry, data.Transaction)
                         for p in entry.postings}
         pending = {(item["kind"], _key(item["ref"])): item for item in current["review_items"]
@@ -200,7 +201,7 @@ def prepare_review(config: Path, item: dict) -> PreparedReview:
             item.get("source"))
     config = config.resolve()
     _, paths, _ = read_month_config(config)
-    inputs = {path: path.read_bytes() for path in {config, *paths.values()} if path != paths["ledger"]}
+    inputs = {path: input_bytes(path) for path in {config, *paths.values()} if path != paths["ledger"]}
     with TemporaryDirectory(prefix="budget-tui-review-") as directory:
         folder = Path(directory) / "draft"
         result = create_review(config, folder)

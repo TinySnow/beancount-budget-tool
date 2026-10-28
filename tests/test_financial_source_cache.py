@@ -1,12 +1,13 @@
 """Browser parse reuse must retain the source and result isolation contracts."""
 
 from datetime import date
+from decimal import Decimal
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
-from beancount.core import data
+from beancount.core import data, amount
 
 from beancount_budget_tool import financial
 from beancount_budget_tool.errors import BudgetError
@@ -45,6 +46,24 @@ class FinancialSourceCacheTests(unittest.TestCase):
             self.assertNotIn("BAD", second.options["operating_currency"])
             self.assertEqual(second._audit_results, {})
             self.assertEqual(len(second.sources), 2)
+
+    def test_balanced_mutation_of_first_return_cannot_poison_cached_postings(self):
+        self.part.write_text('2026-01-01 open Assets:Cash CNY\n'
+                             '2026-01-01 open Income:Pay CNY\n'
+                             '2026-01-02 * "income"\n  Assets:Cash 100 CNY\n  Income:Pay -100 CNY\n',
+                             encoding='utf-8')
+        before = self.part.read_bytes()
+        first = self.load()
+        tx = next(entry for entry in first.entries if isinstance(entry, data.Transaction))
+        tx.postings[0] = tx.postings[0]._replace(units=amount.Amount(Decimal(999), 'CNY'))
+        tx.postings[1] = tx.postings[1]._replace(units=amount.Amount(Decimal(-999), 'CNY'))
+        tx.meta['caller'] = {'mutated': []}
+        second = self.load()
+        fresh = next(entry for entry in second.entries if isinstance(entry, data.Transaction))
+        self.assertEqual([p.units.number for p in fresh.postings], [Decimal(100), Decimal(-100)])
+        self.assertNotIn('caller', fresh.meta)
+        self.assertIsNot(fresh.postings, tx.postings)
+        self.assertEqual(self.part.read_bytes(), before)
 
     def test_same_size_same_mtime_edit_is_reparsed_and_changes_digest(self):
         before = self.load()

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from datetime import date
 from fractions import Fraction
 from pathlib import Path
@@ -40,16 +41,16 @@ def _where(posting: data.Posting) -> str:
 
 
 @shared_audit
-def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) -> dict:
-    """列出全部有直接 posting 的资产账户，并可校验人工声明。
+def _account_inventory(root: Path, cutover: date, facts: FactIndex) -> dict:
+    """Source-only inventory shared by undeclared and declared account audits.
 
-    旧交易级标签不会阻断这个迁移盘点；只有正式 v6 源门槛会拒绝它们。
-    `review_state=complete` 仅表示本阶段账户声明闭合，不是 v6 快照签发。
+    Keep source identities rather than mutable booked postings in this pure
+    projection. Declaration validation and negative-inventory replay remain
+    separate and always run for their own configuration content.
     """
     require(isinstance(cutover, date) and cutover.day == 1,
             "CUTOVER_INVALID", "cutover 必须是自然月第一天")
-    fin = load_financial(root)
-    facts = FactIndex(fin)
+    fin = facts._financial
     asset_root = fin.options["name_assets"]
     future_commodities = defaultdict(set)
     for entry in future_transactions(fin, cutover):
@@ -95,7 +96,7 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
                 state["opening"][(posting.units.currency, _lot(posting))] += units
             else:
                 state["from_cutover"] += 1
-            state["postings"].append((id(entry), entry.date, posting, units))
+            state["postings"].append((id(entry), entry.date, facts.for_posting(posting).as_key(), units))
 
     names = sorted(states)
     rows = []
@@ -119,7 +120,33 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
             "first_source": state["first_source"],
         })
 
-    opening_fingerprint = asset_opening_fingerprint(fin, cutover)
+    for state in states.values():
+        state["opening"] = dict(state["opening"])
+        state["commodity_shape"] = dict(state["commodity_shape"])
+    return {"states": states, "rows": rows, "ledger_snapshot": fin.digest,
+            "future_commodities": dict(future_commodities),
+            "opening_fingerprint": asset_opening_fingerprint(fin, cutover)}
+
+
+@shared_audit
+def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) -> dict:
+    """列出全部有直接 posting 的资产账户，并可校验人工声明。
+
+    旧交易级标签不会阻断这个迁移盘点；只有正式 v6 源门槛会拒绝它们。
+    `review_state=complete` 仅表示本阶段账户声明闭合，不是 v6 快照签发。
+    """
+    require(isinstance(cutover, date) and cutover.day == 1,
+            "CUTOVER_INVALID", "cutover 必须是自然月第一天")
+    fin = load_financial(root)
+    facts = FactIndex(fin)
+    inventory = _account_inventory(root, cutover, facts)
+    require(inventory["ledger_snapshot"] == fin.digest, "INPUT_CHANGED",
+            "账户盘点与账本事实在准备期间发生变化", str(root))
+    states = inventory["states"]
+    rows = deepcopy(inventory["rows"])
+    names = [row["account"] for row in rows]
+    future_commodities = inventory["future_commodities"]
+    opening_fingerprint = inventory["opening_fingerprint"]
     result = {"mode": "v6_account_audit_only", "ledger_snapshot": fin.digest,
               "opening_fingerprint": opening_fingerprint,
               "loader_version": fin.loader_version, "cutover": cutover.isoformat(),
@@ -172,7 +199,7 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
         scope = item["payment_scope"]
         current_commodities = states[account]["commodities"] if account in states else set()
         require(isinstance(scope, dict) and current_commodities <= set(scope) and
-                set(scope) <= current_commodities | future_commodities[account] and
+                set(scope) <= current_commodities | future_commodities.get(account, set()) and
                 all(type(value) is str and value in ("payable", "excluded", "pending") for value in scope.values()),
                 "PAYMENT_SCOPE_INVALID", "当期商品须填写支付范围，额外商品须有未来来源", location)
         require(semantics != "K" or all(value == "excluded" for value in scope.values()),
@@ -236,9 +263,10 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
                                 "SETTLEMENT_OUT_OF_ORDER", "结算入账没有对应的临时负库存", source)
                     running[key] = after
 
-            for tx, day, posting, units in state["postings"]:
+            for tx, day, posting_key, units in state["postings"]:
                 if day < cutover:
                     continue
+                posting, _ = facts.table.postings[posting_key]
                 if current_tx is not None and tx != current_tx:
                     flush()
                     changes.clear()

@@ -1,0 +1,25 @@
+{
+  "kind": "layered",
+  "title": "Budget query architecture",
+  "layers": [
+    {"id": "input_layer", "title": "输入与证据", "items": [
+      {"id": "snapshot", "label": "SourceSnapshot", "detail": "官方解析、完整内容清单、include闭包与最终验证"},
+      {"id": "review_context", "label": "ReviewContext", "detail": "严格配置、已审状态、来源有效性与变更边界"}
+    ]},
+    {"id": "execution_layer", "title": "共享执行层", "items": [
+      {"id": "facts", "label": "FactTable", "detail": "一次建立交易/分录身份、索引和来源位置"},
+      {"id": "engine", "label": "QuerySession", "detail": "显式依赖、只读投影、同快照和截止日隔离"}
+    ]},
+    {"id": "query_layer", "title": "查询与交互", "items": [
+      {"id": "queries", "label": "报告查询", "detail": "月报、区间、发薪周期、账户历史与日末快照"},
+      {"id": "presentation", "label": "输出与审阅", "detail": "CLI/TUI、文本/JSON/CSV、来源解释与原子审阅保存"}
+    ]}
+  ],
+  "flows": [
+    {"from": "snapshot", "to": "facts", "label": "冻结事实"},
+    {"from": "facts", "to": "engine", "label": "结构化身份与索引"},
+    {"from": "review_context", "to": "engine", "label": "可验证输入"},
+    {"from": "engine", "to": "queries", "label": "共享计算"},
+    {"from": "queries", "to": "presentation", "label": "认证结果或完整待审"}
+  ]
+}

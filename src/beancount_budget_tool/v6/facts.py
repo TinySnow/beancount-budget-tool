@@ -11,6 +11,8 @@ from datetime import date
 from contextlib import contextmanager
 from contextvars import ContextVar
 from hashlib import sha256
+from functools import cached_property
+from types import MappingProxyType
 from pathlib import Path
 from typing import Dict, Iterator, Optional, Union
 
@@ -19,6 +21,7 @@ from beancount.core import data
 from ..errors import BudgetError, require
 from ..financial import FinancialInput, reference_financial
 from ..refs import BookedRef, TransactionRef, _fact, _lot
+from ..identity import canonical_key
 
 
 @dataclass(frozen=True)
@@ -30,8 +33,15 @@ class GeneratedTransactionRef:
     generated_ordinal: int
     loader_version: str
 
+    @cached_property
+    def key(self):
+        return canonical_key(self.as_dict())
+
+    def as_key(self):
+        return self.key
+
     def as_dict(self) -> dict:
-        return vars(self).copy()
+        return {key: value for key, value in vars(self).items() if key != 'key'}
 
 
 @dataclass(frozen=True)
@@ -40,6 +50,13 @@ class GeneratedPostingRef:
     posting_ordinal: int
     lot: str
     fact_sha256: str
+
+    @cached_property
+    def key(self):
+        return canonical_key(self.as_dict())
+
+    def as_key(self):
+        return self.key
 
     def as_dict(self) -> dict:
         return {**self.transaction.as_dict(), "posting_ordinal": self.posting_ordinal,
@@ -211,3 +228,28 @@ class FactIndex:
             return self.posting_refs[id(posting)]
         except KeyError as exc:
             raise BudgetError("SOURCE_REF_INVALID", "posting 没有冻结的来源身份") from exc
+
+    @cached_property
+    def table(self):
+        """One join table for this cutoff, backed by shared source identities."""
+        return FactTable(self)
+
+
+class FactTable:
+    def __init__(self, index):
+        self.transactions = tuple(entry for entry in index._financial.entries if isinstance(entry, data.Transaction))
+        self.rows = tuple((entry, posting, index.for_posting(posting))
+                          for entry in self.transactions for posting in entry.postings)
+
+    @cached_property
+    def sources(self):
+        return MappingProxyType({reference.as_key(): f"{(posting.meta or entry.meta).get('filename', '?')}:{(posting.meta or entry.meta).get('lineno', '?')}"
+                                 for entry, posting, reference in self.rows})
+
+    @cached_property
+    def dates(self):
+        return MappingProxyType({reference.as_key(): entry.date for entry, posting, reference in self.rows})
+
+    @cached_property
+    def postings(self):
+        return MappingProxyType({reference.as_key(): (posting, entry.date) for entry, posting, reference in self.rows})

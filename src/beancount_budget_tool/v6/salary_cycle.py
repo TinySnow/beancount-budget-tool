@@ -9,6 +9,7 @@ import re
 
 from beancount.core import data
 
+from ..runtime_inputs import input_bytes, input_is_file
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text, amount_text
 from ..financial import booked_through, frozen_financial
@@ -100,7 +101,7 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
             require(ident in names.values(), "SALARY_CYCLE_CATEGORY_INVALID",
                     "请用 --cycle-category 指定已登记消费类别，或配置消费上限类别", str(paths["expense_plans"]))
             facts = FactIndex(fin)
-            sources = {_key(facts.for_posting(p).as_dict()): (e, p) for e in fin.entries
+            sources = {facts.for_posting(p).as_key(): (e, p) for e in fin.entries
                        if isinstance(e, data.Transaction) for p in e.postings}
             valuation = audit_classification_valuation(paths["ledger"], cutover, paths["classifications"],
                                                         document["report_currency"])
@@ -156,7 +157,7 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
         if any(row["reason_kind"] == "implementation_limit" for row in result["review_items"]):
             result["status"] = "IMPLEMENTATION_BLOCKED"
     from hashlib import sha256
-    require(all(path.is_file() and sha256(path.read_bytes()).hexdigest() == digest
+    require(all(input_is_file(path) and sha256(input_bytes(path)).hexdigest() == digest
                 for path, digest in watched.items()), "INPUT_CHANGED", "周期查询期间配置或审阅资料发生变化")
     return result
 

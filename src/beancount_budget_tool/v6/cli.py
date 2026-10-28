@@ -7,32 +7,6 @@ from pathlib import Path
 import sys
 
 from ..errors import BudgetError, require
-from ..financial import load_financial
-from ..yamlstrict import load_yaml
-from .accounts import audit_accounts
-from .actual_snapshot import audit_actual_snapshot
-from .benefits import audit_economic_benefits
-from .classification import audit_classification
-from .facts import FactIndex
-from .holdings import audit_h_holdings
-from .h_gains import audit_h_income_gains
-from .h_fx import audit_h_fx
-from .h_transfers import audit_h_transfers
-from .k_events import audit_k_events
-from .liabilities import audit_liabilities
-from .obligations import audit_simple_obligations
-from .opening import audit_opening
-from .ownership import _owners, audit_ownership
-from .payable_cash import audit_payable_cash
-from .purpose_flows import audit_monthly_purpose_flows
-from .purpose_pools import audit_purpose_pools
-from .purpose_progress import audit_monthly_purpose_progress
-from .purpose_targets import load_purpose_targets
-from .source import scan_v6_source
-from .spending import audit_monthly_spending
-from .targets import audit_monthly_expense_targets
-from .valuation import audit_classification_valuation
-from beancount.core import data
 
 
 def main(argv=None) -> int:
@@ -81,6 +55,34 @@ def main(argv=None) -> int:
     parser.add_argument("--month", help="月度费用、消费目标或用途目标／净划拨审计的 YYYY-MM 月份")
     parser.add_argument("--as-of", help="持有、责任或可支付现金审计的 YYYY-MM-DD 日末")
     args = parser.parse_args(argv)
+    # Help/argument errors do not need the financial engine. Keep the real
+    # audit path unchanged and import it only after argparse accepts a request.
+    from ..financial import load_financial
+    from ..yamlstrict import load_yaml
+    from .accounts import audit_accounts
+    from .actual_snapshot import audit_actual_snapshot
+    from .benefits import audit_economic_benefits
+    from .classification import audit_classification
+    from .facts import FactIndex
+    from .holdings import audit_h_holdings
+    from .h_gains import audit_h_income_gains
+    from .h_fx import audit_h_fx
+    from .h_transfers import audit_h_transfers
+    from .k_events import audit_k_events
+    from .liabilities import audit_liabilities
+    from .obligations import audit_simple_obligations
+    from .opening import audit_opening
+    from .ownership import _owners, audit_ownership
+    from .payable_cash import audit_payable_cash
+    from .purpose_flows import audit_monthly_purpose_flows
+    from .purpose_pools import audit_purpose_pools
+    from .purpose_progress import audit_monthly_purpose_progress
+    from .purpose_targets import load_purpose_targets
+    from .source import scan_v6_source
+    from .spending import audit_monthly_spending
+    from .targets import audit_monthly_expense_targets
+    from .valuation import audit_classification_valuation
+    from beancount.core import data
     if sum((args.account_audit, args.facts_audit, args.opening_audit,
             args.liability_audit, args.obligation_audit, args.classification_audit, args.valuation_audit,
             args.benefit_audit, args.spending_audit, args.ownership_audit,

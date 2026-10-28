@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 
 from ..console import configure_output
+from ..runtime_inputs import input_bytes, input_is_file
 from ..errors import BudgetError, require
 from ..exact import exact_text, amount_text as _fmt
 from ..yamlstrict import load_yaml, yaml_key_location
@@ -46,9 +47,9 @@ def _inputs(configs: list[Path], since: str | None, through: str | None):
     rows, watched = {}, {}
     for config in configs:
         config = config.resolve()
-        before = sha256(config.read_bytes()).hexdigest()
+        before = sha256(input_bytes(config)).hexdigest()
         document = load_yaml(config)
-        require(sha256(config.read_bytes()).hexdigest() == before, "INPUT_CHANGED",
+        require(sha256(input_bytes(config)).hexdigest() == before, "INPUT_CHANGED",
                 "读取区间配置时文件发生变化", str(config))
         require(type(document) is dict and REQUIRED <= set(document) <= REQUIRED | OPTIONAL,
                 "MONTH_REPORT_CONFIG_INVALID", "月报配置字段不完整或含未知字段", f"{config}:1")
@@ -60,7 +61,7 @@ def _inputs(configs: list[Path], since: str | None, through: str | None):
             raise BudgetError("PERIOD_MONTH_DUPLICATE", "同一月份只能提供一份配置", yaml_key_location(config, "month"))
         paths = {key: (config.parent / value).resolve() for key, value in document.items() if key not in SCALARS}
         for path in (config, *paths.values()):
-            digest = sha256(path.read_bytes()).hexdigest()
+            digest = sha256(input_bytes(path)).hexdigest()
             require(watched.setdefault(path, digest) == digest and (path != config or digest == before),
                     "INPUT_CHANGED", "区间输入在读取期间发生变化", str(path))
         rows[month] = {"config": config, "document": document, "paths": paths}
@@ -152,7 +153,7 @@ def audit_period(configs: list[Path], since: str | None = None, through: str | N
             reports.append(outcome["report"])
             warnings.extend({"month": month, "detail": line} for line in render_workflow_text(outcome).splitlines()
                             if "警告" in line)
-    require(len(snapshots) <= 1 and all(path.is_file() and sha256(path.read_bytes()).hexdigest() == digest
+    require(len(snapshots) <= 1 and all(input_is_file(path) and sha256(input_bytes(path)).hexdigest() == digest
                                       for path, digest in watched.items()),
             "INPUT_CHANGED", "区间运行期间账本、配置或审阅资料发生变化；请重新运行")
     return _combine_months(ordered, months, reports, reviews, snapshots, warnings)

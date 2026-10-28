@@ -5,7 +5,6 @@ the lexical evidence that Beancount's booked AST may normalize away.
 """
 
 from calendar import monthrange
-from collections import deque
 from dataclasses import dataclass, field, replace
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -28,6 +27,10 @@ from beancount.parser import parser
 
 from .errors import BudgetError, require
 from .exact import Fraction, exact
+from .source_snapshot import ParsedSnapshot, capture as capture_snapshot, book as book_snapshot
+from .identity import identity_scope
+from .runtime_inputs import document_scope, input_bytes
+from .projection import freeze, readonly_projections, projection_cache
 
 PRICE = re.compile(r"(?<!@)@@?\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([A-Za-z][A-Za-z0-9_]*)")
 RESERVED_PUSHMETA = re.compile(r"^\s*pushmeta\s+(?:budget|fund|tracking|budget-order)\s*:", re.IGNORECASE)
@@ -80,6 +83,7 @@ class FinancialInput:
     reference_entries: Optional[Tuple[Any, ...]] = None
     source_names: Mapping[str, Path] = field(default_factory=dict)
     include_globs: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
+    reference_cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     @cached_property
     def _sources_by_filename(self) -> Mapping[str, SourceFile]:
@@ -160,31 +164,36 @@ def _check_loader_errors(errors, root: Path) -> None:
         raise BudgetError(code, f"Beancount 加载失败：{errors[0]}", str(root))
 
 
-def _capture_sources(root: Path) -> tuple[dict, dict, dict]:
-    sources, names, includes = {}, {}, {}
-    pending = deque([str(root)])
+def _capture_sources(root: Path) -> ParsedSnapshot:
+    return capture_snapshot(root, SourceFile)
+
+
+def _include_closure_matches(fin: FinancialInput) -> bool:
+    """Reconstruct reachability from frozen official syntax, not loader options.
+
+    The capture's names/options must not attest their own completeness. Walk
+    the original include directives independently and expand current globs;
+    omitted files, omitted edges and unreachable extras all fail closed. This
+    reuses official parser evidence without a second parse or booking pass.
+    """
+    pending, seen, patterns = [str(fin.root)], set(), {}
     while pending:
-        name = pending.popleft()
-        if name in names:
-            continue  # The official loader still diagnoses duplicate includes.
-        path = Path(name).resolve()
-        names[name] = path
-        if path not in sources:
-            try:
-                raw = Path(name).read_bytes()
-                sources[path] = SourceFile(path, raw.decode("utf-8-sig"), sha256(raw).hexdigest())
-            except (OSError, UnicodeError) as exc:
-                raise BudgetError("SOURCE_MISSING", str(exc), name) from exc
-        source = sources[path]
-        _, patterns, errors = source._syntax
-        _check_loader_errors(errors, root)
-        for pattern in patterns:
-            search = pattern if os.path.isabs(pattern) else os.path.join(os.path.dirname(name), pattern)
-            matches = _glob_matches(search)
-            require(bool(matches), "LOADER_ERROR", f'Beancount include 没有匹配文件：{pattern}', name)
-            includes[search] = matches
+        name = os.path.normpath(pending.pop())
+        if name in seen:
+            continue
+        path = fin.source_names.get(name)
+        if path not in fin.sources:
+            return False
+        seen.add(name)
+        for raw in fin.sources[path]._syntax[1]:
+            pattern = raw if os.path.isabs(raw) else os.path.join(os.path.dirname(name), raw)
+            matches = _glob_matches(pattern)
+            if not matches:
+                return False
+            patterns[pattern] = matches
             pending.extend(matches)
-    return sources, names, includes
+    return (seen == set(fin.source_names) and patterns == dict(fin.include_globs) and
+            set(fin.source_names.values()) == set(fin.sources))
 
 
 def _verify_financial(fin: FinancialInput, message: str = "报表运行期间根账本或 include 来源发生变化") -> None:
@@ -193,7 +202,7 @@ def _verify_financial(fin: FinancialInput, message: str = "报表运行期间根
         unchanged = (all(Path(name).resolve() == path for name, path in fin.source_names.items()) and
                      all(sha256(path.read_bytes()).hexdigest() == source.sha256
                          for path, source in fin.sources.items()) and
-                     all(_glob_matches(pattern) == matches for pattern, matches in fin.include_globs.items()))
+                     _include_closure_matches(fin))
     except OSError:
         unchanged = False
     require(unchanged, "INPUT_CHANGED", message, str(fin.root))
@@ -260,13 +269,12 @@ def _load_financial_uncached(root: Path) -> FinancialInput:
     # version of the loader. Its timestamp check is not a source digest check,
     # and a stale cache can return different booked options for identical
     # independent copies. v6 must always parse the frozen source itself.
-    sources, names, includes = _capture_sources(root)
-    entries, errors, options = loader._uncached_load_file(
-        str(root), None, None, None)
+    captured = _capture_sources(root)
+    sources, names, includes = captured.sources, captured.names, captured.includes
+    _check_loader_errors(captured.errors, root)
+    entries, errors, options = book_snapshot(captured)
     _check_loader_errors(errors, root)
     require(not options.get("plugin"), "PLUGIN_UNSUPPORTED", "首个实现阶段暂不认证外部插件代码", str(root))
-    require(set(options["include"]) == set(names), "INPUT_CHANGED",
-            "加载期间 include 来源集合发生变化", str(root))
     for path, source in sources.items():
         for lineno, line in enumerate(source.lines, 1):
             require(not RESERVED_PUSHMETA.match(line), "META_INJECTION", "禁止用 pushmeta 注入预算保留键", f"{path}:{lineno}")
@@ -302,12 +310,13 @@ class FinancialSourceCache:
             else:
                 entries, options = pickle.loads(self._payload)
                 return replace(previous, entries=entries, options=options,
+                               reference_cache={},
                                sources=dict(previous.sources), source_names=dict(previous.source_names),
                                include_globs=dict(previous.include_globs))
         self.clear()
         fin = _load_financial_uncached(root)
         self._payload = pickle.dumps((fin.entries, fin.options), protocol=pickle.HIGHEST_PROTOCOL)
-        self._snapshot = replace(fin, entries=(), options={}, sources=dict(fin.sources),
+        self._snapshot = replace(fin, entries=(), options={}, sources=dict(fin.sources), reference_cache={},
                                  source_names=dict(fin.source_names), include_globs=dict(fin.include_globs))
         return fin
 
@@ -329,7 +338,8 @@ def financial_session(*, source_cache: Optional[FinancialSourceCache] = None):
     token = _REPORT_INPUTS.set(inputs)
     reuse_token = _SOURCE_REUSE.set(source_cache)
     try:
-        yield
+        with identity_scope(), document_scope():
+            yield
     finally:
         _REPORT_INPUTS.reset(token)
         _SOURCE_REUSE.reset(reuse_token)
@@ -415,7 +425,7 @@ def shared_audit(audit):
         if not isinstance(root, Path) or root.resolve() != frozen.root:
             return audit(*args, **kwargs)
         try:
-            watched = {value.resolve(): sha256(value.read_bytes()).digest()
+            watched = {value.resolve(): sha256(input_bytes(value)).digest()
                        for name, value in arguments.arguments.items()
                        if name != "root" and isinstance(value, Path)}
             key = (audit, _BOOKED_THROUGH.get(),
@@ -424,16 +434,25 @@ def shared_audit(audit):
             hash(key)
         except (OSError, TypeError):
             return audit(*args, **kwargs)  # Preserve the audit's own input diagnostics.
-        if key in frozen._audit_results:
-            return _copy_audit_result(frozen._audit_results[key])
+        results = projection_cache(frozen)
+        if key in results:
+            if readonly_projections():
+                value = freeze(results[key])
+                results[key] = value
+                return value
+            return _copy_audit_result(results[key])
         result = audit(*args, **kwargs)
         for path, digest in watched.items():
             try:
-                unchanged = sha256(path.read_bytes()).digest() == digest
+                unchanged = sha256(input_bytes(path)).digest() == digest
             except OSError:
                 unchanged = False
             require(unchanged, "INPUT_CHANGED", "基础审计期间配置或审阅文件发生变化", str(path))
-        frozen._audit_results[key] = _copy_audit_result(result)
+        if readonly_projections():
+            result = freeze(result)
+            results[key] = result
+            return result
+        results[key] = _copy_audit_result(result)
         return result
 
     return run

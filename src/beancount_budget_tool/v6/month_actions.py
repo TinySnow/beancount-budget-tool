@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from beancount.core import data
+from ..runtime_inputs import input_bytes
 from ..errors import BudgetError, require
 from ..financial import month_bounds
 from .monthly_report import audit_month_workflow
@@ -19,7 +20,7 @@ def confirm_month(config: Path, reason: str, output: Path, *, include_transactio
     require(type(reason) is str and bool(reason.strip()), "NEXT_MONTH_REASON_REQUIRED",
             "请写明截至该月末资料、责任及在途付款完整性的核对依据", str(config))
     _, last = month_bounds(doc["month"])
-    before = {path: path.read_bytes() for path in {config, *paths.values()} if path != paths["ledger"]}
+    before = {path: input_bytes(path) for path in {config, *paths.values()} if path != paths["ledger"]}
     candidate = {**doc, **{key: relative_reference(path, output) for key, path in paths.items()},
                  "completeness": "completeness.yaml"}
     statement = {"schema": 6, "cutover": doc["cutover"], "as_of": last.isoformat(),
@@ -48,11 +49,11 @@ class PreparedMonthEnd:
 
 def prepare_month_end(config: Path, displayed_month: str) -> PreparedMonthEnd:
     config = config.resolve()
-    original = config.read_bytes()
+    original = input_bytes(config)
     document, paths, cutover = read_month_config(config)
     require(document["month"] == displayed_month, "TUI_MONTH_CONTEXT_CHANGED",
             "月份配置已改变，请返回并重算后核对", str(config))
-    before = {path: path.read_bytes() for path in {config, *paths.values()} if path != paths["ledger"]}
+    before = {path: input_bytes(path) for path in {config, *paths.values()} if path != paths["ledger"]}
     require(before[config] == original, "INPUT_CHANGED", "读取期间月份配置发生变化，请重算后重新核对", str(config))
     with month_inputs(paths["ledger"], displayed_month, cutover) as (fin, last):
         transactions = [entry for entry in fin.entries if isinstance(entry, data.Transaction)]

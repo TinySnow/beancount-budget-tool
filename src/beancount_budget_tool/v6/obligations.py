@@ -19,6 +19,7 @@ import re
 
 from beancount.core import data
 
+from ..runtime_inputs import input_bytes
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial, reference_financial, shared_audit
@@ -56,7 +57,7 @@ def _declarations(path, cutover, fin):
         ("events", type(document["events"]) is list),
     ):
         require_yaml(valid, "OBLIGATION_DECLARATION_INVALID", "责任侧文件版本或原审快照格式不匹配", path, (field,))
-    return document, _owners(document["owners"], source=path), sha256(path.read_bytes()).hexdigest()
+    return document, _owners(document["owners"], source=path), sha256(input_bytes(path)).hexdigest()
 
 
 @shared_audit
@@ -256,7 +257,7 @@ def audit_simple_obligations(root: Path, cutover: date,
                     if any(p.account.split(":", 1)[0] == liability_root for e in future_entries for p in e.postings):
                         reference_facts = reference_fact_index(fin)
                         for entry in future_entries:
-                            refs = [_key(reference_facts.for_posting(p).as_dict()) for p in entry.postings]
+                            refs = [reference_facts.for_posting(p).as_key() for p in entry.postings]
                             for index, posting in enumerate(entry.postings):
                                 if posting.account.split(":", 1)[0] == liability_root:
                                     future_pairs[refs[index]] = set(refs[:index] + refs[index + 1:])
@@ -473,7 +474,7 @@ def audit_simple_obligations(root: Path, cutover: date,
     return {"mode": "v6_simple_booked_obligation_audit", "cutover": cutover.isoformat(),
             **({"before_liability_ref": candidates[before_ref]["liability_ref"] if before_ref in candidates else
                 next(facts.for_posting(p).as_dict() for p in ruled["before_entry"].postings
-                     if _key(facts.for_posting(p).as_dict()) == before_ref),
+                     if facts.for_posting(p).as_key() == before_ref),
                 **({"pending_same_day_prepayments": {ident: exact_text(value) for ident, value in prepaid.items()}}
                    if prepaid else {})} if before_ref is not None else {}),
             "as_of": as_of.isoformat() if as_of is not None else None,

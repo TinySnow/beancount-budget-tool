@@ -14,7 +14,7 @@ from typing import Any, Mapping, Optional
 from beancount.core import data
 
 from ..errors import BudgetError, require
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from ..exact import exact
 from .inline_amounts import parse_inline_amounts
 
@@ -55,6 +55,7 @@ def _check_tracking(value: object, source: str) -> None:
             "TRACKING_INVALID", "tracking 只接受非空、半角逗号分隔的专题", source)
 
 
+@shared_audit
 def collect_v6_source_issues(root: Path, cutover: date,
                              through: Optional[date] = None) -> list[dict]:
     """Collect every invalid inline v6 tag in a period before deeper audits.
@@ -118,6 +119,7 @@ def collect_v6_source_issues(root: Path, cutover: date,
     return issues
 
 
+@shared_audit
 def scan_v6_source(root: Path, cutover: date, through: Optional[date] = None) -> SourceAudit:
     """验证 loader、include 快照和已出现的 v6 标签，返回迁移盘点。
 

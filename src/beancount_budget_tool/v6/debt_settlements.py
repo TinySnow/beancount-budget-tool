@@ -6,6 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 import re
 
+from ..runtime_inputs import input_bytes
 from ..errors import require
 from ..exact import exact_text
 from ..yamlstrict import load_yaml, yaml_key_location, yaml_path_location
@@ -45,7 +46,7 @@ def audit_debt_settlements(debts: list[dict], cutover: date, as_of: date,
         ):
             require(valid, "DEBT_SETTLEMENT_INVALID", f"清偿文件 {key} 与报告不符或格式无效",
                     yaml_key_location(declarations, key))
-        review_sha = sha256(declarations.read_bytes()).hexdigest()
+        review_sha = sha256(input_bytes(declarations)).hexdigest()
         for index, statement in enumerate(document["statements"]):
             keys = ("statements", index)
             where = yaml_path_location(declarations, keys)

@@ -287,7 +287,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                        p.units.currency == pool_report["report_currency"] and
                        p.cost is None for p in outside):
                 continue  # a real boundary needs another certified event protocol
-            keys = [_key(facts.for_posting(p).as_dict()) for p in inside]
+            keys = [facts.for_posting(p).as_key() for p in inside]
             require(all(not any(part["role"] == "allocation"
                                 for part in claimed.get(key, {}).get("slices", []))
                         for key in keys),
@@ -306,7 +306,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
         if not isinstance(entry, data.Transaction) or not first <= entry.date <= last:
             continue
         for posting in entry.postings:
-            key = _key(facts.for_posting(posting).as_dict())
+            key = facts.for_posting(posting).as_key()
             meta = posting.meta or {}
             month_sources[key] = f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}"
     for row in owner_audit["ownership"]:

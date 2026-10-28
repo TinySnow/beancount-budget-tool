@@ -16,6 +16,7 @@ import sys
 
 from beancount.core import data
 
+from ..runtime_inputs import input_bytes, input_is_file
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import frozen_financial, load_financial
@@ -71,7 +72,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
         return (config.parent / value).resolve()
 
     root = path("ledger")
-    require(root.is_file(), "REVIEW_QUEUE_CONFIG_INVALID",
+    require(input_is_file(root), "REVIEW_QUEUE_CONFIG_INVALID",
             "待审清单引用了不存在的根账本", yaml_key_location(config, "ledger"))
     sidecars = [config, *(path(key) for key in NEEDED - {"schema", "ledger", "cutover"})]
     for key in ("opening", "h_transfers", "k_events", "h_fx"):
@@ -79,9 +80,9 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
             sidecars.append(path(key))
     optional_sidecars = {key for key in ("opening", "h_transfers", "k_events", "h_fx") if key in doc}
     for key in NEEDED - {"schema", "ledger", "cutover"} | optional_sidecars:
-        require(path(key).is_file(), "REVIEW_QUEUE_CONFIG_INVALID",
+        require(input_is_file(path(key)), "REVIEW_QUEUE_CONFIG_INVALID",
                 "待审清单引用了不存在的审阅文件", yaml_key_location(config, key))
-    before = {item: sha256(item.read_bytes()).hexdigest() for item in sidecars}
+    before = {item: sha256(input_bytes(item)).hexdigest() for item in sidecars}
     with frozen_financial(root), frozen_fact_indices():
         fin = load_financial(root)
         facts = FactIndex(fin)
@@ -163,7 +164,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                                                      f'{posting.units.currency}；标签金额使用正数，'
                                                      '不拆分时也可只写已登记的名称。'})
         if tag_errors:
-            require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
+            require(all(input_is_file(item) and sha256(input_bytes(item)).hexdigest() == digest
                         for item, digest in before.items()),
                     "INPUT_CHANGED", "待审清单运行期间配置或审阅文件发生变化", str(config))
             return {"mode": "v6_import_review_queue", "since": since.isoformat(),
@@ -191,7 +192,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                     "signed_units": exact_text(exact(posting.units.number)),
                     "ref": facts.for_posting(posting).as_dict(), "source": exc.source,
                     "reason_code": exc.code, "detail": exc.message}
-            require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
+            require(all(input_is_file(item) and sha256(input_bytes(item)).hexdigest() == digest
                         for item, digest in before.items()),
                     "INPUT_CHANGED", "待审清单运行期间配置或审阅文件发生变化", str(config))
             return {"mode": "v6_import_review_queue", "since": since.isoformat(),
@@ -339,7 +340,7 @@ def audit_review_queue(config: Path, since: date, through: date) -> dict:
                               **row, "source": liability_opening_sources.get(
                                   (row["account"], row["commodity"], row["lot"])),
                               "reason_code": row["reason_code"]})
-        require(all(item.is_file() and sha256(item.read_bytes()).hexdigest() == digest
+        require(all(input_is_file(item) and sha256(input_bytes(item)).hexdigest() == digest
                     for item, digest in before.items()),
                 "INPUT_CHANGED", "待审清单运行期间配置或审阅文件发生变化", str(config))
 

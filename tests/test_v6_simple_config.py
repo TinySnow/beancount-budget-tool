@@ -118,7 +118,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
                                 check=True, capture_output=True, encoding="utf-8", timeout=20)
         self.assertEqual(json.loads(result.stdout), {"status": "CERTIFIED_SCOPED", "commands": []})
 
-    def test_daily_report_writes_final_inputs_once_without_intermediate_worksheets(self):
+    def test_daily_report_uses_runtime_documents_without_writing_sidecars(self):
         self.migrate()
         write = Path.write_text
         written = []
@@ -128,8 +128,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         with patch.object(Path, "write_text", record):
             result = audit_simple(self.config, include_transactions=True)
         self.assertEqual(result["status"], "CERTIFIED_SCOPED")
-        self.assertTrue(written)
-        self.assertEqual(len(written), len(set(written)))
+        self.assertEqual(written, [])
         self.assertNotIn("setup.yaml", {path.name for path in written})
         self.assertNotIn("START_HERE.md", {path.name for path in written})
         self.assertEqual(sorted(path.name for path in self.config.parent.iterdir() if path.is_file()),

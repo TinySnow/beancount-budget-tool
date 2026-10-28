@@ -129,7 +129,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
         liability_legs = [p for p in entry.postings if p.account.split(":", 1)[0] == liability_root]
         if not expense_legs and not liability_legs:
             continue  # Includes all virtual allocations, transfers, K and FX.
-        bundle = bundles.get(_key(facts.for_transaction(entry).as_dict()))
+        bundle = bundles.get(facts.for_transaction(entry).as_key())
         if bundle is not None:
             if bundle['status'] != 'CERTIFIED':
                 pending(bundle['reason_code'], bundle['ref'], bundle['account'])
@@ -145,7 +145,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                 by_account[(bundle['commodity'], key)][kind] += abs(amount)
                 ref = facts.for_posting(next(p for p in entry.postings if p.account == members[0] and
                     any(part['owner_id']==owner and Fraction(part['signed_units'])*amount < 0
-                        for part in claims.get(_key(facts.for_posting(p).as_dict()), {}).get('slices', [])))).as_dict()
+                        for part in claims.get(facts.for_posting(p).as_key(), {}).get('slices', [])))).as_dict()
                 result['events'].append({'date': entry.date.isoformat(), 'narration': entry.narration,
                     'account': members[0] if len(members)==1 else None, 'commodity': bundle['commodity'], 'owner_id': owner,
                     'kind': kind, 'amount': exact_text(abs(amount)), 'signed_owner_units': exact_text(-amount),
@@ -155,7 +155,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
             continue
         native = native_asset_flow(fin, entry, modes)
         receipt = native_payable_receipt(fin, entry, modes)
-        if receipt is not None and _key(facts.for_posting(receipt.cash).as_dict()) not in mixed_receipts:
+        if receipt is not None and facts.for_posting(receipt.cash).as_key() not in mixed_receipts:
             continue  # A receipt is not a default-purpose payment or expense refund.
         if native_book_redemption(fin, entry, modes) is not None:
             continue  # Expenses netted from a K receipt are not another H cash debit.
@@ -188,7 +188,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                     exact(p.units.number) >= 0 for p in expense_legs)):
                 continue
             kind, event, components = None, None, None
-            ruled = configured.get(_key(facts.for_transaction(entry).as_dict()))
+            ruled = configured.get(facts.for_transaction(entry).as_key())
             if ruled:
                 if any(row["status"] != "CERTIFIED" for row in ruled):
                     reasons = [code for row in ruled for code in row["reason_codes"]]

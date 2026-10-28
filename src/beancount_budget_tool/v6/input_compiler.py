@@ -17,6 +17,7 @@ from tempfile import TemporaryDirectory
 from beancount.core import data
 import yaml
 
+from ..runtime_inputs import input_bytes, input_is_file
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import booked_through, frozen_financial, load_financial, month_bounds, shared_audit
@@ -71,7 +72,7 @@ def _inspect(root: Path, cutover: date, income: str, expense: str, category: str
     purposes = {income, expense}
     categories = {income, category}
     expense_names = {category}
-    issues = collect_v6_source_issues(fin.root, cutover)
+    issues = list(collect_v6_source_issues(fin.root, cutover))
     for entry in fin.entries:
         if not isinstance(entry, data.Transaction) or entry.date < cutover:
             continue
@@ -211,6 +212,7 @@ def compile_inputs(doc: dict, source: Path, output: Path, *, location=None) -> t
                 "REPORT_CURRENCY_INVALID", "报告货币须来自 operating_currency", loc(("report_currency",)))
         rows, purposes, category_names, expense_names, source_issues = _inspect(
             fin.root, cutover, defaults["income_purpose"], defaults["expense_purpose"], defaults["expense_category"])
+        purposes, category_names = set(purposes), set(category_names)
         issues.extend(source_issues)
         if defaults["confirmed"] is not True:
             pending(("defaults", "confirmed"), "确认未标标签时使用这些默认用途和类别后填 true")
@@ -382,14 +384,14 @@ def read_month_config(config: Path):
         raise BudgetError("TIME_INVALID", "月份或 cutover 无效", str(config)) from exc
     paths = {key: (config.parent / value).resolve() for key, value in doc.items() if key not in MONTH_SCALARS}
     for key, path in paths.items():
-        require(path.is_file(), "REVIEW_CONFIG_INVALID", "配置引用的文件不存在",
+        require(input_is_file(path), "REVIEW_CONFIG_INVALID", "配置引用的文件不存在",
                 yaml_path_location(config, (key,)))
     return doc, paths, cutover
 
 
 def check_unchanged(before: dict[Path, bytes] | None):
     for path, content in (before or {}).items():
-        require(path.is_file() and path.read_bytes() == content,
+        require(input_is_file(path) and input_bytes(path) == content,
                 "INPUT_CHANGED", "审阅期间配置或侧文件发生变化；请重跑", str(path))
 
 

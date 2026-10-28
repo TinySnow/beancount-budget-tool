@@ -10,6 +10,7 @@ from pathlib import Path
 
 from beancount.core import data
 
+from ..runtime_inputs import input_bytes
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
@@ -120,7 +121,7 @@ def audit_actual_snapshot(root: Path, cutover: date, as_of: date,
         ):
             require(valid, "ACTUAL_SCOPE_INVALID", f"完整性声明 {key} 无效",
                     yaml_key_location(completeness, key))
-        declaration_sha = sha256(completeness.read_bytes()).hexdigest()
+        declaration_sha = sha256(input_bytes(completeness)).hexdigest()
         complete_statement = True
 
     reasons = []

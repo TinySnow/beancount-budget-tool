@@ -12,6 +12,7 @@ from hashlib import sha256
 from pathlib import Path
 import re
 
+from ..runtime_inputs import input_bytes
 from ..errors import BudgetError, require
 from ..exact import exact_text
 from ..yamlstrict import load_yaml, require_quoted_month_keys, yaml_key_location, yaml_path_location
@@ -108,7 +109,7 @@ def load_expense_targets(path: Path, month: str, report_currency: str,
         for field in targets:
             targets[field].update(override[field])
     return {"month": month, "report_currency": report_currency,
-            "plan_sha256": sha256(path.read_bytes()).hexdigest(),
+            "plan_sha256": sha256(input_bytes(path)).hexdigest(),
             "spendable_cap_category_id": cap_id,
             "targets": {ident: exact_text(value) if isinstance(value, Fraction) else value
                         for ident, value in targets["expense_targets"].items()},
