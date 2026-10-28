@@ -190,11 +190,10 @@ class IntervalBrowserTests(unittest.TestCase):
         latest.write_bytes(original.read_bytes())
         self.addCleanup(latest.unlink)
         browser.configs[1] = latest
-        browser.saved.add(1)
         browser.toggle_period()
         browser.refresh()
         self.assertEqual(browser.outcome["months"][1]["config"], str(latest))
-        self.assertIn("包含 TUI 已保存的新配置", self.screen(browser))
+        self.assertNotIn("TUI 已保存", self.screen(browser))
 
     def test_selected_range_audits_only_two_months_and_keeps_closing_stock_once(self):
         browser = self.browser(list(reversed(self.configs)))

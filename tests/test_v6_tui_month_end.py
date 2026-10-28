@@ -175,10 +175,11 @@ class MonthEndTests(unittest.TestCase):
         self.assertEqual(result["report_error"]["code"], "NEXT_MONTH_IO_ERROR")
         self.assertIsNone(result["workflow"])
         browser.lines = ["old number 999999"]
-        browser.show_saved_month(result)
-        self.assertEqual(browser.config, output / "month.yaml")
-        self.assertTrue(browser.config.is_file())
-        self.assertEqual(browser.error.code, "NEXT_MONTH_IO_ERROR")
+        # The product browser has no approval publication transition. Opening
+        # an explicitly provided internal fixture still clears stale numbers.
+        self.assertFalse(hasattr(browser, 'show_saved_month'))
+        browser.configs[browser.index] = Path(result['config'])
+        browser.clear()
         self.assertIsNone(browser.outcome)
         self.assertEqual(browser.lines, [])
         browser.refresh()
@@ -204,7 +205,7 @@ class MonthEndTests(unittest.TestCase):
                 browser = self.browser()
                 self.run_keys(browser, ["f", *inputs, "q"])
                 self.assertEqual(browser.config, self.config)
-                self.assertFalse(browser.review_roots[0].exists())
+                self.assertFalse((browser.config.parent / "tui-reviews").exists())
                 self.assertIsNone(browser.outcome["report"])
                 self.assert_originals()
 
@@ -219,7 +220,7 @@ class MonthEndTests(unittest.TestCase):
             browser.refresh()
             _confirm_month_end(FakeScreen(), browser)
         prepare.assert_not_called()
-        self.assertFalse(browser.review_roots[0].exists())
+        self.assertFalse((browser.config.parent / "tui-reviews").exists())
 
 
 

@@ -171,7 +171,7 @@ class InteractiveReviewTests(unittest.TestCase):
                 browser = self.browser()
                 self.run_keys(browser, ["/", *"Expenses:Food", "\n", "e", *keys, "q"])
                 self.assertEqual(browser.config, self.config)
-                self.assertFalse(browser.review_roots[0].exists())
+                self.assertFalse((browser.config.parent / "tui-reviews").exists())
                 self.assert_originals()
 
 

@@ -104,9 +104,6 @@ class SimpleReportBrowser(ReportBrowser):
     def month_choices(self):
         return [(month, self.user_config) for month in sorted(self.visited_months)]
 
-    def show_saved_month(self, result):
-        raise BudgetError('REVIEW_SAVE_REMOVED', '请修改账本、config.yml 或 budgets.yml 后重算；不保存独立审阅记录', str(self.user_config))
-
     def period_configs(self):
         from .period_report import _months
         if self.salary_cycle is not None:

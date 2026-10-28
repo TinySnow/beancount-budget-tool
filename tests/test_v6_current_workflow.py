@@ -1,4 +1,3 @@
-from fixture_inputs import write_explicit_inputs
 """Current public workflow: one config pair and one liability interpretation."""
 from contextlib import redirect_stderr
 import io
@@ -12,7 +11,7 @@ import yaml
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.launcher import COMMANDS, main
 from beancount_budget_tool.v6.input_compiler import default_config
-from beancount_budget_tool.v6.simple_config import build_runtime, save_snapshot, audit_simple
+from beancount_budget_tool.v6.simple_config import build_runtime, audit_simple
 from beancount_budget_tool.yamlstrict import yaml_path_location
 import test_v6_liability_rules as liability_fixtures
 
@@ -57,24 +56,15 @@ class CurrentWorkflowTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'LIABILITY_MODE_REMOVED')
         self.assertEqual(caught.exception.source, yaml_path_location(c.config, ('liability_budget_mode',)))
 
-    def test_saved_old_account_mode_requires_explicit_semantic_migration(self):
+    def test_legacy_hidden_account_mode_cannot_override_current_public_rules(self):
         c = self.case
-        c.run_ledger(c.purchase())
-        runtime = build_runtime(c.config)
-        self.addCleanup(runtime.close)
-        for filename in ('ownership.yaml', 'obligations.yaml'):
-            path = runtime.config.parent / filename
-            document = yaml.safe_load(path.read_text(encoding='utf-8'))
-            document.pop('budget_owners')
-            c.write(path, document)
-        write_explicit_inputs(c.config, runtime.config)
-        with self.assertRaises(BudgetError) as caught:
-            audit_simple(c.config)
-        self.assertEqual(caught.exception.code, 'LIABILITY_MODE_REMOVED')
-        self.assertIn('不会静默', caught.exception.message)
-        c.doc['liability_budget_mode'] = 'purpose'
-        c.write(c.config, c.doc)
-        self.assertEqual(audit_simple(c.config)['status'], 'CERTIFIED_SCOPED')
+        expected = c.run_ledger(c.purchase())
+        old = c.base / '.budget-state/config/reviews.json.gz'
+        old.parent.mkdir(parents=True)
+        old.write_bytes(b'legacy account mode and approved claims')
+        result = audit_simple(c.config, include_transactions=True)
+        self.assertEqual(result['report'], expected)
+        self.assertEqual(old.read_bytes(), b'legacy account mode and approved claims')
 
     def test_retired_commands_give_actionable_guidance(self):
         for name in ('init', 'next-month', 'project', 'review', 'review-month', 'review-refs', 'classification-proposals'):

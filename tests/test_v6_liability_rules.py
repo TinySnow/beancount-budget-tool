@@ -1,4 +1,3 @@
-from fixture_inputs import write_explicit_inputs
 """Ordinary configured debts require no per-transaction human approvals."""
 
 from fractions import Fraction
@@ -9,7 +8,7 @@ import unittest
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, save_snapshot, audit_simple_period, create_files
+from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, audit_simple_period, create_files
 from beancount_budget_tool.v6.obligations import audit_simple_obligations
 from beancount_budget_tool.v6.monthly_report import render_text
 from beancount_budget_tool.v6.transaction_details import render_transaction
@@ -217,7 +216,6 @@ class LiabilityRuleTests(unittest.TestCase):
         self.run_ledger(self.purchase() + self.payment())
         runtime = build_runtime(self.config)
         self.addCleanup(runtime.close)
-        write_explicit_inputs(self.config, runtime.config)
         self.doc.pop("liabilities")
         self.write(self.config, self.doc)
         result = audit_simple(self.config)

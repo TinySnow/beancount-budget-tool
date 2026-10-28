@@ -4,7 +4,7 @@
   "layers": [
     {"id": "input_layer", "title": "输入与证据", "items": [
       {"id": "snapshot", "label": "SourceSnapshot", "detail": "官方解析、完整内容清单、include闭包与最终验证"},
-      {"id": "review_context", "label": "Explicit YAML declarations", "detail": "账本与两份公开YAML；不读取隐藏审阅状态"}
+      {"id": "review_context", "label": "现有两YAML与账本标签", "detail": "不新增字段，不读取隐藏审阅状态；无法明确表达则待审"}
     ]},
     {"id": "execution_layer", "title": "共享执行层", "items": [
       {"id": "facts", "label": "FactTable", "detail": "一次建立交易/分录身份、索引和来源位置"},

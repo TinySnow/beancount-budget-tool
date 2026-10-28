@@ -14,7 +14,7 @@ import yaml
 
 from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.launcher import main, COMMANDS
-from beancount_budget_tool.v6.simple_config import audit_simple, create_files, build_runtime, save_snapshot, _write
+from beancount_budget_tool.v6.simple_config import audit_simple, create_files, build_runtime, _write
 from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
 from beancount_budget_tool.v6.tui import _edit_review, _confirm_month_end
 from beancount_budget_tool.v6.input_watch import InputWatch
@@ -124,22 +124,31 @@ class StatelessInputsTests(unittest.TestCase):
             self.assertNotIn(command, COMMANDS)
         self.assertEqual(self.manifest(), before)
 
-    def test_retired_save_api_cannot_hide_a_decision(self):
+    def test_save_api_and_browser_publication_transition_are_removed(self):
         before = self.manifest()
-        with self.assertRaises(BudgetError) as caught:
-            save_snapshot(self.config, self.base / 'untrusted.yaml')
-        self.assertEqual(caught.exception.code, 'REVIEW_SAVE_REMOVED')
+        from beancount_budget_tool.v6 import simple_config
+        from beancount_budget_tool.v6.tui import ReportBrowser
+        self.assertFalse(hasattr(simple_config, 'save_snapshot'))
+        self.assertFalse(hasattr(ReportBrowser, 'show_saved_month'))
+        self.assertFalse(hasattr(SimpleReportBrowser, 'show_saved_month'))
         self.assertEqual(self.manifest(), before)
 
-    def test_declarations_accept_values_not_external_paths_or_unknown_protocols(self):
+    def test_new_declarations_field_is_rejected_in_both_public_files(self):
         original = yaml.safe_load(self.config.read_text(encoding='utf-8'))
-        for extra in ({'ownership': '/tmp/claims.yaml'}, {'unknown_protocol': {}}, {'ownership': {'defaults': {}}}):
+        for extra in ({}, {'ownership': '/tmp/claims.yaml'}, {'unknown_protocol': {}}, {'ownership': {'defaults': {}}}):
             doc = deepcopy(original)
             doc['declarations'] = extra
             _write(self.config, doc)
             with self.assertRaises(BudgetError) as caught:
                 audit_simple(self.config)
-            self.assertEqual(caught.exception.code, 'SIMPLE_DECLARATIONS_INVALID')
+            self.assertEqual(caught.exception.code, 'SIMPLE_CONFIG_INVALID')
+        _write(self.config, original)
+        plans = yaml.safe_load(self.budgets.read_text(encoding='utf-8'))
+        plans['months']['2026-09']['declarations'] = {}
+        _write(self.budgets, plans)
+        with self.assertRaises(BudgetError) as caught:
+            audit_simple(self.config)
+        self.assertEqual(caught.exception.code, 'SIMPLE_BUDGETS_INVALID')
 
     def test_watcher_does_not_observe_legacy_review_changes(self):
         watcher = InputWatch([self.config])
@@ -155,7 +164,7 @@ class StatelessInputsTests(unittest.TestCase):
         self.assertEqual({p.name for p in target.iterdir()}, {'config.yml', 'budgets.yml'})
         self.assertIsNone(audit_simple(Path(result['config']))['report'])
 
-    def test_explicit_source_claims_live_in_yaml_and_expire_after_transaction_edit(self):
+    def test_old_external_claims_cannot_be_silently_migrated_or_discarded(self):
         from test_v6_review_decisions import ReviewDecisionsTests, apply_review
         fixture = ReviewDecisionsTests()
         fixture.setUp()
@@ -163,26 +172,42 @@ class StatelessInputsTests(unittest.TestCase):
         fixture.create()
         fixture.approve()
         explicit = apply_review(fixture.sheet)
-        pair = Path(create_files(fixture.base / 'two-files', old_config=Path(explicit['config']))['config'])
-        self.assertEqual({p.name for p in pair.parent.iterdir()}, {'config.yml', 'budgets.yml'})
-        doc = yaml.safe_load(pair.read_text(encoding='utf-8'))
-        self.assertTrue(doc['declarations']['ownership']['claims'])
-        self.assertTrue(doc['declarations']['classifications']['classifications'])
-        current, previous = audit_simple(pair)['report'], deepcopy(explicit['workflow']['report'])
-        # Configuration migration renders public-name plans into new document
-        # bytes; compare every financial/source field, not that file's digest.
-        for report in (current, previous):
-            for key in ('expense_targets', 'purpose_progress'):
-                report[key].pop('plan_sha256', None)
-        self.assertEqual(current, previous)
-        before = pair.read_bytes()
-        fixture.ledger.write_text(fixture.ledger.read_text(encoding='utf-8').replace(
-            '"mixed cash move"', '"changed source"'), encoding='utf-8')
+        target = fixture.base / 'two-files'
+        before = {p:p.read_bytes() for p in fixture.base.rglob('*') if p.is_file()}
         with self.assertRaises(BudgetError) as caught:
-            audit_simple(pair)
-        self.assertEqual(caught.exception.code, 'OWNERSHIP_REF_INVALID')
-        self.assertEqual(pair.read_bytes(), before)
-        self.assertFalse((pair.parent / '.budget-state').exists())
+            create_files(target, old_config=Path(explicit['config']))
+        self.assertEqual(caught.exception.code, 'SIMPLE_IMPORT_UNSUPPORTED')
+        self.assertIn('ownership.claims', caught.exception.message)
+        self.assertIn('classifications.classifications', caught.exception.message)
+        self.assertFalse(target.exists())
+        self.assertEqual({p:p.read_bytes() for p in fixture.base.rglob('*') if p.is_file()}, before)
+        self.assertFalse((fixture.base / '.budget-state').exists())
+
+    def test_unsupported_protocol_evidence_prevents_any_migration_output(self):
+        from test_v6_simple_config import SimpleConfigTests
+        fixture = SimpleConfigTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        header = yaml.safe_load(fixture.old.read_text(encoding='utf-8'))
+        for domain, field in (
+                ('accounts', 'same_day_settlements'), ('accounts', 'credit_card_whitelist'),
+                ('ownership', 'transfer_orders'), ('obligations', 'events'),
+                ('obligations', 'opening'), ('benefit_groups', 'approvals'),
+                ('purpose_pools', 'pools'), ('h_transfers', 'events'),
+                ('h_fx', 'events'), ('k_events', 'events')):
+            with self.subTest(domain=domain, field=field):
+                path = fixture.old.parent / header[domain]
+                before = path.read_bytes()
+                document = yaml.safe_load(before)
+                document[field] = [{'explicit': 'external evidence cannot be discarded'}]
+                _write(path, document)
+                target = fixture.base / 'unsupported-output'
+                with self.assertRaises(BudgetError) as caught:
+                    create_files(target, old_config=fixture.old)
+                self.assertEqual(caught.exception.code, 'SIMPLE_IMPORT_UNSUPPORTED')
+                self.assertIn(domain + '.' + field, caught.exception.message)
+                self.assertFalse(target.exists())
+                path.write_bytes(before)
 
 
 if __name__ == '__main__':

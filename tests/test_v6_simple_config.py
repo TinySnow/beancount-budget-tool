@@ -1,7 +1,7 @@
-from fixture_inputs import write_explicit_inputs
 """The editable surface is config.yml + budgets.yml, not compiled sidecars."""
 
 from copy import deepcopy
+from hashlib import sha256
 from pathlib import Path
 from contextlib import redirect_stdout
 from io import StringIO
@@ -20,7 +20,7 @@ from beancount_budget_tool.yamlstrict import yaml_path_location
 from beancount_budget_tool.v6.input_compiler import compile_inputs
 from fixture_inputs import compile_setup, SetupDumper as _SetupDumper
 from beancount_budget_tool.v6.monthly_report import audit_month_workflow
-from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, create_files, save_snapshot
+from beancount_budget_tool.v6.simple_config import audit_simple, build_runtime, create_files
 from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
 from beancount_budget_tool.v6.monthly_report import main as monthly_main
 from beancount_budget_tool.v6.review import prepare_review, save_review
@@ -51,6 +51,21 @@ class SimpleConfigTests(unittest.TestCase):
         self.config = Path(result["config"])
         self.budgets = Path(result["budgets"])
         return result
+
+    def generated_ids(self, value):
+        """Old manual registry IDs are not part of the two-file input surface."""
+        names = {}
+        for filename, rows, prefix in (('ownership.yaml', 'owners', 'fund'),
+                                       ('classifications.yaml', 'categories', 'category')):
+            for row in yaml.safe_load((self.old.parent / filename).read_text(encoding='utf-8'))[rows]:
+                names[row['id']] = prefix + '_' + sha256(row['name'].encode()).hexdigest()[:20]
+        def translate(node):
+            if isinstance(node, dict):
+                return {names.get(k,k):translate(v) for k,v in node.items()}
+            if isinstance(node, list):
+                return [translate(v) for v in node]
+            return names.get(node,node) if isinstance(node,str) else node
+        return translate(value)
 
     def test_windows_relative_config_paths_produce_the_same_report_on_each_platform(self):
         self.migrate()
@@ -185,11 +200,22 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         self.migrate()
         result = audit_simple(self.config)
         self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
+        runtime = build_runtime(self.config)
+        self.addCleanup(runtime.close)
+        # A visible monthly boolean generates a current document, rather than
+        # importing an old arbitrary reason or its byte digest.
+        expected_sha = sha256((runtime.config.parent / 'completeness.yaml').read_bytes()).hexdigest()
+        self.assertEqual(result['report']['actual_spendable']['completeness_sha256'], expected_sha)
         for key in ("actual_spendable", "max_spendable", "purpose_balances", "purpose_progress", "expense_targets"):
-            before, after = deepcopy(previous["report"][key]), deepcopy(result["report"][key])
+            before, after = self.generated_ids(previous["report"][key]), deepcopy(result["report"][key])
             # Plan file bytes differ after translating the public names.
             for row in (before, after):
                 row.pop("plan_sha256", None)
+            if key == 'actual_spendable':
+                before.pop('completeness_sha256'); after.pop('completeness_sha256')
+            if key == 'purpose_progress':
+                for row in (before, after):
+                    row['owners'].sort(key=lambda v:v['owner_id'])
             self.assertEqual(before, after, key)
         self.assertEqual({p: p.read_bytes() for p in self.original}, self.original)
         self.assertEqual(sorted(p.name for p in self.config.parent.iterdir() if p.is_file()), ["budgets.yml", "config.yml"])
@@ -363,7 +389,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
         self.assertEqual(browser.outcome["report"]["cycle_budget"]["remaining"], "90")
 
-    def test_explicit_yaml_claims_survive_refresh_and_public_target_edits(self):
+    def test_inline_source_choice_survives_refresh_and_public_target_edits(self):
         self.migrate()
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace(
             '2026-09-01 open Assets:Cash', '2026-09-01 open Assets:Bank\n2026-09-01 open Assets:Cash') +
@@ -374,9 +400,10 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         browser = SimpleReportBrowser(self.config)
         browser.refresh()
         item = next(item for item in browser.reviews() if item["reason_code"] == "FUND_MIXED_SOURCE")
-        prepared = prepare_review(browser.config, item)
-        saved = save_review(prepared, "已收入资金", "virtual explicit source choice", self.base / "approved", approved=True)
-        write_explicit_inputs(self.config, Path(saved["config"]))
+        # Resolve the mixed source in the existing ledger label surface.
+        text = self.ledger.read_text(encoding='utf-8').replace('  Assets:Cash -1 CNY\n',
+            '  Assets:Cash -1 CNY\n    fund: "已收入资金"\n')
+        self.ledger.write_text(text, encoding='utf-8')
         browser.refresh()
         self.assertIsNone(browser.error, browser.error)
         self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED", browser.outcome["review_items"])
@@ -435,7 +462,6 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         import shutil
         self.migrate()
         runtime = build_runtime(self.config)
-        write_explicit_inputs(self.config, runtime.config)
         shutil.rmtree(runtime.config.parent)
         self.assertEqual(audit_simple(self.config)["status"], "CERTIFIED_SCOPED")
 
@@ -567,7 +593,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         after = audit_simple(self.config)
         self.assertEqual(after["status"], "CERTIFIED_SCOPED", after["review_items"])
         self.assertEqual(after["report"]["max_spendable"]["status"], "NOT_CONFIGURED")
-        first = before["report"]["expense_targets"]["categories"]
+        first = self.generated_ids(before["report"]["expense_targets"]["categories"])
         second = after["report"]["expense_targets"]["categories"]
         self.assertEqual(first, second)
 

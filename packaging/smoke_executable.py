@@ -196,6 +196,22 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         profile["ledger"], profile["budgets"] = ".\\main.bean", ".\\budgets.yml"
         config.write_text(yaml.safe_dump(profile, allow_unicode=True), encoding="utf-8")
         assert document("--config", config)["report"] == direct["report"]
+        # The two public files retain the existing schema, including rejection
+        # of the withdrawn declaration block even when it is empty.
+        original_config = config.read_bytes()
+        profile['declarations'] = {}
+        config.write_text(yaml.safe_dump(profile, allow_unicode=True), encoding='utf-8')
+        _, error = run('--config', config, '--format', 'json', code=2)
+        assert json.loads(error)['error']['code'] == 'SIMPLE_CONFIG_INVALID', error
+        config.write_bytes(original_config)
+        budget_path = directory / 'budgets.yml'
+        original_budgets = budget_path.read_bytes()
+        plans = yaml.safe_load(original_budgets)
+        plans['months']['2026-09']['declarations'] = {}
+        budget_path.write_text(yaml.safe_dump(plans, allow_unicode=True), encoding='utf-8')
+        _, error = run('--config', config, '--format', 'json', code=2)
+        assert json.loads(error)['error']['code'] == 'SIMPLE_BUDGETS_INVALID', error
+        budget_path.write_bytes(original_budgets)
         # The executable has no hidden review-state input or save workflow.
         assert not (directory / '.budget-state').exists()
         for command in ('state', 'clean', 'review'):

@@ -22,7 +22,7 @@ audit_simple与audit_simple_period是原API薄适配，编排交给QuerySession�
 
 同一截止日视图的账户基础盘点与声明overlay分层；用途来源/声明/行内切片准备在opening变体之间共享，但期初容量和真实库存仍分别重放。准备层显式接收该视图FactIndex作为依赖，只存身份键和纯值，不把booked AST放进只读投影。进一步性能与边界见[ROUND2-PERFORMANCE.md](ROUND2-PERFORMANCE.md)。
 
-高级明确协议放在两份公开YAML的declarations中，继续使用原严格财务验证。TUI计算进入同一QuerySession，e/f仅说明如何修改公开输入，不保存批准。旧审阅状态不读取、不导入、不监听，也不会被自动删除。旧多文件配置仅在用户显式configure迁移时读取，输出仍为两份YAML。
+仅使用账本与两份YAML的现有字段，不新增声明配置面。既有输入不能明确表达的协议保持待审或明确不支持，严格财务验证保留。TUI进入同一QuerySession，e/f仅说明如何修改现有输入，不保存批准。旧审阅状态不读取、不导入、不监听，也不会自动删除；旧多文件配置仅在显式configure迁移时读取，无法表达的外部证据拒绝迁移，不能丢弃后认证。
 
 ## 只读计算与输出
 

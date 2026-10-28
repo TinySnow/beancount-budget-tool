@@ -14,7 +14,7 @@ from unittest.mock import patch
 import yaml
 
 from beancount_budget_tool.errors import BudgetError
-from beancount_budget_tool.v6.simple_config import audit_simple,audit_simple_period,build_runtime,create_files,save_snapshot
+from beancount_budget_tool.v6.simple_config import audit_simple,audit_simple_period,build_runtime,create_files
 from beancount_budget_tool.v6.monthly_report import render_workflow_text
 from beancount_budget_tool.v6.period_report import main as report_main,render_csv
 from beancount_budget_tool.v6.salary_plan import audit_configured_cycle

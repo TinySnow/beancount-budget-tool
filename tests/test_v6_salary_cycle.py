@@ -294,7 +294,6 @@ class SalaryCycleTests(unittest.TestCase):
         browser.select_salary_cycle("2026-09-08", "2026-10-02", "50")
         browser.refresh()
         browser.configs.remove(self.config)
-        browser.review_roots.pop()
         browser.refresh()
         self.assertIsNone(browser.outcome)
         self.assertEqual(browser.error.code, "SALARY_CYCLE_CONFIG_REQUIRED")

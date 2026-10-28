@@ -190,12 +190,6 @@ def _review_page_target(browser: ReportBrowser, page: int, columns: int, forward
     return next((index for index in reversed(range(len(spans))) if spans[index][0] <= target), 0)
 
 
-def _review_root(path: Path) -> Path:
-    return (path.parent.parent.parent if
-            path.name == "month.yaml" and path.parent.name == "reviewed" and
-            path.parent.parent.parent.name == "tui-reviews" else path.parent / "tui-reviews")
-
-
 class ReportBrowser:
     """Fresh workflow results and the current configuration for each supplied month."""
 
@@ -205,10 +199,6 @@ class ReportBrowser:
         if not self.configs:
             raise BudgetError("TUI_CONFIG_REQUIRED", "至少提供一份月报配置")
         self.loader, self.renderer = loader, renderer
-        # Reopening a saved configuration continues in the same record root;
-        # repeated sessions must not grow paths indefinitely on Windows.
-        self.review_roots = [_review_root(path) for path in self.configs]
-        self.saved = set()
         self.index = self.configs.index(initial_config.resolve()) if initial_config is not None else 0
         self.period = False
         self.period_range: tuple[str, str] | None = None
@@ -266,25 +256,6 @@ class ReportBrowser:
         self.view = "reviews" if outcome.get("review_items") else "report"
         if previous_view == "transactions" and self.has_transactions():
             self.view = "transactions"
-
-    def show_saved_month(self, result: dict):
-        """Keep the published path even if its following audit could not finish."""
-        previous = self.config
-        self.configs[self.index] = Path(result["config"]).resolve()
-        self.saved.add(self.index)
-        self.period = False
-        self.filter("")
-        self.clear()
-        if result.get("report_error"):
-            error = result["report_error"]
-            self.error = BudgetError(error["code"], error["message"], error.get("source"))
-            return
-        try:
-            self._accept_outcome(result["workflow"], self.renderer)
-        except BudgetError as exc:
-            self.error = exc
-        except (OSError, UnicodeError) as exc:
-            self.error = BudgetError("TUI_INPUT_ERROR", str(exc), str(self.config))
 
     def month_choices(self) -> list[tuple[str, Path]]:
         from .input_compiler import config_metadata as _metadata
@@ -541,10 +512,6 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     items = browser.items()
     title = {"reviews": "待审列表", "transactions": "已签发月报的交易来源", "report": "报告文本"}[browser.view]
     subtitle = f"{title}；待审总数 {total_reviews}"
-    if browser.saved and browser.period:
-        subtitle = "包含 TUI 已保存的新配置；" + subtitle
-    elif browser.index in browser.saved:
-        subtitle = "已保存，正使用新配置（? 看完整路径）；" + subtitle
     if browser.query:
         subtitle += f"；筛选：{browser.query}"
     listing = browser.outcome is not None and browser.view in {"reviews", "transactions"} and not (

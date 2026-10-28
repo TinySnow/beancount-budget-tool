@@ -1,4 +1,3 @@
-from fixture_inputs import write_explicit_inputs
 """Adversarial debt histories: independently expected cash, consumption and scope."""
 
 from datetime import date
@@ -10,7 +9,6 @@ from beancount_budget_tool.errors import BudgetError
 from beancount_budget_tool.v6.simple_config import audit_simple
 from beancount_budget_tool.v6.simple_config import audit_simple_period
 from beancount_budget_tool.v6.simple_config import build_runtime
-from beancount_budget_tool.v6.simple_config import save_snapshot
 from beancount_budget_tool.v6.obligations import audit_simple_obligations
 from beancount_budget_tool.yamlstrict import load_yaml
 from beancount_budget_tool.financial import load_financial
@@ -273,8 +271,11 @@ class LiabilityCornerTests(unittest.TestCase):
         document["claims"] = [{"claim": FactIndex(fin).for_posting(posting).as_dict(), "reason": "虚拟账本明确批准储蓄代垫",
                                "slices": [{"id": "approved_advance", "owner_id": owner, "role": "hold", "signed_units": "-100"}]}]
         c.write(ownership, document)
-        write_explicit_inputs(c.config, runtime.config)
-        result = audit_simple(c.config)
+        from beancount_budget_tool.v6.monthly_report import audit_month_workflow
+        # Internal protocol validation remains covered, but the public workflow
+        # does not acquire an external-claim configuration field.
+        result = audit_month_workflow(runtime.config)
+        self.assertIsNone(audit_simple(c.config)['report'])
         self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
         self.assertEqual(result["report"]["actual_spendable"]["actual_spendable"], "9000")
 
