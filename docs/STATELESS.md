@@ -48,4 +48,14 @@ state、clean、review等保存命令退役，状态存储模块、save_snapshot
 
 本地1080项完整测试通过，含13项零状态/字段拒绝/迁移保护用例。39个月完整JSON/待审/错误、14月+区间15份JSON、公开6份输出与修正前一致；859个隔离账本文件清单与摘要不变。该账本没有隐藏批准，外部证据拒绝迁移和缺少公开依据待审另有专门用例验证。最后补入迁移类别/错月护栏只影响显式旧配置迁移，不改这些普通查询的计算。
 
-实际arm64单文件包的e/f只读、编辑现有budgets字段后watch认证、失败页h诊断均通过；PYZ核对没有旧存储/批准适配模块，陈旧本地适配缓存已清理。Windows/Linux与三平台包CI须使用本次修正源码重新验证，历史9d13e31的绿色结果不能替代。
+实际arm64单文件包的e/f只读、编辑现有budgets字段后watch认证、失败页h诊断均通过；最终原生configure也验证人工层级拒绝且不输出。PYZ没有旧存储/批准适配模块，陈旧本地适配缓存已清理。
+
+最终源码为[`ce09676`](https://github.com/TinySnow/beancount-budget-tool/commit/ce096760a22b2a66544602cd951188986d19f11e)，包含[`f535530`](https://github.com/TinySnow/beancount-budget-tool/commit/f5355309e4ff3a8b06527e9a5219e289f4e8339a)的字段撤销。已推送到codex/v6-implementation，以下均为最终源码的新验收：
+
+| 验收 | 结果 |
+|---|---|
+| [Windows/Linux全套](https://github.com/TinySnow/beancount-budget-tool/actions/runs/40783797321) | 均1080项通过；Windows259.56秒，预期跳过2项；Linux65.48秒 |
+| [三平台独立包](https://github.com/TinySnow/beancount-budget-tool/actions/runs/40783797277) | Windows x64单文件/目录包、macOS arm64/x64构建及完整smoke均通过 |
+| 下载包 | macOS解压后脱离源码运行通过；Windows目录包在TEMP/TMP不可用时仍启动 |
+
+包验收包含两文件创建、两处新增字段拒绝、旧reviews污染不生效、保存命令退役、月报/周期/区间/导出、负债、H组合转账/赎回及历史/日末。历史9d13e31的绿色CI仅保留为过程记录，不代表它符合零新增字段合同。

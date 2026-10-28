@@ -2,7 +2,7 @@
 
 ## 当前修正：不新增字段
 
-用户1ab95c85/ead650d1在实现前已否决新增declarations，该原文后来才转交本代理。9d13e31的扩展已撤销：删除config/budgets新增字段、合并/迁移适配、save_snapshot和浏览器saved状态；继续零reviews、既有账本标签/两YAML字段、e/f只读指引。复杂外部证据不能由现有字段表达则待审或明确不支持，旧多文件迁移遇到此类依据拒绝且不输出。当前正在重新验收，9d13e31历史1078和CI绿色不代表符合这项合同。详见[当前合同](docs/STATELESS.md)。
+用户1ab95c85/ead650d1在实现前已否决新增declarations，该原文后来才转交本代理。9d13e31的扩展已在f535530/ce09676撤销：删除config/budgets新增字段、合并/迁移适配、save_snapshot和浏览器saved状态；继续零reviews、既有标签/两YAML字段和e/f只读指引。复杂证据不能表达则待审/不支持，旧配置迁移不能丢证据或重解释类别后认证。最终1080项本地/Windows/Linux通过（Win预期跳过2），39月/15份JSON/公开6输出一致，859账本文件未变。Tests40783797321、Standalone40783797277均success，三平台实际包、原生PTY和最终PYZ检查通过；9d13e31绿色仅为历史过程。详见[当前合同](docs/STATELESS.md)。
 
 ## 前一阶段（声明字段扩展现已撤销）
 
