@@ -209,7 +209,7 @@ def _query(config: Path, as_of: str, *, account=None, purpose=None, since=None, 
             if runtime: runtime.close()
 
 
-def _history(q, account, purpose, first, commodity):
+def _history(q, account, purpose, first, commodity, *, h_only=False):
     roots = {q.fin.options['name_'+kind]: kind for kind in ('assets','liabilities','expenses','income')}
     kind = roots.get(account.split(':',1)[0])
     require(kind is not None, 'QUERY_ACCOUNT_UNSUPPORTED', '该类科目不承载 fund／budget；请查询对应的资产、负债或收支科目')
@@ -232,7 +232,7 @@ def _history(q, account, purpose, first, commodity):
                 if row['account']==account:
                     opening[(account,row['owner'],row['commodity'],'H')] += Fraction(row['units'])
         claimed = {_key(row['ref']):row for row in q.ownership['ownership']}
-        books = {_key(row['k_ref']):row for row in audit_k_events(q.root,q.cutover,q.paths['accounts'],q.paths['ownership'],q.paths['k_events'])['events']} if kind=='assets' else {}
+        books = {_key(row['k_ref']):row for row in audit_k_events(q.root,q.cutover,q.paths['accounts'],q.paths['ownership'],q.paths['k_events'])['events']} if kind=='assets' and not h_only else {}
         classified = {_key(row['ref']):row for row in audit_classification(q.root,q.cutover,q.paths['classifications'])['classifications']} if kind in ('expenses','income') else {}
         if kind == 'liabilities':
             opening.update({key:value for key,value in q.liability_closing.items() if key[0]==account})
@@ -390,12 +390,20 @@ def _main(argv, history):
         parser.add_argument('--purpose','--budget',dest='purpose',help='资产 fund／负债责任用途／收支 budget 名称；省略显示全部')
         parser.add_argument('--since',help='起始日 YYYY-MM-DD；省略从 cutover 开始')
         parser.add_argument('--commodity',help='只看指定原币／商品，不做换算')
+        parser.add_argument('--before-source',help='诊断流水：完整文件路径:行号；严格停在该交易之前，无需签出月报（H 账户）')
     parser.add_argument('--format',choices=('text','json','csv'),default='text')
     parser.add_argument('--output',type=Path,help='保存到新文件；不覆盖已有文件')
     args=parser.parse_args(argv)
     try:
-        result=query(args.config,args.as_of,**({key:getattr(args,key) for key in ('account','purpose','since','commodity')} if history else {}))
-        content=(json.dumps(result,ensure_ascii=False,indent=2) if args.format=='json' else render_csv(result) if args.format=='csv' else render_text(result))
+        text_renderer, csv_renderer = render_text, render_csv
+        if history and args.before_source:
+            from .diagnostic_history import query as diagnose, render_text as text_renderer, render_csv as csv_renderer
+            _day(args.as_of, '截止日')
+            result = diagnose(args.config, args.as_of[:7], args.before_source,
+                              **{key:getattr(args,key) for key in ('account','purpose','since','commodity')})
+        else:
+            result=query(args.config,args.as_of,**({key:getattr(args,key) for key in ('account','purpose','since','commodity')} if history else {}))
+        content=(json.dumps(result,ensure_ascii=False,indent=2) if args.format=='json' else csv_renderer(result) if args.format=='csv' else text_renderer(result))
         if args.output:
             with args.output.open('x',encoding='utf-8-sig' if args.format=='csv' else 'utf-8',newline='') as stream:
                 stream.write(content+'\n')

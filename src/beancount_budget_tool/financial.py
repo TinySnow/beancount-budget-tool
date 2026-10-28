@@ -459,6 +459,27 @@ def shared_audit(audit):
 
 
 @contextmanager
+def frozen_before(fin: FinancialInput, entry):
+    """Replay a strict transaction prefix inside an already verified session.
+
+    Preserve full identities for validating saved later claims, but give each
+    prefix fresh audit caches. The owning session verifies all source bytes.
+    This view is diagnostic evidence, never a certified monthly input.
+    """
+    require(_FROZEN_FINANCIAL.get() is fin and _REPORT_INPUTS.get() is not None,
+            "QUERY_CONTEXT_INVALID", "诊断重放须位于冻结账本会话内")
+    index = next((i for i, candidate in enumerate(fin.entries) if candidate is entry), None)
+    require(index is not None, "QUERY_TARGET_INVALID", "诊断交易不属于当前账本快照")
+    prefix = replace(fin, entries=fin.entries[:index],
+                     reference_entries=fin.reference_entries if fin.reference_entries is not None else fin.entries)
+    token = _FROZEN_FINANCIAL.set(prefix)
+    try:
+        yield prefix
+    finally:
+        _FROZEN_FINANCIAL.reset(token)
+
+
+@contextmanager
 def frozen_financial(root: Path):
     """Share one booked source within a report, then verify it did not change.
 
