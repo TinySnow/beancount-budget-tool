@@ -49,6 +49,7 @@ class MacDownloadTests(unittest.TestCase):
                 self.assertIn(name + '/' + relative, members)
             self.assertFalse(any('.budget-state' in path or 'private-ledger' in path for path in members))
             self.assertIn(name + '/docs/ARCHITECTURE.md', members)
+            self.assertIn(name + '/docs/STATELESS.md', members)
             notice = tar.extractfile(name + '/LEGACY-WORKFLOWS.md').read().decode('utf-8')
             self.assertIn('旧操作入口已下线', notice)
             self.assertNotIn('beancount-budget-init --apply', notice)

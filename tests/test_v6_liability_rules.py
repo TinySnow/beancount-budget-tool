@@ -1,3 +1,4 @@
+from fixture_inputs import write_explicit_inputs
 """Ordinary configured debts require no per-transaction human approvals."""
 
 from fractions import Fraction
@@ -216,7 +217,7 @@ class LiabilityRuleTests(unittest.TestCase):
         self.run_ledger(self.purchase() + self.payment())
         runtime = build_runtime(self.config)
         self.addCleanup(runtime.close)
-        save_snapshot(self.config, runtime.config)
+        write_explicit_inputs(self.config, runtime.config)
         self.doc.pop("liabilities")
         self.write(self.config, self.doc)
         result = audit_simple(self.config)

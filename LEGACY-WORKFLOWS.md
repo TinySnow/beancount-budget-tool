@@ -1,9 +1,7 @@
-# 旧操作入口已下线
+# 旧工作流与迁移
 
-现在只维护 `config.yml`、`budgets.yml` 与账本。操作见 [QUICKSTART](QUICKSTART.md)，字段见[配置参考](docs/CONFIGURATION.md)。
+旧操作入口已下线。
 
-`init`、`next-month`、`project`、`review`、`review-month`、`review-refs` 及一次性迁移脚本不再发布。TUI 直接切月，`e` 审阅，`f` 确认月末；引用诊断使用 `state --config config.yml --check`。
+正常运行只维护账本、config.yml、budgets.yml。独立审阅/批准保存及 state、clean、review、project 等旧命令已退役；TUI e/f 仅显示来源和配置指引。
 
-已有 schema 6 快照可用 `configure --from-config 最新month.yaml --output 新目录` 复制迁移。普通负债现在统一按逐笔 budget 责任用途清算。旧整户 purpose 须删除；如果旧负债 budget 只是“偿债／借款”等分类，应先核对并改为实际责任用途。不能仅改一个开关就认定旧标签含义相同。
-
-复杂协议的导出、来源校验见[高级输入说明](docs/v6-monthly-report.md)。旧版本及工具历史仍可从 Git 历史查阅。
+旧 month.yaml 可用 configure --from-config 显式转换为两份 YAML，复杂协议成为可见 declarations，不生成隐藏状态。程序不会发现或读取旧 reviews.json.gz，也不会删除用户旧数据。已有隐藏批准必须由用户在账本/YAML重新明确，缺失时保持待审。详见 [STATELESS.md](docs/STATELESS.md)。

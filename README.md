@@ -8,8 +8,8 @@
 |---|---|
 | Windows exe／Mac 从零开始，逐月清理历史账本 | [操作步骤](QUICKSTART.md) |
 | 查询每个配置项、默认值、目标含义 | [配置参考](docs/CONFIGURATION.md) |
-| 清理旧缓存，判断哪些文件必须保留 | [文件与清理](QUICKSTART.md#哪些文件要保留) |
-| 查询复杂协议和已审状态 | [高级状态](docs/v6-monthly-report.md) |
+| 了解零隐藏状态与旧版本差异 | [两文件运行合同](docs/STATELESS.md) |
+| 查询复杂协议的显式声明 | [配置参考](docs/CONFIGURATION.md) |
 | 理解代码结构与本轮删减 | [架构导读](docs/ARCHITECTURE.md) |
 | 参与开发、核对需求 | [开发文档导航](docs/README.md) |
 
@@ -32,8 +32,9 @@ TUI：`r` 重算，`m` 跳月，`n` 下一月，`Enter` 看完整来源，`?` �
 
 - 目录版 exe 旁边的 `_internal` 是运行依赖，必须和 exe 一起保留。
 - Windows 单文件版不需要 `_internal`，会在用户 LocalAppData 的程序专用 Runtime 目录自动解包，正常退出清理本次目录；目录兼容包仍提供。
-- `.budget-state` 中的 `reviews.json.gz` 保存已审决定、月末确认等数据，应随账本备份。
-- 新版生成的运行输入在系统临时目录，正常重算／退出后自动释放。旧缓存可退出 TUI 后运行 `clean --config config.yml` 清理；不要直接删整个状态目录。
+- 运行判断只依赖账本、`config.yml`、`budgets.yml`；不读取或生成独立审阅文件。TUI 的 `e`／`f` 只提供修改指引，歧义不会被按键批准。
+- 旧版留下的隐藏审阅记录不会自动导入或删除。请保留备份，并把需要的决定明确写进账本或两份 YAML；当前查询不会信任旧批准。
+- 内部运行文档只存在于内存或系统临时目录，退出后释放；`state`／`clean` 保存审阅命令已退役。
 
 ## 源码安装与示例
 

@@ -18,7 +18,6 @@ beancount-budget-tool = "beancount_budget_tool.launcher:main"
 beancount-budget-report = "beancount_budget_tool.v6.period_report:main"
 beancount-budget-audit = "beancount_budget_tool.v6.cli:main"
 beancount-budget-configure = "beancount_budget_tool.v6.simple_config:main"
-beancount-budget-state = "beancount_budget_tool.v6.state_store:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

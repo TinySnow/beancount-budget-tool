@@ -6,11 +6,11 @@
 |---|---|---|
 | 来源快照 | source_snapshot、financial | 一次官方parser同时获得include、raw位置和记账输入，再运行官方booking、transformations、validation，前后核对来源 |
 | 稳定身份与事实表 | refs、identity、v6/facts | 外部claim不变；原始身份跨截止日共享，有界FactTable只暴露当前可见分录、日期和来源 |
-| 运行输入 | runtime_inputs、simple_config | 严格读取用户配置与状态，构造内存文档；YAML字节用于既有证据摘要、诊断和文件适配 |
+| 运行输入 | runtime_inputs、simple_config | 只读取账本与两份公开YAML，构造内存文档；不加载独立审阅状态 |
 | 查询会话 | query.QuerySession | 统一月报/区间入口，拥有输入文档、事实索引与投影图生命周期，结束前执行来源验证 |
 | 投影图 | projection.ProjectionGraph、shared_audit | 按输入视图、参数及Path内容摘要复用纯审计；内部结果递归只读，出口恢复独立可变副本 |
 | 财务规则 | v6各域 | 账户、用途、类别、负债、投资、外币与周期分别证明；规则和校验没有被删减 |
-| 展示与写适配 | monthly_report、period_report、tui、state_store | 原有文本/JSON/CSV、审阅理由和月末确认、原子状态保存 |
+| 展示与写适配 | monthly_report、period_report、tui | 文本/JSON/CSV、来源与配置修改指引；不提供批准保存 |
 
 ## 生命周期
 
@@ -22,7 +22,7 @@ audit_simple与audit_simple_period是原API薄适配，编排交给QuerySession�
 
 同一截止日视图的账户基础盘点与声明overlay分层；用途来源/声明/行内切片准备在opening变体之间共享，但期初容量和真实库存仍分别重放。准备层显式接收该视图FactIndex作为依赖，只存身份键和纯值，不把booked AST放进只读投影。进一步性能与边界见[ROUND2-PERFORMANCE.md](ROUND2-PERFORMANCE.md)。
 
-高级文件接口、状态导入/导出及TUI审阅编辑继续使用物理文件适配。TUI当前保留临时编辑文件以兼容原操作，计算进入同一QuerySession。已审状态是用户数据，不能当缓存删除。
+高级明确协议放在两份公开YAML的declarations中，继续使用原严格财务验证。TUI计算进入同一QuerySession，e/f仅说明如何修改公开输入，不保存批准。旧审阅状态不读取、不导入、不监听，也不会被自动删除。旧多文件配置仅在用户显式configure迁移时读取，输出仍为两份YAML。
 
 ## 只读计算与输出
 

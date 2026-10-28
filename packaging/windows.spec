@@ -13,7 +13,13 @@ mode = os.environ.get("BUDGET_BUNDLE_MODE", "onefile")
 if mode not in {"onefile", "onedir"}:
     raise ValueError("BUDGET_BUNDLE_MODE must be onefile or onedir")
 folder_bundle = mode == "onedir"
-hidden = collect_submodules("beancount_budget_tool")
+retired = {"beancount_budget_tool.v6.state_store",
+           "beancount_budget_tool.v6.review",
+           "beancount_budget_tool.v6.obligation_review",
+           "beancount_budget_tool.v6.month_actions",
+           "beancount_budget_tool.v6.project",
+           "beancount_budget_tool.v6.project_actions"}
+hidden = collect_submodules("beancount_budget_tool", filter=lambda name: name not in retired)
 # Beancount loads its built-in plugins (including balance/pad) by module name.
 hidden += collect_submodules("beancount", filter=lambda name: not name.endswith("_test"))
 hidden += ["curses", "_curses"]
@@ -28,6 +34,7 @@ analysis = Analysis(
     pathex=[str(root / "src")],
     datas=datas,
     hiddenimports=hidden,
+    excludes=sorted(retired),
 )
 archive = PYZ(analysis.pure)
 exe = EXE(

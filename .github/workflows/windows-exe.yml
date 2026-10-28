@@ -117,7 +117,7 @@ jobs:
             New-Item -ItemType Directory -Path "$PackageDir/packaging"
             Copy-Item packaging/MACOS-START.md "$PackageDir/packaging/"
             New-Item -ItemType Directory -Path "$PackageDir/docs"
-            Copy-Item docs/CONFIGURATION.md,docs/v6-monthly-report.md,docs/ARCHITECTURE.md "$PackageDir/docs/"
+            Copy-Item docs/CONFIGURATION.md,docs/v6-monthly-report.md,docs/ARCHITECTURE.md,docs/STATELESS.md "$PackageDir/docs/"
             $StartText = Get-Content packaging/WINDOWS-START.md -Raw -Encoding utf8
             $StartText = $StartText.Replace('../QUICKSTART.md', 'QUICKSTART.md').Replace('../docs/', 'docs/')
             Set-Content "$PackageDir/START-HERE.md" $StartText -Encoding utf8

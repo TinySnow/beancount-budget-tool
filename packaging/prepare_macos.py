@@ -28,7 +28,7 @@ def prepare(executable: Path, output: Path, arch: str, revision: str, *, source:
         shutil.copy2(source / filename, package / filename)
     shutil.copy2(source / "packaging/THIRD-PARTY-NOTICES.md", package / "THIRD-PARTY-NOTICES.md")
     (package / "docs").mkdir()
-    for filename in ("CONFIGURATION.md", "v6-monthly-report.md", "ARCHITECTURE.md"):
+    for filename in ("CONFIGURATION.md", "v6-monthly-report.md", "ARCHITECTURE.md", "STATELESS.md"):
         shutil.copy2(source / "docs" / filename, package / "docs" / filename)
     (package / "example").mkdir()
     shutil.copytree(source / "examples/v6/simple", package / "example/simple",

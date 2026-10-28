@@ -1,10 +1,10 @@
 {
   "kind": "layered",
-  "title": "Budget query architecture",
+  "title": "Stateless two-YAML budget query architecture",
   "layers": [
     {"id": "input_layer", "title": "输入与证据", "items": [
       {"id": "snapshot", "label": "SourceSnapshot", "detail": "官方解析、完整内容清单、include闭包与最终验证"},
-      {"id": "review_context", "label": "ReviewContext", "detail": "严格配置、已审状态、来源有效性与变更边界"}
+      {"id": "review_context", "label": "Explicit YAML declarations", "detail": "账本与两份公开YAML；不读取隐藏审阅状态"}
     ]},
     {"id": "execution_layer", "title": "共享执行层", "items": [
       {"id": "facts", "label": "FactTable", "detail": "一次建立交易/分录身份、索引和来源位置"},
@@ -12,7 +12,7 @@
     ]},
     {"id": "query_layer", "title": "查询与交互", "items": [
       {"id": "queries", "label": "报告查询", "detail": "月报、区间、发薪周期、账户历史与日末快照"},
-      {"id": "presentation", "label": "输出与审阅", "detail": "CLI/TUI、文本/JSON/CSV、来源解释与原子审阅保存"}
+      {"id": "presentation", "label": "输出与修改指引", "detail": "CLI/TUI、文本/JSON/CSV、来源解释；用户编辑公开输入，不批准或保存隐藏决定"}
     ]}
   ],
   "flows": [

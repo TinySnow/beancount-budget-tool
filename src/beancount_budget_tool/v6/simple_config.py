@@ -1,7 +1,7 @@
 """Two editable files in front of the existing evidence-based audit engine.
 
-Generated inputs and approved review snapshots live under .budget-state.
-They are implementation data, never a second set of editable user settings.
+Every decision comes from the ledger and the two public YAML files.
+Generated documents are temporary adapters, never persisted review state.
 """
 
 from __future__ import annotations
@@ -39,6 +39,9 @@ from .targets import _month
 
 GOALS = {"expense_targets", "expense_direct_targets", "allocation_targets"}
 SCALARS = {"schema", "ledger", "cutover", "month", "report_currency"}
+SHARED_DECLARATIONS = {"accounts", "ownership", "classifications", "obligations",
+                       "benefit_groups", "purpose_pools", "h_transfers", "k_events", "h_fx"}
+MONTHLY_DECLARATIONS = {"completeness", "debt_coverage", "debt_settlements"}
 
 
 def is_simple(document: object) -> bool:
@@ -48,10 +51,6 @@ def is_simple(document: object) -> bool:
 def _write(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.dump(value, Dumper=SetupDumper, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-
-def state_dir(config: Path) -> Path:
-    return config.resolve().parent / ".budget-state" / config.stem
 
 
 def _unchanged(inputs: dict):
@@ -96,7 +95,7 @@ def _documents(config: Path, inputs: dict | None = None):
     inputs.setdefault(config, input_bytes(config))
     doc = load_yaml(config)
     fields = {"schema", "ledger", "budgets", "cutover", "month", "report_currency", "defaults"}
-    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"accounts", "account_groups", "account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis", "liabilities", "liability_budget_mode"},
+    require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"accounts", "account_groups", "account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis", "liabilities", "liability_budget_mode", "declarations"},
                  "SIMPLE_CONFIG_INVALID", "config.yml 须含 schema: 1、ledger、budgets、cutover、month、report_currency、defaults，以及 accounts 或 account_groups", config)
     for key in ("ledger", "budgets", "cutover", "month", "report_currency"):
         require_yaml(type(doc[key]) is str and bool(doc[key].strip()), "SIMPLE_CONFIG_INVALID",
@@ -156,7 +155,7 @@ def _layer(plans: dict, month: str, source: Path):
         except InvalidOperation:
             return node.value  # The ordinary amount validator will reject it.
     def apply(value, keys, *, monthly=False):
-        require_yaml(type(value) is dict and set(value) <= GOALS | ({"completeness_confirmed"} if monthly else set()),
+        require_yaml(type(value) is dict and set(value) <= GOALS | ({"completeness_confirmed", "declarations"} if monthly else set()),
                      "SIMPLE_BUDGETS_INVALID", "预算层字段无效", source, keys)
         for key in GOALS & set(value):
             require_yaml(type(value[key]) is dict, "SIMPLE_BUDGETS_INVALID", "目标须为中文名称到金额的映射", source, (*keys, key))
@@ -187,55 +186,47 @@ def _layer(plans: dict, month: str, source: Path):
     return merged, locations
 
 
-def _baseline(config: Path, inputs: dict, month: str):
-    from .state_store import load_view
-    view = load_view(config, inputs, month)
-    return view if view is not None else _legacy_baseline(config, inputs, month)
-
-
-def _legacy_baseline(config: Path, inputs: dict, month: str):
-    manifest = state_dir(config) / "latest.yaml"
-    if not manifest.exists():
-        inputs[manifest] = None
-        return {}, None
-    inputs[manifest] = input_bytes(manifest)
-    pointer = load_yaml(manifest)
-    require(type(pointer) is dict and {"snapshot"} <= set(pointer) <= {"snapshot", "months"} and type(pointer["snapshot"]) is str,
-            "SIMPLE_STATE_INVALID", "内部审阅指针无效；原审阅文件保留", str(manifest))
-    require(type(pointer.get("months", {})) is dict and
-            all(type(key) is str and type(value) is str for key, value in pointer.get("months", {}).items()),
-            "SIMPLE_STATE_INVALID", "内部月份审阅指针无效", str(manifest))
-    path = config_path(manifest, pointer["snapshot"], "snapshot")
-    require(path.is_relative_to(state_dir(config)), "SIMPLE_STATE_INVALID", "内部审阅指针越界", str(manifest))
-    doc = load_yaml(path)
-    inputs[path] = input_bytes(path)
-    files = {}
-    for key in set(doc) - SCALARS:
-        source = config_path(path, doc[key], key)
-        inputs[source] = input_bytes(source)
-        files[key] = load_yaml(source)
-    monthly = pointer.get("months", {}).get(month)
-    if monthly and monthly != pointer["snapshot"]:
-        local = config_path(manifest, monthly)
-        require(local.is_relative_to(state_dir(config)), "SIMPLE_STATE_INVALID", "月份审阅指针越界", str(manifest))
-        inputs[local] = input_bytes(local)
-        local_doc = load_yaml(local)
-        for key in ("completeness", "debt_coverage", "debt_settlements"):
-            files.pop(key, None)
-            if key in local_doc:
-                source = config_path(local, local_doc[key], key)
-                inputs[source] = input_bytes(source)
-                files[key] = load_yaml(source)
-    elif not monthly and doc["month"] != month:
-        for key in ("completeness", "debt_coverage", "debt_settlements"):
-            files.pop(key, None)
-    return files, doc
+def _explicit_declarations(doc, plans, month, config, budgets):
+    shared = doc.get('declarations', {})
+    monthly = plans.get('months', {}).get(month, {}).get('declarations', {})
+    for value, allowed, source, keys in (
+            (shared, SHARED_DECLARATIONS, config, ('declarations',)),
+            (monthly, MONTHLY_DECLARATIONS, budgets, ('months', month, 'declarations'))):
+        require_yaml(type(value) is dict and set(value) <= allowed and
+                     all(type(item) is dict for item in value.values()),
+                     'SIMPLE_DECLARATIONS_INVALID', 'declarations 须为已支持协议名称到明确声明的映射，不接受文件路径', source, keys)
+    for name, allowed in (
+            ('accounts', {'credit_card_whitelist', 'same_day_settlements'}),
+            ('ownership', {'owners', 'claims', 'transfer_orders'}),
+            ('classifications', {'categories', 'classifications'})):
+        require_yaml(set(shared.get(name, {})) <= allowed, 'SIMPLE_DECLARATIONS_INVALID',
+                     f'{name} 的声明字段无效；普通属性应使用现有账户、默认规则或账本标签', config, ('declarations', name))
+    return deepcopy(shared | monthly)
 
 
 def save_snapshot(config: Path, reviewed: Path, *, expected: dict | None = None):
-    """Persist approved data in one compressed, atomically replaced file."""
-    from .state_store import save
-    save(config, reviewed, expected=expected)
+    """Reject the retired hidden-approval API without touching any files."""
+    raise BudgetError('REVIEW_SAVE_REMOVED', '不再保存独立审阅记录；请明确修改账本、config.yml 或 budgets.yml 后重算', str(config))
+
+
+def _split_declarations(documents):
+    """Preserve explicitly supplied advanced YAML decisions in two files.
+
+    Used only by the user's configure --from-config operation, never by normal
+    queries. This function does not discover or import hidden review files.
+    """
+    shared = {}
+    fields = {'accounts': {'credit_card_whitelist', 'same_day_settlements'},
+              'ownership': {'owners', 'claims', 'transfer_orders'},
+              'classifications': {'categories', 'classifications'}}
+    for key in SHARED_DECLARATIONS & documents.keys():
+        value = documents[key]
+        if key in fields:
+            value = {name: item for name, item in value.items() if name in fields[key]}
+        if value:
+            shared[key] = deepcopy(value)
+    monthly = {key: deepcopy(documents[key]) for key in MONTHLY_DECLARATIONS & documents.keys()}
+    return shared, monthly
 
 
 def _registry(current, old, prefix, *, categories=False):
@@ -306,7 +297,7 @@ class Runtime:
                 if (item.get("config") or "").startswith(str(self.config.parent)):
                     item["config"] = str(self.source)
                 if item.get("reason_code") == "EXTERNAL_SCOPE_PENDING":
-                    item["detail"] = "核对本月末账单后按 f 确认；也可在 budgets.yml 对应月份填写 completeness_confirmed: true。下一月须单独确认。"
+                    item["detail"] = "核对本月末账单后，在 budgets.yml 对应月份填写 completeness_confirmed: true 并重算；下一月须单独配置。"
                     item["source"] = yaml_path_location(self.budgets, ("months", item.get("month", result.get("month", self.month)), "completeness_confirmed"))
                     continue
                 source = item.get("source") or ""
@@ -324,15 +315,14 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
     goals, locations = _layer(plans, month, budgets)
     from .salary_plan import read_cycles
     cycles = read_cycles(plans, budgets, default_category=doc.get("spendable_cap_category", doc["defaults"]["expense_category"]))
-    state, previous = _baseline(config, inputs, month)
-    old_debts = state.get("obligations", {})
+    # Never inspect or load .budget-state: identical ledger + YAML inputs must
+    # give identical decisions even if a legacy review file exists nearby.
+    declarations = _explicit_declarations(doc, plans, month, config, budgets)
+    old_debts = declarations.get("obligations", {})
     require_yaml(not old_debts.get("account_rules") or "budget_owners" in old_debts or
                  doc.get("liability_budget_mode") == "purpose", "LIABILITY_MODE_REMOVED",
                  "已保存的是旧整户用途／纯分类负债状态。请先核对 Liabilities 的 budget 为责任用途，再显式填写 liability_budget_mode: purpose；不会静默重解释旧分类。",
                  config, ("liability_budget_mode",))
-    if previous:
-        require(previous["cutover"] == doc["cutover"] and previous["report_currency"] == doc["report_currency"],
-                "SIMPLE_STATE_CONTEXT_CHANGED", "cutover 或报告货币与已审记录不同；不能套用原审阅决定", str(config))
     runtime = Runtime(config, month, inputs, budgets=budgets)
     try:
         cutover = date.fromisoformat(doc["cutover"])
@@ -370,7 +360,7 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
                     budget_purposes.update(part["name"] for part in labels or [] if part["name"] != "-")
     validate_rules(liability_rules, set(), config, public=True, liability_root=fin.options['name_liabilities'])
     owners = set(filled["allocation_targets"]) | set(plans.get("purposes", [])) | budget_purposes
-    owners.update(row["name"] for row in state.get("ownership", {}).get("owners", []))
+    owners.update(row["name"] for row in declarations.get("ownership", {}).get("owners", []))
     filled["allocation_targets"] = {name: goals["allocation_targets"].get(name, "not_assessed")
                                      for name in owners | set(goals["allocation_targets"])}
     declared_expenses = set(goals["expense_targets"]) | set(goals["expense_direct_targets"])
@@ -449,17 +439,17 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
     month_config = documents.pop("month.yaml")
     generated = {name.removesuffix(".yaml"): document for name, document in documents.items()}
     for key in ("credit_card_whitelist", "same_day_settlements"):
-        if key in state.get("accounts", {}):
-            generated["accounts"][key] = deepcopy(state["accounts"][key])
-    owner_rows, owner_map, owner_names = _registry(generated["ownership"]["owners"], state.get("ownership", {}).get("owners", []), "fund")
-    categories, category_map, category_names = _registry(generated["classifications"]["categories"], state.get("classifications", {}).get("categories", []), "category", categories=True)
+        if key in declarations.get("accounts", {}):
+            generated["accounts"][key] = deepcopy(declarations["accounts"][key])
+    owner_rows, owner_map, owner_names = _registry(generated["ownership"]["owners"], declarations.get("ownership", {}).get("owners", []), "fund")
+    categories, category_map, category_names = _registry(generated["classifications"]["categories"], declarations.get("classifications", {}).get("categories", []), "category", categories=True)
     ownership = generated["ownership"]
-    ownership.update(owners=owner_rows, claims=deepcopy(state.get("ownership", {}).get("claims", [])))
+    ownership.update(owners=owner_rows, claims=deepcopy(declarations.get("ownership", {}).get("claims", [])))
     ownership["defaults"] = {key: owner_map[value] for key, value in ownership["defaults"].items()}
-    if "transfer_orders" in state.get("ownership", {}):
-        ownership["transfer_orders"] = deepcopy(state["ownership"]["transfer_orders"])
+    if "transfer_orders" in declarations.get("ownership", {}):
+        ownership["transfer_orders"] = deepcopy(declarations["ownership"]["transfer_orders"])
     classifications = generated["classifications"]
-    classifications.update(categories=categories, classifications=deepcopy(state.get("classifications", {}).get("classifications", [])))
+    classifications.update(categories=categories, classifications=deepcopy(declarations.get("classifications", {}).get("classifications", [])))
     classifications["defaults"] = {key: category_map[value] for key, value in classifications["defaults"].items()}
     if "income_category" in doc["defaults"]:
         classifications["defaults"]["income_category_id"] = category_names[doc["defaults"]["income_category"]]
@@ -471,8 +461,8 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
         if row["owner"] != "-":
             row["owner"] = owner_map[row["owner"]]
     for key in ("obligations", "benefit_groups", "purpose_pools", "h_transfers", "k_events", "h_fx", "debt_coverage", "debt_settlements"):
-        if key in state:
-            generated[key] = deepcopy(state[key])
+        if key in declarations:
+            generated[key] = deepcopy(declarations[key])
     generated["obligations"]["owners"] = owner_rows
     # These settings are authoritative in config.yml, never sticky approvals
     # recovered from .budget-state after a user removes a rule.
@@ -518,11 +508,11 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
     if doc.get("expense_budget_basis") == "salary_cycle":
         generated["salary_cycle"] = {"schema": 1, "cycles": cycles, "category": cap, "source": str(budgets)}
     complete = goals.get("completeness_confirmed")
-    old_complete = state.get("completeness", {})
+    explicit_complete = declarations.get("completeness")
     if complete is True:
         generated["completeness"]["reason"] = "使用者在 budgets.yml 确认该月截止日账单完整"
-    elif complete is None and old_complete.get("as_of") == generated["completeness"]["as_of"]:
-        generated["completeness"] = deepcopy(old_complete)
+    elif complete is None and explicit_complete is not None:
+        generated["completeness"] = deepcopy(explicit_complete)
     else:
         generated.pop("completeness", None)
         month_config.pop("completeness", None)
@@ -552,7 +542,7 @@ def audit_simple_period(config: Path, since=None, through=None):
 
 
 def create_files(output: Path, *, ledger: Path | None = None, month: str | None = None, old_config: Path | None = None):
-    """Create two public files, optionally importing all reviewed evidence intact."""
+    """Create two explicit YAML files; never create hidden approval state."""
     from .monthly_report import REQUIRED, OPTIONAL
     output = output.resolve()
     require(not output.exists(), "SIMPLE_OUTPUT_EXISTS", "输出目录已存在；请选择新目录，原配置不会覆盖", str(output))
@@ -655,10 +645,14 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
             for root_name in setup["expense_targets"]:
                 if not any(name == root_name or name.startswith(root_name + ".") for name in configured):
                     budgets.setdefault("months", {}).setdefault(month, {}).setdefault("expense_targets", {})[root_name] = None
+        if old_config:
+            shared, monthly = _split_declarations(state)
+            if shared:
+                public['declarations'] = shared
+            if monthly:
+                budgets.setdefault('months', {}).setdefault(month, {})['declarations'] = monthly
         _write(staging / "config.yml", public)
         _write(staging / "budgets.yml", budgets)
-        if old_config:
-            save_snapshot(staging / "config.yml", old_config, expected=watched)
         _unchanged(watched)
         os.replace(staging, output)
     return {"config": str(output / "config.yml"), "budgets": str(output / "budgets.yml"),

@@ -1,3 +1,4 @@
+from fixture_inputs import write_explicit_inputs
 """The editable surface is config.yml + budgets.yml, not compiled sidecars."""
 
 from copy import deepcopy
@@ -362,7 +363,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
         self.assertEqual(browser.outcome["report"]["cycle_budget"]["remaining"], "90")
 
-    def test_saved_review_is_retained_after_refresh_and_public_target_edits(self):
+    def test_explicit_yaml_claims_survive_refresh_and_public_target_edits(self):
         self.migrate()
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace(
             '2026-09-01 open Assets:Cash', '2026-09-01 open Assets:Bank\n2026-09-01 open Assets:Cash') +
@@ -375,7 +376,8 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         item = next(item for item in browser.reviews() if item["reason_code"] == "FUND_MIXED_SOURCE")
         prepared = prepare_review(browser.config, item)
         saved = save_review(prepared, "已收入资金", "virtual explicit source choice", self.base / "approved", approved=True)
-        browser.show_saved_month(saved)
+        write_explicit_inputs(self.config, Path(saved["config"]))
+        browser.refresh()
         self.assertIsNone(browser.error, browser.error)
         self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED", browser.outcome["review_items"])
         plans = yaml.safe_load(self.budgets.read_text(encoding="utf-8"))
@@ -387,7 +389,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         restarted.refresh()
         self.assertEqual(restarted.outcome["status"], "CERTIFIED_SCOPED")
 
-    def test_actual_edit_key_path_saves_internal_state_without_retargeting_user_entry(self):
+    def test_edit_key_only_guides_then_ledger_edit_resolves_ambiguity(self):
         self.migrate()
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8").replace(
             '2026-09-01 open Assets:Cash', '2026-09-01 open Assets:Bank\n2026-09-01 open Assets:Cash') +
@@ -400,29 +402,40 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         browser.selected = next(index for index, item in enumerate(browser.reviews()) if item["reason_code"] == "FUND_MIXED_SOURCE")
         with patch("beancount_budget_tool.v6.tui._read_field", side_effect=["已收入资金", "virtual choice", "y"]), patch("beancount_budget_tool.v6.tui._message"):
             _edit_review(FakeScreen(size=(24, 100)), browser)
-        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
-        restarted = SimpleReportBrowser(self.config)
-        restarted.refresh()
-        self.assertEqual(restarted.outcome["status"], "CERTIFIED_SCOPED")
-
-    def test_actual_month_end_key_retains_confirmations_for_both_months_after_restart(self):
-        self.migrate()
-        browser = SimpleReportBrowser(self.config, "2026-10")
-        browser.refresh()
         self.assertEqual(browser.outcome["status"], "NEEDS_REVIEW")
-        with patch("beancount_budget_tool.v6.tui._read_field", side_effect=["virtual month fully checked", "y"]), patch("beancount_budget_tool.v6.tui._message"):
-            _confirm_month_end(FakeScreen(size=(30, 120)), browser)
-        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
-        for month in ("2026-09", "2026-10"):
-            restarted = SimpleReportBrowser(self.config, month)
-            restarted.refresh()
-            self.assertEqual(restarted.outcome["status"], "CERTIFIED_SCOPED", month)
+        self.assertFalse((self.config.parent / '.budget-state').exists())
+        text = self.ledger.read_text(encoding='utf-8').replace('  Assets:Cash -1 CNY\n', '  Assets:Cash -1 CNY\n    fund: "已收入资金"\n')
+        self.ledger.write_text(text, encoding='utf-8')
+        browser.refresh()
+        self.assertEqual(browser.outcome['status'], 'CERTIFIED_SCOPED')
 
-    def test_snapshot_is_self_contained_after_runtime_files_are_removed(self):
+    def test_month_end_key_is_read_only_until_public_yaml_is_edited(self):
+        self.migrate()
+        browser = SimpleReportBrowser(self.config, '2026-10')
+        self.addCleanup(browser.close)
+        browser.refresh()
+        self.assertEqual(browser.outcome['status'], 'NEEDS_REVIEW')
+        before = self.budgets.read_bytes()
+        with patch('beancount_budget_tool.v6.tui._read_field') as prompt, patch('beancount_budget_tool.v6.tui._message'):
+            _confirm_month_end(FakeScreen(size=(30, 120)), browser)
+        prompt.assert_not_called()
+        self.assertEqual(self.budgets.read_bytes(), before)
+        self.assertEqual(browser.outcome['status'], 'NEEDS_REVIEW')
+        plans = yaml.safe_load(before)
+        plans.setdefault('months', {})['2026-10'] = {'completeness_confirmed': True}
+        self.write(self.budgets, plans)
+        for month in ('2026-09', '2026-10'):
+            reopened = SimpleReportBrowser(self.config, month)
+            self.addCleanup(reopened.close)
+            reopened.refresh()
+            self.assertEqual(reopened.outcome['status'], 'CERTIFIED_SCOPED')
+        self.assertFalse((self.config.parent / '.budget-state').exists())
+
+    def test_two_public_files_are_self_contained_after_runtime_files_are_removed(self):
         import shutil
         self.migrate()
         runtime = build_runtime(self.config)
-        save_snapshot(self.config, runtime.config)
+        write_explicit_inputs(self.config, runtime.config)
         shutil.rmtree(runtime.config.parent)
         self.assertEqual(audit_simple(self.config)["status"], "CERTIFIED_SCOPED")
 

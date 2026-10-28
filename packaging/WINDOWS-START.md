@@ -37,7 +37,7 @@
 .\beancount-budget-tool.exe --config "D:\Beancount\budget\simple\config.yml" --month 2023-07 --format tui
 ```
 
-修改账本 fund／budget 或两份配置后，保存并按 `r`。待审项按 `Enter` 查看完整文件与行号；`e` 保存分类／用途决定，`f` 核对本月末资料完整性，`n` 进入下一月，`m` 跳月，`x` 导出。每月仍用同一 config、budgets 和 cutover，无需复制填写表或手工编译。
+修改账本 fund／budget 或两份配置后，保存并按 `r`。待审项按 `Enter` 查看完整文件与行号；`e` 显示修改指引，`f` 显示本月末完整性的 YAML 填写指引，`n` 进入下一月，`m` 跳月，`x` 导出。每月仍用同一 config、budgets 和 cutover，无需复制填写表或手工编译。
 
 消费上限按发薪周期时，在 config.yml 设置 `expense_budget_basis: salary_cycle`，在 budgets.yml 的 `salary_cycles` 按实际发薪日保存 expense_targets；无需另设自然月上限。月报的最多能花使用当前周期剩余额度与已审可支付资金的较小值。`w` 直接选已保存周期；本次工资日包含，下一工资日全天归下一周期。完整示例见 QUICKSTART。
 
@@ -45,15 +45,6 @@
 
 ## 升级与清理
 
-升级程序时替换解压包，保留账本、两份配置及 `.budget-state`。后者若包含已审决定，就不是可随意删除的缓存。
+更新程序时保留自己的账本、config.yml 和 budgets.yml。当前程序不读取或创建独立审阅状态，不使用 reviews.json.gz；TUI e/f 仅提供修改指引，缺少明确依据时仍待审。用户应编辑账本或两份 YAML 后重算。
 
-新版把必要审阅数据收拢在 `.budget-state/config/reviews.json.gz`，随账本备份。计算临时输入正常退出自动释放。旧版留下很多 runtime／snapshots／reviews 时，先退出其他预算工具窗口，再运行一次：
-
-```powershell
-.\beancount-budget-tool.exe clean --config "D:\Beancount\budget\simple\config.yml" --dry-run
-.\beancount-budget-tool.exe clean --config "D:\Beancount\budget\simple\config.yml"
-```
-
-第一条只预览；第二条先保留决定与恢复资料，再删除旧缓存和散落文件。不会删除 `_internal`、账本或两份配置。纯行内标签且没有保存审阅的工作流可完全没有状态文件。
-
-若报错，请保留运行命令、完整错误及包内 BUILD-COMMIT.txt，便于定位。旧填表、编译、项目登记命令已下线；直接使用两文件配置。高级状态见 [说明](../docs/v6-monthly-report.md)。
+旧版留下的 .budget-state 不会自动加载、转换或删除；请保留备份，需要的决定应显式写入账本或两份 YAML。state/clean 保存审阅命令已退役。目录兼容包的 _internal 仍是运行依赖，不要删除。若报错，请保留完整命令、错误和 BUILD-COMMIT.txt。

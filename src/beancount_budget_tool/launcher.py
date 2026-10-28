@@ -13,8 +13,6 @@ COMMANDS = {
     "monthly": ("beancount_budget_tool.v6.monthly_report", "查看月报／TUI"),
     "report": ("beancount_budget_tool.v6.period_report", "区间报告／CSV 导出"),
     "configure": ("beancount_budget_tool.v6.simple_config", "创建／迁移 config.yml + budgets.yml 两文件入口"),
-    "clean": ("beancount_budget_tool.v6.state_store", "清理缓存并将审阅记录收拢到单个文件"),
-    "state": ("beancount_budget_tool.v6.state_store", "清理／导出／导入高级审阅状态"),
     "audit": ("beancount_budget_tool.v6.cli", "分项审计"),
     "history": ("beancount_budget_tool.v6.account_queries", "追查会计科目内预算用途的变动与余额"),
     "snapshot": ("beancount_budget_tool.v6.account_queries", "查看指定日日末的预算用途分布"),
@@ -45,10 +43,10 @@ def main(argv=None) -> int:
         parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
         parser.parse_args(args or ["--help"])
         return 0
-    if args[0] in {"init", "next-month", "project", "review", "review-month", "review-refs", "classification-proposals"}:
+    if args[0] in {"init", "next-month", "project", "review", "review-month", "review-refs", "classification-proposals", "state", "clean"}:
         import json
         print(json.dumps({"error": {"code": "COMMAND_RETIRED", "message":
-            "旧填表／月份登记命令已下线。使用 configure 创建 config.yml + budgets.yml；monthly/TUI 直接切月和审阅；state --check 检查来源引用。"}}, ensure_ascii=False), file=sys.stderr)
+            "独立审阅保存／状态命令已下线。使用 configure 创建 config.yml + budgets.yml；歧义请修改账本或这两份 YAML，monthly/TUI 重算。"}}, ensure_ascii=False), file=sys.stderr)
         return 2
     command = args.pop(0) if args[0] in COMMANDS else "monthly"
     module = import_module(COMMANDS[command][0])

@@ -1,4 +1,4 @@
-# 月报与高级状态
+# 月报与明确输入
 
 日常操作见 [QUICKSTART](../QUICKSTART.md)，配置见 [CONFIGURATION](CONFIGURATION.md)。只维护两份 YAML 与账本，不需要手工生成下列内部文件。
 
@@ -14,24 +14,9 @@
 
 自然月负责核对账务。消费上限可选择自然月或发薪周期；最多能花取已审可支付资金与相应目标余额的较小值。未知历史目标可写 `not_assessed`，允许核对账务但不签发额度数值。月末之后现实中发生的新交易不纳入历史报告，报告列出截止日提醒。
 
-## 两文件之外的已审数据
+## 没有独立批准文件
 
-TUI `e` 保存的判断依据、来源认领和 `f` 的月末确认存于 `.budget-state/<配置名>/reviews.json.gz`。该文件随账本备份；程序缓存可用 `clean --config config.yml` 清理。账本变更后重新校验引用，不能把失效批准当作新来源。
-
-需要检查复杂来源协议时：
-
-```bash
-beancount-budget-tool state --config budget/simple/config.yml --month 2024-03 --check
-beancount-budget-tool state --config budget/simple/config.yml --month 2024-03 --export /tmp/budget-state-export
-```
-
-`--check` 只诊断引用。导出目录必须不存在，不覆盖旧数据。导出的 schema 6 `month.yaml` 与侧文件是后端证据副本，不是新的日常工作流；可直接用 `--config` 检查副本。审阅后回存：
-
-```bash
-beancount-budget-tool state --config budget/simple/config.yml --import-reviewed /tmp/budget-state-export/month.yaml
-```
-
-来源、金额、上下文或文件变化会阻止保存。导入不是跳过审计，随后必须重跑月报。旧整户负债模式不再接受，不能把旧纯分类标签静默迁成责任用途。
+程序只根据账本和两份YAML判断。TUI `e`／`f`仅显示来源与配置指引，不保存批准或月末确认；缺少依据时保持待审。旧审阅状态不读取、不导入、不监听，也不自动删除。复杂明确依据写在两份YAML的`declarations`，见[零隐藏状态合同](STATELESS.md)。原始来源身份、精确守恒和截止日核验不变。
 
 ## 后端输入用途
 

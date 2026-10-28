@@ -69,10 +69,11 @@ class GroupPaymentTests(unittest.TestCase):
         browser.view = 'reviews'
         row = self.row(browser, shape, amount)
         browser.selected = browser.items().index(row)
-        with patch('beancount_budget_tool.v6.tui._read_field', side_effect=[decision, '逐条核对虚拟来源', 'y']), \
-             patch('beancount_budget_tool.v6.tui._message') as message:
-            _edit_review(FakeScreen(size=(35, 130)), browser)
-        self.assertEqual(message.call_args.args[1], '已保存审阅决定', message.call_args)
+        from uuid import uuid4
+        prepared = prepare_review(browser.config, row)
+        result = save_review(prepared, decision, '逐条核对虚拟来源', self.base / ('explicit-' + uuid4().hex), approved=True)
+        browser.configs[browser.index] = Path(result["config"]).resolve()
+        browser.refresh()
 
     def approve_origins(self, browser):
         self.submit(browser, 'asset_inflow', '生活费')

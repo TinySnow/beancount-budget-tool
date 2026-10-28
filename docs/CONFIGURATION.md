@@ -206,9 +206,9 @@ accounts:
 
 ### 待审与复杂清算
 
-分类或资产用途有歧义可在 TUI `e` 保存来源决定；理由存于 `.budget-state`。普通负债用途不明时，应补对应 Liabilities 分录的 budget；多用途部分清偿须明确金额，不按 FIFO 或比例猜。
+分类或资产用途有歧义时，TUI `e` 只显示来源与修改指引；请在账本 budget/fund 或 YAML 显式声明。普通负债用途不明时，应补对应 Liabilities 分录的 budget；多用途部分清偿须明确金额，不按 FIFO 或比例猜。
 
-复杂的逐来源关联、同日先后未知清算、期初责任和外币锁定成本仍由高级来源协议核对。可用 `state --export` 检查已有协议；它们不属于每笔普通负债的必填步骤，也不能用批准绕过程序实现缺口。原顺序、原币金额、责任容量与真实资产库存都须成立。详见[高级状态说明](v6-monthly-report.md)。
+复杂的逐来源关联、同日先后未知清算、期初责任和外币锁定成本仍由高级来源协议核对。请在 config.yml／budgets.yml 的 declarations 中显式配置；它们不属于每笔普通负债的必填步骤，也不能用批准绕过程序实现缺口。原顺序、原币金额、责任容量与真实资产库存都须成立。详见[高级状态说明](v6-monthly-report.md)。
 
 ### K 基金申赎、损益和零金额记录
 
@@ -293,7 +293,7 @@ months:
 | `expense_targets` | 消费目标，包含该类别及所有子类别 |
 | `expense_direct_targets` | 高级用法：只考核该节点直接费用，不包含子类 |
 | `allocation_targets` | 正式用途净划拨目标 Q，实际 G 从账本得出；不等于消费目标或持仓 |
-| `months.<月份>.completeness_confirmed` | 只针对该月的资料完整性声明：true 已核对，false 明确未确认。不能放在 defaults 中跨月自动批准；也可省略，用 TUI `f` 核对并保存记录 |
+| `months.<月份>.completeness_confirmed` | 只针对该月的资料完整性声明：true 已核对，false 明确未确认。不能放在 defaults 中跨月自动批准；省略或 false 保持待审；TUI `f` 仅显示填写指引 |
 
 覆盖顺序是 defaults → 已生效模板（按日期顺序）→ 当月设置，按每个名称覆盖，未覆盖项继续沿用。
 
@@ -360,24 +360,12 @@ salary_cycles:
 
 ## 文件与存储
 
-`_internal` 是目录版 exe 的依赖；完整保留。单文件版没有这个目录，启动前会解包依赖；不能通过删除目录版依赖来转换版本。Windows 单文件版在 `%LOCALAPPDATA%\BeancountBudgetTool\Runtime` 下创建每次运行的私有解包目录，正常退出清理；该设置在 Python 启动前生效，不依赖系统 TEMP 路径。原 VS Code 故障根因尚未确认，不能据此承诺所有权限问题已经解决；目录版保留作兼容选择。
+运行只读取账本、config.yml、budgets.yml；内部内存/临时文档不需要用户维护，不保存批准状态。程序不会读取或生成 `.budget-state/config/reviews.json.gz`。旧记录不会自动导入或删除，也不会使当前缺少依据的月份认证。
 
-当前 Mac 的 arm64／x64 包均为单文件版，可单独移动 `beancount-budget-tool`；Windows 仍提供目录版与单文件版。更换程序不影响账本、两份配置和审阅状态，后者继续单独备份。
+TUI `e`／`f` 是只读配置指引。用户应编辑账本标签、账户/默认规则、目标、月末声明或显式协议后重算；歧义不会通过一次按键获得批准。
 
-正常使用只会在有已审数据时保存 `.budget-state/config/reviews.json.gz`，包含已审来源决定、月末声明、债务证据和恢复资料。它不是缓存，需备份。运行输入放系统临时目录，正常重算／退出自动释放；纯行内配置可完全没有持久状态。
+单文件程序正常退出清理解包目录；目录兼容包的 `_internal` 是运行依赖，不能删除。更新程序只替换程序文件，账本与两份 YAML 保留。
 
-审阅理由在最终输入 y 后随决定一起保存到这个压缩文件，不追加到原账本、config.yml 或 budgets.yml；未批准／取消的表单内容不持久保存。保存成功页显示理由和文件位置，已审交易详情显示分类／用途／责任依据。需要在月报尚未签发时查看文字版，可用下方 state --export 导出只读用途的副本，在 obligations.yaml 的 events[].reason 查看负债理由；分类／H 用途决定在相应 classifications.yaml／ownership.yaml 中。查看无须执行 import-reviewed，也不要直接修改压缩记录。
+## 高级显式声明
 
-升级后退出其他预算工具窗口，执行 `clean --config config.yml`，可将旧 latest.yaml、snapshots、reviews 收拢并删除旧 runtime 缓存。`--dry-run` 只预览。文件损坏或无法证明安全时会保留原文件，不通过删除审阅记录来消除错误。
-
-## 高级审阅数据
-
-复杂证券池、责任、同日结算和旧认领失效处理继续兼容高级入口；不会为了减少文件而自动批准。需要修改时，可导出一份自包含副本：
-
-```powershell
-& $Exe state --config $Config --export "D:\budget-advanced"
-# 用高级工具核对、修改副本后，再保存其最新 month.yaml：
-& $Exe state --config $Config --import-reviewed "D:\budget-advanced\month.yaml"
-```
-
-输出目录必须不存在。使用刚导出的最新副本，避免覆盖后来保存的决定；不要直接编辑压缩状态。日常逐月标账无需执行这两条命令。高级输入说明见[月报与待审](v6-monthly-report.md)。
+复杂协议仍使用原来的精确验证。共享声明放 `config.yml` 的 `declarations`，逐月声明放 `budgets.yml` 的 `months.<月份>.declarations`，内容是映射，不接受隐藏状态或外部声明文件路径。字段和示例见[两文件确定性合同](STATELESS.md)。普通账本优先使用 fund/budget/tracking、现有账户规则和目标；不需要每笔都填写高级声明。

@@ -157,7 +157,7 @@ class IntervalBrowserTests(unittest.TestCase):
     def test_keyboard_recomputes_interval_and_jumps_to_selected_pending_month(self):
         self.make_pending()
         browser = self.browser()
-        screen = FakeScreen(keys=("c", "r", "\n", "e", "m", "q"), size=(20, 160))
+        screen = FakeScreen(keys=("c", "r", "\n", "e", "\n", "m", "q"), size=(20, 160))
         with patch("beancount_budget_tool.v6.tui.curses.curs_set"), \
              patch("beancount_budget_tool.v6.review.prepare_review") as prepare:
             _report_browser(screen, browser)

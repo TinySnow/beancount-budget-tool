@@ -10,7 +10,7 @@ from ..query import QuerySession
 from .facts import frozen_fact_indices
 from ..yamlstrict import load_yaml
 from .monthly_report import audit_month_workflow, render_workflow_text
-from .simple_config import build_runtime, save_snapshot
+from .simple_config import build_runtime
 from .tui import ReportBrowser, _report_browser
 from .targets import _month
 
@@ -57,7 +57,6 @@ class SimpleReportBrowser(ReportBrowser):
                     self._accept_outcome(self.runtime.pending, self.renderer)
                     return
                 self.configs, self.index = [self.runtime.config], 0
-                self.review_roots = [Path(self.runtime.temporary.name) / "reviews"]
                 super().refresh()
                 self.runtime.check()
                 for runtime in self.range_runtimes:
@@ -106,18 +105,7 @@ class SimpleReportBrowser(ReportBrowser):
         return [(month, self.user_config) for month in sorted(self.visited_months)]
 
     def show_saved_month(self, result):
-        try:
-            save_snapshot(self.user_config, Path(result["config"]), expected=self.runtime.inputs)
-        except BaseException as exc:
-            # Do not erase a newly approved receipt if persistence failed.
-            self.runtime.temporary.keep = True
-            if isinstance(exc, (BudgetError, OSError, UnicodeError, TypeError)):
-                raise BudgetError("SIMPLE_STATE_SAVE_FAILED",
-                    f"审阅状态未覆盖；新决定保留在 {result['config']}。原因：{exc}", str(self.user_config)) from exc
-            raise
-        self.period = False
-        self.filter("")
-        self.refresh()
+        raise BudgetError('REVIEW_SAVE_REMOVED', '请修改账本、config.yml 或 budgets.yml 后重算；不保存独立审阅记录', str(self.user_config))
 
     def period_configs(self):
         from .period_report import _months

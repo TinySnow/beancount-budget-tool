@@ -197,26 +197,6 @@ class MonthEndTests(unittest.TestCase):
         self.assertTrue(Path(result["config"]).is_file())
         self.assertIsNone(result["workflow"])
 
-    def test_keyboard_can_confirm_then_browse_sources_without_repeating_the_audit(self):
-        browser = self.browser([self.config, self.base / "another-month.yaml"])
-        self.assertIsNone(browser.outcome["report"])
-        with patch.object(browser, "loader", wraps=browser.loader) as load, \
-             patch("beancount_budget_tool.v6.month_actions.audit_month_workflow", wraps=audit_month_workflow) as audit:
-            screen = self.run_keys(browser, ["f", "\n", "\n", "核过虚拟九月账单", "\n", "y", "\n", "\n", "a", "q"])
-        self.assertEqual(load.call_count, 1)  # Initial browser load, no duplicate load after saving.
-        self.assertEqual(audit.call_count, 1)
-        self.assertNotEqual(browser.config, self.config)
-        self.assertEqual(browser.configs[1], self.base / "another-month.yaml")
-        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
-        self.assertEqual(browser.view, "transactions")
-        self.assertEqual(browser.outcome["report"]["transactions"]["count"], 3)
-        text = "\n".join(value for frame in screen.frames for _, _, value in frame)
-        self.assertIn("尚未保存", text)
-        self.assertIn("不要求预测", text)
-        self.assertIn("已保存月末核对", text)
-        reopened = self.browser([browser.config])
-        self.assertEqual(reopened.review_roots[0], browser.review_roots[0])
-        self.assert_originals()
 
     def test_cancel_at_any_stage_leaves_original_config_and_no_statement(self):
         for inputs in (["\x1b"], ["依据", "\n", "\x1b"], ["依据", "\n", "Y", "\n"], ["依据", "\n", "\n"]):
@@ -228,20 +208,6 @@ class MonthEndTests(unittest.TestCase):
                 self.assertIsNone(browser.outcome["report"])
                 self.assert_originals()
 
-    def test_changed_include_during_preview_cannot_be_approved(self):
-        browser = self.browser()
-        def fields(_screen, title, *_args):
-            if title == "核对本月末资料":
-                return "旧核对依据"
-            self.extra.write_text("; changed before approval\n", encoding="utf-8")
-            return "y"
-        with patch("beancount_budget_tool.v6.tui._read_field", side_effect=fields), \
-             patch("beancount_budget_tool.v6.tui._message") as message:
-            _confirm_month_end(FakeScreen(size=(30, 150)), browser)
-        self.assertEqual(message.call_args.args[1], "未保存月末核对")
-        self.assertIn("INPUT_CHANGED", "\n".join(message.call_args.args[2]))
-        self.assertEqual(browser.config, self.config)
-        self.assertFalse(browser.review_roots[0].exists())
 
     def test_already_reviewed_and_interval_views_do_not_create_declarations(self):
         self.write(self.config, self.full_config)
@@ -255,21 +221,6 @@ class MonthEndTests(unittest.TestCase):
         prepare.assert_not_called()
         self.assertFalse(browser.review_roots[0].exists())
 
-    def test_empty_next_month_requires_explicit_confirmation_and_keeps_warning(self):
-        draft = create_next_month(self.config, self.base / "october")
-        worksheet = Path(draft["worksheet"])
-        document = yaml.safe_load(worksheet.read_text(encoding="utf-8"))
-        document["targets_confirmed"] = True
-        self.write(worksheet, document)
-        october = Path(compile_next_month(worksheet)["config"])
-        browser = self.browser([october])
-        screen = self.run_keys(browser, ["f", "已核对虚拟十月确无交易", "\n", "y", "\n", "\n", "q"])
-        self.assertEqual(browser.outcome["status"], "CERTIFIED_SCOPED")
-        self.assertEqual(browser.outcome["month"], "2026-10")
-        self.assertIn("查询月份没有已记交易", "\n".join(browser.lines))
-        text = "\n".join(value for frame in screen.frames for _, _, value in frame)
-        self.assertIn("零笔不能证明资料完整", text)
-        self.assertIn("2026-10-31", text)
 
 
 if __name__ == "__main__":

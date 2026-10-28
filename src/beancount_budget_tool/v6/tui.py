@@ -1,4 +1,4 @@
-"""Terminal monthly browsing, refresh and explicitly approved source decisions."""
+"""Read-only terminal browsing over explicit ledger and YAML decisions."""
 
 from __future__ import annotations
 
@@ -447,17 +447,13 @@ HELP = [
     "按键帮助", "r：读取当前账本与配置，重新运行全部月报审计；计算期间旧结果清除。",
     "[ / ]：按命令提供的顺序切换配置，每次重新审计，不复用其他月份的声明或数字。",
     "m：月报中输入 YYYY-MM 直接跳到已载入的月份；每次重新审计。区间待审中仍转到所选待审月份。",
-    "项目模式会在保存审阅／月末声明或载入下一月后更新项目入口，默认进入上次保存的月份；登记路径不代表签发。",
-    "项目模式按 r 重读已登记路径，跟进其他命令行会话的保存；保持当前查看月份，不随外部默认月份跳转。导出也先重读。",
-    "项目更新失败但配置已保存时，保留本次新路径及警告；先登记该路径或显式打开，避免刷新丢失审阅结果。",
-    "n：准备下一月填写表；用编辑器填好后，再按 n 选择载入。未确认的目标／账户继续列待审，不自动沿用月末声明。",
-    "下一月保存后自动加入当前配置清单，可用 [／] 返回前月；重启时仍须提供已保存配置路径。",
+    "n：切换下一月；直接使用两份 YAML 中该月的配置，缺少目标或完整性声明仍待审。",
     "p：输入起始与结束月份，查看所选连续区间；起始填 all 恢复全部已载入月份。Esc 取消，不改变当前查询。",
     "w：输入本次／下次真实工资日及可选周期额度；含本次工资日，不含下次工资日。只统计周期消费及额度差，不套用自然月目标或签发实际可花。",
     "查询区间不改变 cutover；各月余额仍按原历史重放，所需的历史归属及责任资料须齐全。",
     "c：切换当前月报与上次选择的区间；未选择时使用全部已载入最新配置。范围仅在本次 TUI 会话保留。",
     "区间重新审计每个月：只累计流量，目标差逐月比较，余额与可花取期末，任何月待审均不显示区间数字。",
-    "m：在区间待审列表／详情中转到所选月份，重新审计后可按 e 填写；保存的新配置会用于下次区间比较。",
+    "m：在区间待审列表／详情中转到所选月份，按 e 查看修改指引，编辑账本或两份 YAML 后重算。",
     "x：导出当前月份／区间的完整 text、json 或 csv；填写格式与新文件路径，Esc 取消。",
     "导出前重新审计，使用最新已保存配置，忽略显示筛选；待审时只导出待审清单。CSV 使用 UTF-8 BOM。",
     "/：输入关键词筛选；支持中文、账户、用途、原因码和来源路径。空查询清除筛选。",
@@ -470,11 +466,10 @@ HELP = [
     "↑↓ 或 j/k：滚动文本；在待审列表选择项目。PgUp/PgDn 或空格翻页，g/G 到首尾。",
     "Enter：打开所选待审／交易详情；交易显示逐腿原币、分类、用途、责任及原始账本内容。",
     "待审项分行显示：日期与本笔金额、文件名与行号、账户、原因。Enter 查看完整路径；详情可用 ↑↓／PgUp／PgDn 滚动。",
-    "e：填写选中的分类／H 资产用途，写理由、核对预览，明确输入 y 并回车才保存。",
-    "f：本月出现 EXTERNAL_SCOPE_PENDING 时，核对截至月末已发生的漏记责任／在途付款，填写依据并明确输入 y 才保存。",
+    "e：查看所选待审项的来源和修改指引；请在账本或两份 YAML 中明确配置后重算。",
+    "f：显示本月 budgets.yml 月末完整性配置指引；程序不代写、不批准、不保存隐藏状态。",
     "月末核对只声明截止日及以前的事实，不保证未来没有负债；其他待审仍须处理。存在漏记责任／在途付款时请取消。",
-    "保存生成新的 tui-reviews/本次记录/reviewed/month.yaml，当前月份自动使用新配置并重审。",
-    "项目模式保存后会同步月份入口；非项目模式重启时须显式提供新配置。取消填写不保存。其他待审按对应配置处理。",
+    "所有决定来自账本和两份 YAML；缺少明确依据时保持待审，不创建独立批准记录。",
     "Esc：关闭详情／帮助，或清除筛选；无这些状态时退出。q 退出。? 打开帮助。",
     "筛选只改变显示，不改变计算、认证状态或待审总数。警告不会随报告筛选隐藏。",
 ]
@@ -557,13 +552,13 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     if browser.help:
         lines = [f"当前配置完整路径：{browser.config}", *HELP]
         if hasattr(browser, "user_config"):
-            lines = ["两文件模式：只维护 config.yml、budgets.yml 和账本；内部审阅记录自动保存。",
+            lines = ["两文件模式：只维护 config.yml、budgets.yml 和账本；所有决定来自账本与这两份 YAML，不保存独立审阅记录。",
                      "m 跳到任意 cutover 后月份；n 直接进入下一月；r 重读两份配置与账本，不用手工编译。",
                      "[ / ] 上一月／下一月；月份切换保留原 cutover，不重置资金余额。",
                      "w 输入两次工资日及可选额度；p 选择区间；c 返回月报或上次查询。",
                      "↑↓ 选项目；Enter 看完整来源和原因；Esc 返回；/ 筛选；q 退出。",
-                     "e 保存分类／资金用途决定；也可直接在账本写 budget／fund 后按 r。同一腿只认领一次。",
-                     "f 核对截至月末的账单完整性；确认后保存内部记录，不会自动沿用到下一月。",
+                     "e 查看修改指引；分类与用途请在账本写 budget／fund，或修改两份 YAML 后按 r。",
+                     "f 查看月末填写指引；在 budgets.yml 对应月份明确配置 completeness_confirmed，不保存内部批准。",
                      "x 导出；t 报告／待审；a 已审交易明细；? 关闭帮助。",
                      "未写目标表示不考核；写 null 表示尚未决定，仍待审；0 是真实零目标。",
                      f"用户配置：{browser.user_config}"]
@@ -651,9 +646,9 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         _put(stdscr, row, line, styles[browser.offset + row - 3])
     footer = ("w 工资周期 p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
-              "h 科目流水 d 日末分布 w 工资周期 p 区间 m 跳月 n 下一月 f 月末 x 导出 r 重算 ? 帮助 q 退出")
+              "h 科目流水 d 日末分布 w 工资周期 p 区间 m 跳月 n 下一月 f 月末配置 x 导出 r 重算 ? 帮助 q 退出")
     if listing and browser.view == "reviews":
-        footer = "↑↓ 选项 Enter 详情 e 审阅 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
+        footer = "↑↓ 选项 Enter 详情 e 修改指引 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
     elif browser.detail:
         footer = "↑↓ 滚动 PgUp/PgDn 翻页 Esc 返回 ? 帮助 q 退出"
     if browser.error:
@@ -779,91 +774,18 @@ def _message(stdscr, title: str, lines: list[str]):
 
 
 def _edit_review(stdscr, browser: ReportBrowser):
-    from .review import prepare_review, save_review, validate_decision
-    from ..exact import amount_text
-
-    if browser.period or browser.view != "reviews" or browser.error or browser.help or not browser.reviews():
+    """Explain which explicit input to edit; never approve or persist a choice."""
+    if browser.error or browser.help or not browser.reviews():
         return
-    items = browser.reviews()
-    item = browser.detail or items[max(0, min(browser.selected, len(items) - 1))]
-    debt_review = item.get("kind") == "booked_obligation"
-    if debt_review:
-        from .obligation_review import prepare_review, save_review, validate_decision
-    output = browser.review_roots[browser.index] / (datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:12])
-    try:
-        _put(stdscr, max(0, stdscr.getmaxyx()[0] - 1), "正在核对所选来源及可选名称……")
-        stdscr.refresh()
-        prepared = prepare_review(browser.config, item)
-        row = prepared.row
-        label = prepared.label if debt_review else "预算类别（budget）" if row["kind"] == "classification" else "资产资金用途（fund）"
-        context = [f"日期：{row['date']}  {row['payee'] or ''}  {row['narration']}",
-                   f"账户：{row['account']}", f"原币分录：{row['signed_units']} {row['commodity']}",
-                   f"来源：{row['source']}", f"填写：{label}",
-                   "可选责任／用途：" if debt_review else "可选名称／别名（- 表示预算外）：",
-                   *(prepared.choice_labels if debt_review else prepared.names),
-                   prepared.guidance if debt_review else "单一名称覆盖整笔；多项如：保险200，旅游900。合计须等于分录绝对金额，不填负金额。"]
-        decision, reason = prepared.initial if debt_review else "", ""
-        while True:
-            decision = _read_field(stdscr, "填写一项审阅决定", context, f"{label}：", decision)
-            if decision is None:
-                return
-            reason_context = [*context[:5], f"决定：{decision}",
-                              "请在底部 > 后输入判断依据；必填。下一步核对并输入 y 才会保存。"]
-            while True:
-                reason = _read_field(stdscr, "填写审阅理由", reason_context, "判断依据：", reason)
-                if reason is None:
-                    return
-                if reason.strip():
-                    break
-                reason_context = [*reason_context[:6], "判断依据不能为空；请直接在底部 > 后输入理由，或 Esc 取消本项。"]
-            try:
-                parts = validate_decision(prepared, decision, reason)
-                break
-            except BudgetError as exc:
-                _message(stdscr, "填写有误；尚未保存", [str(exc)])
-        preview = [*context[:5], "本次只批准这一项：",
-                   *[f"{name}：{amount_text(amount)} {row['commodity']}" for name, amount in parts],
-                   f"理由：{reason}", "保存后自动复审；其他待审不会被批准。",
-                   f"新配置：{output / 'reviewed' / 'month.yaml'}",
-                   "重启工具、导出报表或准备下一月时，使用上面的新配置。"]
-        if hasattr(browser, "user_config"):
-            preview = [*context[:5], "本次只批准这一项：",
-                       *[f"{name}：{amount_text(amount)} {row['commodity']}" for name, amount in parts],
-                       f"理由：{reason}", "审阅记录自动保存；以后仍使用同一份 config.yml。"]
-        approved = _read_field(stdscr, "核对后明确批准", preview, "输入 y 并回车保存；其他输入或 Esc 取消：")
-        if approved != "y":
-            return
-        browser.clear()
-        _draw_browser(stdscr, browser)
-        result = save_review(prepared, decision, reason, output, approved=True)
-        if hasattr(browser, "user_config"):
-            browser.show_saved_month(result)
-        else:
-            previous = browser.config
-            browser.configs[browser.index] = Path(result["config"]).resolve()
-            browser.saved.add(browser.index)
-            browser.filter("")
-            browser.refresh()
-        lines = ["本项决定已保存；当前月份已切换到新配置并重新审计。", f"本次判断依据：{reason.strip()}",
-                 f"以后请使用：{browser.config}", f"审阅记录：{output}"]
-        if hasattr(browser, "user_config"):
-            from .state_store import state_file
-            lines = ["本项决定已保存并重新审计；以后仍使用同一份配置。", f"用户入口：{browser.user_config}",
-                     f"本次判断依据：{reason.strip()}", f"保存位置：{state_file(browser.user_config)}",
-                     "这是压缩的审阅记录，不会写回账本或 config.yml；已审交易详情也会显示依据。"]
-        if browser.error:
-            lines += ["决定已保存，但月报计算仍有错误：", str(browser.error)]
-        else:
-            lines += [f"本月状态：{browser.outcome['status']}；待审 {len(browser.outcome.get('review_items', []))} 项。"]
-        _message(stdscr, "已保存审阅决定", lines)
-    except (BudgetError, OSError, UnicodeError) as exc:
-        # Refresh after a stale source or rejected ownership decision. No old
-        # report/detail should survive while the user repairs the input.
-        browser.refresh()
-        lines = [str(exc), "本次未发布新配置；请核对原因后重新选择。"]
-        if output.exists():
-            lines += [f"填写记录保留在：{output}", "原账本与原配置没有改写。"]
-        _message(stdscr, "未保存审阅决定", lines)
+    item = browser.detail or browser.reviews()[max(0, min(browser.selected, len(browser.reviews()) - 1))]
+    config = getattr(browser, 'user_config', browser.config)
+    lines = [f"原因：{item.get('reason_code', '待审')}",
+             f"来源：{item.get('source') or config}", item.get('detail') or '尚无明确依据。',
+             '本程序不保存独立审阅决定，也不会替你批准或猜测。',
+             '分类请修改该分录的 budget；资产用途请修改 fund；专题使用 tracking。',
+             '账户性质、默认规则、负债和复杂明确协议请修改 config.yml；目标和月末声明请修改 budgets.yml。',
+             '有多种合理解释时仍保留待审；修改后按 r 重算，或等待 watch 检测变更。']
+    _message(stdscr, '修改账本／两份 YAML 后重算', lines)
 
 
 def _export_report(stdscr, browser: ReportBrowser):
@@ -920,62 +842,18 @@ def _next_month(stdscr, browser: ReportBrowser):
 
 
 def _confirm_month_end(stdscr, browser: ReportBrowser):
-    from .month_actions import prepare_month_end, save_month_end
-
+    """Locate the public monthly declaration without writing hidden state."""
     if browser.period or browser.error or browser.help or not browser.outcome:
         return
-    if not any(item.get("reason_code") == "EXTERNAL_SCOPE_PENDING"
-               for item in browser.outcome.get("review_items", [])):
-        _message(stdscr, "本轮无需补充月末核对", [
-            "当前清单没有 EXTERNAL_SCOPE_PENDING；如还有待审，请先按清单处理。未发现此项不代表月报已签发。"])
-        return
-    output = browser.review_roots[browser.index] / (
-        datetime.now().strftime("%Y%m%d-%H%M%S-month-end-") + uuid4().hex[:12]) / "reviewed"
-    try:
-        _put(stdscr, max(0, stdscr.getmaxyx()[0] - 1), "正在读取本月截止日和账本来源……")
-        stdscr.refresh()
-        prepared = prepare_month_end(browser.config, browser.outcome["month"])
-        context = [f"核对月份：{prepared.month}；截止日：{prepared.as_of} 日末。",
-                   f"原 cutover：{prepared.cutover}；本月已记交易 {prepared.transactions} 笔。",
-                   f"截至该日最近已记交易：{prepared.latest_transaction or '无'}。",
-                   "请核对 importer 已覆盖本月，并确认截至截止日：",
-                   "没有已发生但漏记的本人责任；没有已发起而尚未结算的付款。",
-                   "存在这些事项时请取消，先补账或处理相关事实。",
-                   "这不要求预测截止日之后新发生的消费、负债或付款。",
-                   "本项不会批准其他交易、目标或责任；只有其余审计也通过才签发月报。"]
-        if not prepared.transactions:
-            context.append("本月没有已记交易：请特别核对账单是否真的已导入；零笔不能证明资料完整。")
-        reason = ""
-        while True:
-            reason = _read_field(stdscr, "核对本月末资料", context, "核对依据：", reason)
-            if reason is None:
-                return
-            if reason.strip():
-                break
-            _message(stdscr, "尚未保存", ["请填写实际核对的依据；不能留空。"])
-        preview = [*context, f"核对依据：{reason.strip()}", f"新配置：{output / 'month.yaml'}",
-                   "保存后当前月份使用新配置；重启、导出或准备下一月时也使用此路径。"]
-        if hasattr(browser, "user_config"):
-            preview = [*context, f"核对依据：{reason.strip()}", "声明自动保存到本月的内部记录；以后仍使用同一份 config.yml。"]
-        approved = _read_field(stdscr, "明确批准本月末声明", preview,
-                               "输入 y 并回车保存；其他输入或 Esc 取消：")
-        if approved != "y":
-            return
-        browser.clear()
-        _draw_browser(stdscr, browser)
-        result = save_month_end(prepared, reason, output, approved=True)
-        browser.show_saved_month(result)
-        lines = [f"本月末核对声明已保存：{browser.config}", "原账本与原配置未改写。"]
-        if hasattr(browser, "user_config"):
-            lines = ["本月末核对声明已自动保存；以后仍使用同一份配置。", f"用户入口：{browser.user_config}"]
-        if browser.error:
-            lines += ["新配置已保存，月报仍未通过：", str(browser.error)]
-        else:
-            lines += [f"本月状态：{browser.outcome['status']}；待审 {len(browser.reviews())} 项。"]
-        _message(stdscr, "已保存月末核对", lines)
-    except (BudgetError, OSError, UnicodeError) as exc:
-        browser.refresh()
-        _message(stdscr, "未保存月末核对", [str(exc), "请重算并重新核对；本次没有批准月末声明。"])
+    month = browser.outcome.get('month', getattr(browser, 'selected_month', 'YYYY-MM'))
+    runtime = getattr(browser, 'runtime', None)
+    target = str(runtime.budgets) if runtime is not None and runtime.budgets else 'budgets.yml'
+    _message(stdscr, '月末声明请写入 budgets.yml', [
+        f'月份：{month}；配置：{target}',
+        '先核对截至该月末没有已发生但漏记的本人责任或在途付款。',
+        '确认后在 months 的该月份填写 completeness_confirmed: true；未确认填 false 或留空。',
+        '这只声明该月截止日及以前的完整性，不批准其他歧义或预测未来事实。',
+        '程序不会代写此声明或创建审阅文件；请用编辑器保存 YAML 后按 r 重算。'])
 
 
 def _jump_month(stdscr, browser: ReportBrowser):

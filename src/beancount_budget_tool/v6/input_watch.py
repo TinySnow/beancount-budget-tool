@@ -60,12 +60,10 @@ class InputWatch:
                 queue.extend(Path(os.path.abspath(name)) for name in matches)
                 if not matches and not glob.has_magic(absolute):
                     files.add(Path(os.path.abspath(absolute)))
-        # Pick up atomic saves, new configs and review state without watching
+        # Pick up atomic saves and new configs without watching
         # generated temporary runtimes or a whole unrelated parent directory.
         for config in self.configs:
             files.update(config.parent.glob("*.y*ml"))
-            files.update(config.parent.glob("*.json.gz"))
-            files.add(config.parent / ".budget-state" / config.stem / "reviews.json.gz")
         return {str(path): self.stamp(path) for path in files}
 
     @staticmethod

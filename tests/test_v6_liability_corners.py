@@ -1,3 +1,4 @@
+from fixture_inputs import write_explicit_inputs
 """Adversarial debt histories: independently expected cash, consumption and scope."""
 
 from datetime import date
@@ -272,7 +273,7 @@ class LiabilityCornerTests(unittest.TestCase):
         document["claims"] = [{"claim": FactIndex(fin).for_posting(posting).as_dict(), "reason": "虚拟账本明确批准储蓄代垫",
                                "slices": [{"id": "approved_advance", "owner_id": owner, "role": "hold", "signed_units": "-100"}]}]
         c.write(ownership, document)
-        save_snapshot(c.config, runtime.config)
+        write_explicit_inputs(c.config, runtime.config)
         result = audit_simple(c.config)
         self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
         self.assertEqual(result["report"]["actual_spendable"]["actual_spendable"], "9000")

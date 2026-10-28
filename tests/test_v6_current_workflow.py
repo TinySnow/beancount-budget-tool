@@ -1,3 +1,4 @@
+from fixture_inputs import write_explicit_inputs
 """Current public workflow: one config pair and one liability interpretation."""
 from contextlib import redirect_stderr
 import io
@@ -66,7 +67,7 @@ class CurrentWorkflowTests(unittest.TestCase):
             document = yaml.safe_load(path.read_text(encoding='utf-8'))
             document.pop('budget_owners')
             c.write(path, document)
-        save_snapshot(c.config, runtime.config)
+        write_explicit_inputs(c.config, runtime.config)
         with self.assertRaises(BudgetError) as caught:
             audit_simple(c.config)
         self.assertEqual(caught.exception.code, 'LIABILITY_MODE_REMOVED')

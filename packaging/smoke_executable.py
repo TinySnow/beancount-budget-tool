@@ -172,7 +172,7 @@ def check(executable: Path, *, onedir: bool = False) -> None:
                           "TMPDIR": str(unavailable)}
             run("--version", env=restricted)
             print("Folder startup passed with unusable TEMP/TMP/TMPDIR.", flush=True)
-        for command in ("monthly", "configure", "clean", "state", "report", "audit", "history", "snapshot"):
+        for command in ("monthly", "configure", "report", "audit", "history", "snapshot"):
             run(command, "--help")
         for retired in ("init", "review", "project", "next-month"):
             _, error = run(retired, "--help", code=2)
@@ -196,21 +196,18 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         profile["ledger"], profile["budgets"] = ".\\main.bean", ".\\budgets.yml"
         config.write_text(yaml.safe_dump(profile, allow_unicode=True), encoding="utf-8")
         assert document("--config", config)["report"] == direct["report"]
-        checked = json.loads(run("state", "--config", config, "--check")[0])
-        assert checked["status"] == "REFERENCES_CURRENT", checked
-        exported = json.loads(run("state", "--config", config, "--export", "advanced-copy")[0])
-        run("state", "--config", config, "--import-reviewed", exported["config"])
-        assert document()["report"] == direct["report"]
-        state_root = directory / ".budget-state" / "config"
-        cache = state_root / "runtime" / "old-cache"
-        cache.mkdir(parents=True)
-        (cache / "input.yaml").write_text("rebuildable: true", encoding="utf-8")
-        preview = json.loads(run("clean", "--config", config, "--dry-run")[0])
-        assert preview["files_removed"] == 1 and cache.exists(), preview
-        cleaned = json.loads(run("clean", "--config", config)[0])
-        assert cleaned["files_removed"] == 1 and not cache.exists(), cleaned
-        assert [p.name for p in state_root.iterdir()] == ["reviews.json.gz"]
-        assert document()["report"] == direct["report"]
+        # The executable has no hidden review-state input or save workflow.
+        assert not (directory / '.budget-state').exists()
+        for command in ('state', 'clean', 'review'):
+            _, stderr = run(command, '--config', config, code=2)
+            assert 'COMMAND_RETIRED' in stderr, stderr
+        assert not (directory / '.budget-state').exists()
+        legacy = directory / '.budget-state/config/reviews.json.gz'
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(b'poisoned old review data: must never be read')
+        old_bytes = legacy.read_bytes()
+        assert document()['report'] == direct['report']
+        assert legacy.read_bytes() == old_bytes
         salary = document("report", "--config", config, "--payday", "2026-09-01",
                           "--next-payday", "2026-10-01", "--cycle-budget", "200")
         assert salary["report"]["cycle_budget"]["remaining"] == "190", salary
@@ -294,7 +291,7 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             pending = document("--config", config)
             assert pending["report"] is None and pending["review_items"], pending
             assert any(str(ledger) + ":" in row["source"] for row in pending["review_items"]), pending
-        print("Standalone smoke passed: two-file creation/default launch, source/state checks, "
+        print("Standalone smoke passed: two-file creation/default launch, explicit-input/ignored-legacy-state checks, "
               "monthly/salary/range, CSV/no overwrite, liabilities, H bundles/redemptions, "
               "history/snapshot, portable paths, curses import and located review queue.")
 
