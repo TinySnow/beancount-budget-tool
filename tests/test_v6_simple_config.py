@@ -204,7 +204,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
         self.assertIn("额外储蓄", result["report"]["owner_names"].values())
 
-    def test_terminal_refresh_shares_the_complete_run_but_reload_starts_fresh(self):
+    def test_terminal_refresh_reuses_only_verified_source_parse(self):
         self.migrate()
         browser = SimpleReportBrowser(self.config)
         self.addCleanup(browser.close)
@@ -214,7 +214,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
             self.assertEqual(load.call_count, 1)
             browser.refresh()
             self.assertIsNone(browser.error)
-            self.assertEqual(load.call_count, 2)
+            self.assertEqual(load.call_count, 1)
 
     def test_terminal_final_source_failure_clears_the_previously_displayed_report(self):
         from beancount_budget_tool.v6.review_queue import audit_review_queue

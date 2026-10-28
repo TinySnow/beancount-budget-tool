@@ -12,7 +12,7 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml, require_yaml
 from .accounts import audit_accounts
 from .classification import _key
@@ -72,6 +72,7 @@ def _number(value: object, path: Path, keys: tuple) -> Fraction:
     return Fraction(value)
 
 
+@shared_audit
 def audit_h_transfers(root: Path, cutover: date, accounts: Path,
                       ownership: Path, declarations: Path | None = None,
                       opening: Path | None = None) -> dict:

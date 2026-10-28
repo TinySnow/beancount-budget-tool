@@ -19,7 +19,7 @@ import yaml
 
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
-from ..financial import booked_through, frozen_financial, month_bounds
+from ..financial import booked_through, frozen_financial, load_financial, month_bounds, shared_audit
 from ..yamlstrict import config_path, load_yaml, yaml_path_location, require_yaml
 from .targets import _month
 from .accounts import audit_accounts
@@ -64,7 +64,9 @@ def month_inputs(ledger: Path, month: str, cutover: date):
         yield fin, last
 
 
-def _inspect(fin, cutover: date, income: str, expense: str, category: str):
+@shared_audit
+def _inspect(root: Path, cutover: date, income: str, expense: str, category: str):
+    fin = load_financial(root)
     accounts = audit_accounts(fin.root, cutover)["accounts"]
     purposes = {income, expense}
     categories = {income, category}
@@ -140,7 +142,7 @@ def draft_inputs(ledger: Path, month: str, *, cutover: date | None = None,
                 "账本有多个或没有 operating_currency，请显式传 --currency")
         currency = currency or currencies[0]
         require(currency in currencies, "REPORT_CURRENCY_INVALID", "报告货币须来自 operating_currency")
-        rows, purposes, _, expense_names, issues = _inspect(fin, cutover, income_purpose, expense_purpose, category)
+        rows, purposes, _, expense_names, issues = _inspect(fin.root, cutover, income_purpose, expense_purpose, category)
         worksheet = {
             "schema": 6, "ledger": str(fin.root), "cutover": cutover.isoformat(),
             "month": month, "report_currency": currency,
@@ -208,7 +210,7 @@ def compile_inputs(doc: dict, source: Path, output: Path, *, location=None) -> t
         require(doc["report_currency"] in fin.options.get("operating_currency", []),
                 "REPORT_CURRENCY_INVALID", "报告货币须来自 operating_currency", loc(("report_currency",)))
         rows, purposes, category_names, expense_names, source_issues = _inspect(
-            fin, cutover, defaults["income_purpose"], defaults["expense_purpose"], defaults["expense_category"])
+            fin.root, cutover, defaults["income_purpose"], defaults["expense_purpose"], defaults["expense_category"])
         issues.extend(source_issues)
         if defaults["confirmed"] is not True:
             pending(("defaults", "confirmed"), "确认未标标签时使用这些默认用途和类别后填 true")

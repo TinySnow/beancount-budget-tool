@@ -101,6 +101,9 @@ class ReferenceIndex:
         # Loader filenames normally already match the frozen source names.
         # Resolve only unfamiliar aliases, once per index rather than per posting.
         source_paths = {str(path): path for path in fin.sources}
+        relative_paths = {path: (path.relative_to(fin.root.parent).as_posix()
+                                 if path.is_relative_to(fin.root.parent) else path.as_posix())
+                          for path in fin.sources}
 
         def source_path(filename: str) -> Path:
             if filename not in source_paths:
@@ -122,8 +125,7 @@ class ReferenceIndex:
                 continue
             raw_text = fin.transaction_text(filename, lineno)
             tx_hash = sha256(raw_text.encode()).hexdigest()
-            relative = (path.relative_to(fin.root.parent).as_posix()
-                        if path.is_relative_to(fin.root.parent) else path.as_posix())
+            relative = relative_paths[path]
             group = (relative, tx_hash)
             occurrence[group] = occurrence.get(group, 0) + 1
             txref = TransactionRef(relative, tx_hash, occurrence[group])

@@ -8,7 +8,7 @@ from pathlib import Path
 from beancount.core import data
 
 from ..exact import exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from .accounts import audit_accounts
 from .classification import _key
 from .facts import FactIndex
@@ -16,6 +16,7 @@ from .ownership import audit_ownership
 from .source import scan_v6_source
 
 
+@shared_audit
 def audit_h_income_gains(root: Path, cutover: date, accounts: Path,
                          ownership: Path) -> dict:
     """Certify only simple, same-currency Income-to-H purpose gains.

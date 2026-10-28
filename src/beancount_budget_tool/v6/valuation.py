@@ -15,11 +15,12 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from .classification import _key, audit_classification
 from .facts import FactIndex, GeneratedPostingRef
 
 
+@shared_audit
 def audit_classification_valuation(root: Path, cutover: date, classifications: Path,
                                    report_currency: str) -> dict:
     """Price approved classification slices or list missing event evidence.

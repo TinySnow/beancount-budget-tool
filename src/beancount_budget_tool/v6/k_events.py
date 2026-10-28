@@ -17,7 +17,7 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml, require_yaml
 from .accounts import audit_accounts
 from .classification import _key
@@ -93,6 +93,7 @@ def _redemption_claim(candidate: dict, raw_fund: str, cash_claim: dict,
     return claim, None
 
 
+@shared_audit
 def audit_k_events(root: Path, cutover: date, accounts: Path,
                    ownership: Path, declarations: Path | None = None) -> dict:
     """Audit K cash events and source-bound, non-monetary zero records.

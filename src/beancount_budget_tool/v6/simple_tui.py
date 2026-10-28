@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 from ..errors import BudgetError, require
-from ..financial import financial_session
+from ..financial import FinancialSourceCache, financial_session
 from .facts import frozen_fact_indices
 from ..yamlstrict import load_yaml
 from .monthly_report import audit_month_workflow, render_workflow_text
@@ -22,6 +22,7 @@ class SimpleReportBrowser(ReportBrowser):
         self.range_runtimes = []
         self.saved_cycle = None
         self.visited_months = {self.selected_month}
+        self.source_cache = FinancialSourceCache()
         super().__init__([config], audit_month_workflow, render_workflow_text)
         # Transaction details remain available just as in the normal browser.
         self.loader = lambda path: audit_month_workflow(path, include_transactions=True)
@@ -41,7 +42,7 @@ class SimpleReportBrowser(ReportBrowser):
         self.clear()
         self.range_runtimes = []
         try:
-            with financial_session(), frozen_fact_indices():
+            with financial_session(source_cache=self.source_cache), frozen_fact_indices():
                 if self.period and self.saved_cycle is not None:
                     from .salary_plan import audit_configured_cycle
                     from .salary_cycle import render_text

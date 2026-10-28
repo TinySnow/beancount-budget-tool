@@ -18,6 +18,7 @@ import json
 import glob
 import os
 from pathlib import Path
+import pickle
 import re
 from typing import Any, Dict, Mapping, Optional, Tuple
 
@@ -210,6 +211,7 @@ _FROZEN_THROUGH: ContextVar[Optional[date]] = ContextVar("frozen_through", defau
 _BOOKED_THROUGH: ContextVar[Optional[date]] = ContextVar("booked_through", default=None)
 _REPORT_INPUTS: ContextVar[Optional[Dict[Tuple[Path, Optional[date]], FinancialInput]]] = ContextVar(
     "report_inputs", default=None)
+_SOURCE_REUSE: ContextVar[Optional["FinancialSourceCache"]] = ContextVar("source_reuse", default=None)
 
 
 def _bounded(fin: FinancialInput) -> FinancialInput:
@@ -275,23 +277,62 @@ def _load_financial_uncached(root: Path) -> FinancialInput:
     return fin
 
 
+class FinancialSourceCache:
+    """One browser's last complete parse, with content checks on every refresh.
+
+    The payload is produced and consumed only in memory, never read from disk.
+    Deserializing fresh entries/options prevents one refresh from mutating the
+    next; derived audits, cutoff views and review decisions are never retained.
+    """
+    def __init__(self):
+        self.clear()
+
+    def clear(self):
+        self._snapshot = None
+        self._payload = None
+
+    def load(self, root: Path) -> FinancialInput:
+        previous = self._snapshot
+        if previous is not None and previous.root == root and previous.loader_version == BEANCOUNT_VERSION:
+            try:
+                _verify_financial(previous)
+            except BudgetError as exc:
+                if exc.code != "INPUT_CHANGED":
+                    raise
+            else:
+                entries, options = pickle.loads(self._payload)
+                return replace(previous, entries=entries, options=options,
+                               sources=dict(previous.sources), source_names=dict(previous.source_names),
+                               include_globs=dict(previous.include_globs))
+        self.clear()
+        fin = _load_financial_uncached(root)
+        self._payload = pickle.dumps((fin.entries, fin.options), protocol=pickle.HIGHEST_PROTOCOL)
+        self._snapshot = replace(fin, entries=(), options={}, sources=dict(fin.sources),
+                                 source_names=dict(fin.source_names), include_globs=dict(fin.include_globs))
+        return fin
+
+
 @contextmanager
-def financial_session():
+def financial_session(*, source_cache: Optional[FinancialSourceCache] = None):
     """Share source inputs across the sequential stages of one report.
 
     Each root is captured once, with independent cutoff views and base-audit
     results. Nested stages join the owner, which verifies each source at exit.
-    Nothing survives a reload, and standalone audits keep their existing checks.
+    Audit results never survive a reload. A browser may explicitly supply a
+    source cache; every refresh still verifies source bytes and glob membership.
+    Standalone calls keep their existing uncached behavior.
     """
     if _REPORT_INPUTS.get() is not None:
         yield
         return
     inputs = {}
     token = _REPORT_INPUTS.set(inputs)
+    reuse_token = _SOURCE_REUSE.set(source_cache)
     try:
         yield
     finally:
         _REPORT_INPUTS.reset(token)
+        _SOURCE_REUSE.reset(reuse_token)
         for (root, through), fin in inputs.items():
             if through is not None:
                 continue  # These views all derive from the same complete capture.
@@ -305,7 +346,8 @@ def _session_input(root: Path) -> FinancialInput:
         return _bounded(_load_financial_uncached(key[0]))
     complete_key = (key[0], None)
     if complete_key not in inputs:
-        inputs[complete_key] = _load_financial_uncached(key[0])
+        reuse = _SOURCE_REUSE.get()
+        inputs[complete_key] = reuse.load(key[0]) if reuse is not None else _load_financial_uncached(key[0])
     if key not in inputs:
         inputs[key] = _bounded(inputs[complete_key])
     return inputs[key]
@@ -318,6 +360,38 @@ def load_financial(root: Path) -> FinancialInput:
     if frozen is not None and frozen.root == resolved:
         return frozen
     return _session_input(resolved)
+
+
+_AUDIT_ATOMS = {str, int, float, bool, bytes, type(None)}
+
+
+def _copy_audit_result(value, memo=None):
+    """Copy JSON-shaped audit trees without dispatching every scalar to deepcopy.
+
+    Keep aliases and cycles, and retain deepcopy's behavior for non-JSON values
+    and container subclasses. Neither callers nor cached results share mutable
+    containers across invocations.
+    """
+    kind = type(value)
+    if kind in _AUDIT_ATOMS:
+        return value
+    if memo is None:
+        memo = {}
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
+    if kind is dict:
+        result = {}
+        memo[identity] = result
+        for key, item in value.items():
+            result[_copy_audit_result(key, memo)] = _copy_audit_result(item, memo)
+        return result
+    if kind is list:
+        result = []
+        memo[identity] = result
+        result.extend(_copy_audit_result(item, memo) for item in value)
+        return result
+    return deepcopy(value, memo)
 
 
 def shared_audit(audit):
@@ -351,7 +425,7 @@ def shared_audit(audit):
         except (OSError, TypeError):
             return audit(*args, **kwargs)  # Preserve the audit's own input diagnostics.
         if key in frozen._audit_results:
-            return deepcopy(frozen._audit_results[key])
+            return _copy_audit_result(frozen._audit_results[key])
         result = audit(*args, **kwargs)
         for path, digest in watched.items():
             try:
@@ -359,7 +433,7 @@ def shared_audit(audit):
             except OSError:
                 unchanged = False
             require(unchanged, "INPUT_CHANGED", "基础审计期间配置或审阅文件发生变化", str(path))
-        frozen._audit_results[key] = deepcopy(result)
+        frozen._audit_results[key] = _copy_audit_result(result)
         return result
 
     return run

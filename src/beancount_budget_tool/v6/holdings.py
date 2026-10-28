@@ -15,7 +15,7 @@ from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
-from ..financial import load_financial
+from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml
 from .accounts import _lot, audit_accounts
 from .classification import _key
@@ -24,6 +24,7 @@ from .opening import audit_opening
 from .ownership import _owners, audit_ownership
 
 
+@shared_audit
 def audit_h_holdings(root: Path, cutover: date, as_of: date, accounts: Path,
                      opening: Path, ownership: Path) -> dict:
     """Certify each complete account/commodity/lot at a date end.
