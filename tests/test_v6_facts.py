@@ -71,6 +71,36 @@ class FactIndexTests(unittest.TestCase):
                     if not isinstance(ref, GeneratedPostingRef):
                         self.assertEqual(ref, independent.for_posting(posting))
 
+    def test_duplicate_occurrences_survive_repeated_cutoffs_in_both_orders(self):
+        future = TX.replace('2026-01-03', '2026-02-03')
+        self.root.write_text(HEADER + TX + TX + future + future, encoding='utf-8')
+        independent = ReferenceIndex(load_financial(self.root))
+        expected = {entry.meta['lineno']: (independent.for_transaction(entry),
+                    tuple(independent.for_posting(p) for p in entry.postings))
+                    for entry in independent.fin.entries
+                    if isinstance(entry, data.Transaction) and entry.flag != 'P'}
+        before, january, february = date(2026, 1, 2), date(2026, 1, 31), date(2026, 2, 28)
+        for cutoffs in ((january, before, february, january, before),
+                        (before, february, january, february)):
+            with self.subTest(cutoffs=cutoffs), financial_session(), frozen_fact_indices():
+                later = []
+                for cutoff in cutoffs:
+                    with booked_through(cutoff), frozen_financial(self.root) as fin:
+                        facts = FactIndex(fin)
+                        visible = [entry for entry in fin.entries
+                                   if isinstance(entry, data.Transaction) and entry.flag != 'P']
+                        self.assertEqual(len(visible), 0 if cutoff == before else 2 if cutoff == january else 4)
+                        for entry in visible:
+                            txref, postings = expected[entry.meta['lineno']]
+                            self.assertEqual(facts.for_transaction(entry), txref)
+                            self.assertEqual(tuple(facts.for_posting(p) for p in entry.postings), postings)
+                        if cutoff == february:
+                            later = [entry for entry in visible if entry.date.month == 2]
+                        else:
+                            for entry in later:
+                                with self.assertRaises(BudgetError):
+                                    facts.for_posting(entry.postings[0])
+
     def test_unsupported_generated_future_fact_does_not_poison_a_past_index(self):
         fin, _ = self.index(HEADER + TX)
         original = next(entry for entry in fin.entries if isinstance(entry, data.Transaction) and entry.flag != "P")
