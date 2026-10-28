@@ -61,9 +61,7 @@ def _audit_spending_window(root: Path, cutover: date, first: date, last: date,
     fin = load_financial(root)
     facts = FactIndex(fin)
     locations = posting_sources(fin)
-    ref_dates = {_key(facts.for_posting(posting).as_dict()): entry.date
-                 for entry in fin.entries if isinstance(entry, data.Transaction)
-                 for posting in entry.postings}
+    ref_dates = facts.table.dates
 
     def in_range(row):
         return first <= ref_dates[_key(row["ref"])] <= last

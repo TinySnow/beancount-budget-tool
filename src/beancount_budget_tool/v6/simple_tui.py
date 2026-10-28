@@ -6,6 +6,7 @@ import sys
 
 from ..errors import BudgetError, require
 from ..financial import FinancialSourceCache, financial_session
+from ..query import QuerySession
 from .facts import frozen_fact_indices
 from ..yamlstrict import load_yaml
 from .monthly_report import audit_month_workflow, render_workflow_text
@@ -42,7 +43,7 @@ class SimpleReportBrowser(ReportBrowser):
         self.clear()
         self.range_runtimes = []
         try:
-            with financial_session(source_cache=self.source_cache), frozen_fact_indices():
+            with QuerySession(source_cache=self.source_cache):
                 if self.period and self.saved_cycle is not None:
                     from .salary_plan import audit_configured_cycle
                     from .salary_cycle import render_text
@@ -64,7 +65,7 @@ class SimpleReportBrowser(ReportBrowser):
                 if self.outcome:
                     outcome = self.runtime.public_sources(self.outcome)
                     for runtime in self.range_runtimes:
-                        outcome = runtime.public_sources(outcome)
+                        runtime.rewrite_sources(outcome)
                     self._accept_outcome(outcome, self._scope_renderer())
         except (BudgetError, OSError, UnicodeError) as exc:
             self.clear()

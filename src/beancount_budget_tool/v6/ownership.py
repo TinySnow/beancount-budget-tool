@@ -347,7 +347,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 if credit_owners is not None:
                     credit_owners.advance(entry, rule_flow, {})
                 continue
-            leg_keys = {_key(facts.for_posting(p).as_dict()): p for p in h_legs}
+            leg_keys = {facts.for_posting(p).as_key(): p for p in h_legs}
             coordinates = {key: (p.account, p.units.currency, _lot(p))
                            for key, p in leg_keys.items()}
             missing_keys = [key for key in leg_keys if key not in compiled_by_key]
@@ -409,8 +409,8 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 if (len(positive) == len(negative) == 1 and
                         positive[0].units.currency == negative[0].units.currency and
                         exact(positive[0].units.number) == -exact(negative[0].units.number)):
-                    source_key = _key(facts.for_posting(negative[0]).as_dict())
-                    target_key = _key(facts.for_posting(positive[0]).as_dict())
+                    source_key = facts.for_posting(negative[0]).as_key()
+                    target_key = facts.for_posting(positive[0]).as_key()
                     if source_key not in compiled_by_key:
                         coordinate = coordinates[source_key]
                         before = running.get(coordinate, {}) if coordinate not in unknown_coordinates else {}
@@ -569,7 +569,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 continue
             if native_rule_flow(fin, entry, liability_rules, cash_accounts) is None:
                 continue
-            cash_keys = {_key(facts.for_posting(p).as_dict()): p for p in entry.postings if p.account in cash_accounts}
+            cash_keys = {facts.for_posting(p).as_key(): p for p in entry.postings if p.account in cash_accounts}
             owned = {id(p): compiled_by_key[key]["slices"] for key, p in cash_keys.items() if key in compiled_by_key}
             if receivable_cash_matches(fin, entry, liability_rules, owned, responsibilities) is False:
                 for key in cash_keys:

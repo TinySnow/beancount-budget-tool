@@ -9,16 +9,17 @@ from __future__ import annotations
 from datetime import date
 from fractions import Fraction
 from hashlib import sha256
-import json
 from pathlib import Path
 import re
 import unicodedata
 
 from beancount.core import data
 
+from ..runtime_inputs import input_bytes
 from ..errors import BudgetError, require
 from ..exact import exact, exact_text
 from ..financial import load_financial, shared_audit
+from ..identity import canonical_key as _key
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
 from .facts import FactIndex, future_posting_refs
 from .inline_amounts import parse_inline_amounts
@@ -27,10 +28,6 @@ from .source import _source, scan_v6_source
 
 ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
-
-
-def _key(ref: dict) -> str:
-    return json.dumps(ref, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _name(value: object) -> str:
@@ -240,7 +237,7 @@ def audit_classification(root: Path, cutover: date, declarations: Path | None = 
                          "slices": slices})
     return {"mode": "v6_classification_audit_only", "cutover": cutover.isoformat(),
             "ledger_snapshot": fin.digest, "loader_version": fin.loader_version,
-            "review_sha256": sha256(declarations.read_bytes()).hexdigest() if declarations else None,
+            "review_sha256": sha256(input_bytes(declarations)).hexdigest() if declarations else None,
             "review_state": "complete" if not missing else "pending",
             "postings": len(order), "claimed_postings": len(compiled),
             "missing_classifications": missing, "classifications": compiled,

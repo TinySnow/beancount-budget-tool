@@ -15,6 +15,7 @@ from uuid import uuid4
 import yaml
 
 from ..console import configure_output
+from ..runtime_inputs import input_bytes, input_text
 from ..errors import BudgetError, require
 from ..yamlstrict import load_yaml
 
@@ -71,7 +72,7 @@ def _empty():
 
 def _read(path: Path):
     try:
-        data = json.loads(gzip.decompress(path.read_bytes()))
+        data = json.loads(gzip.decompress(input_bytes(path)))
     except (OSError, EOFError, ValueError) as exc:
         raise BudgetError("SIMPLE_STATE_INVALID", "审阅状态损坏；请恢复备份，不要删除后继续签发", str(path)) from exc
     require(type(data) is dict and data.get("schema") == 1 and
@@ -92,7 +93,7 @@ def load_view(config: Path, inputs: dict, month: str):
     if not path.exists():
         inputs[path] = None
         return None
-    inputs[path] = path.read_bytes()
+    inputs[path] = input_bytes(path)
     data = _read(path)
     documents = deepcopy(data["shared"])
     documents.update(deepcopy(data["monthly"].get(month, {})))
@@ -152,7 +153,7 @@ def _archive(config: Path, data: dict, watched: dict):
         if path in seen or not path.is_file():
             continue
         seen.add(path)
-        body = path.read_bytes()
+        body = input_bytes(path)
         watched.setdefault(path, body)
         relative = path.relative_to(root).as_posix()
         try:
@@ -204,11 +205,11 @@ def save(config: Path, reviewed: Path, *, expected: dict | None = None):
     watched = dict(expected or {})
     _unchanged(watched)
     path = state_file(config)
-    watched.setdefault(path, path.read_bytes() if path.exists() else None)
+    watched.setdefault(path, input_bytes(path) if path.exists() else None)
     data = _read(path) if path.exists() else _legacy_data(config, watched)
     if not path.exists():
         _archive(config, data, watched)
-    watched[reviewed] = reviewed.read_bytes()
+    watched[reviewed] = input_bytes(reviewed)
     document = load_yaml(reviewed)
     require(type(document) is dict and SCALARS <= set(document) and document["schema"] == 6,
             "SIMPLE_STATE_INVALID", "须保存完整的已审月配置", str(reviewed))
@@ -220,7 +221,7 @@ def save(config: Path, reviewed: Path, *, expected: dict | None = None):
     documents = {}
     for key in set(document) - SCALARS:
         source = (reviewed.parent / document[key]).resolve()
-        watched[source] = source.read_bytes()
+        watched[source] = input_bytes(source)
         documents[key] = load_yaml(source)
     shared = {key: value for key, value in documents.items() if key not in MONTHLY}
     monthly = {**data["monthly"], document["month"]: {key: documents[key] for key in MONTHLY & set(documents)}}
@@ -242,11 +243,11 @@ def clean(config: Path, *, dry_run=False):
     root = location.resolve()
     path = state_file(config)
     require(not (root / "latest.yaml").is_symlink(), "SIMPLE_STATE_LINK", "不能清理符号链接状态指针", str(root / "latest.yaml"))
-    watched = {path: path.read_bytes() if path.exists() else None}
+    watched = {path: input_bytes(path) if path.exists() else None}
     data = _read(path) if path.exists() else _legacy_data(config, watched)
     manifest = root / "latest.yaml"
     if path.exists() and manifest.exists() and "legacy_manifest" in data:
-        require(manifest.read_text(encoding="utf-8") == data["legacy_manifest"],
+        require(input_text(manifest) == data["legacy_manifest"],
                 "SIMPLE_LEGACY_CHANGED", "旧版又保存了审阅记录；原数据全部保留，请先合并最新决定", str(manifest))
     _archive(config, data, watched)
     folders = [root / name for name in ("runtime", "snapshots", "reviews") if (root / name).exists()]
@@ -259,7 +260,7 @@ def clean(config: Path, *, dry_run=False):
     if not dry_run:
         if data["header"] is not None or data["recovery_files"]:
             _store(config, data, watched)
-            watched[path] = path.read_bytes()
+            watched[path] = input_bytes(path)
         _unchanged(watched)
         for folder in folders:
             shutil.rmtree(folder)

@@ -434,10 +434,10 @@ def audit_rule_accounts(fin, facts, cutover, as_of, rules, cash_accounts, *, bef
     """Build source-bound events, then replay responsibility vectors exactly once."""
     from .liability_budgets import apply_budget_responsibilities
     transactions = [e for e in fin.entries if isinstance(e, data.Transaction)]
-    rules_by_ref = {_key(facts.for_posting(p).as_dict()): rules[p.account]
+    rules_by_ref = {facts.for_posting(p).as_key(): rules[p.account]
                     for e in transactions for p in e.postings if p.account in rules}
     before_entry = next((e for e in transactions for p in e.postings
-                         if before_ref == _key(facts.for_posting(p).as_dict())), None) if before_ref else None
+                         if before_ref == facts.for_posting(p).as_key()), None) if before_ref else None
     events, opening, seen = [], [], set()
     for entry in transactions:
         if as_of is not None and entry.date > as_of:

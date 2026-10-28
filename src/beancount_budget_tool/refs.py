@@ -6,6 +6,7 @@ the booked child ordinal, the lot and the booked fact fingerprint.
 """
 
 from dataclasses import dataclass
+from functools import cached_property
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ from beancount.core import data
 
 from .errors import BudgetError, require
 from .financial import FinancialInput
+from .identity import canonical_key
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,13 @@ class TransactionRef:
     path: str
     transaction_sha256: str
     occurrence: int
+
+    @cached_property
+    def key(self):
+        return canonical_key(self.as_dict())
+
+    def as_key(self):
+        return self.key
 
     def as_dict(self) -> dict:
         return {"path": self.path, "transaction_sha256": self.transaction_sha256,
@@ -46,6 +55,13 @@ class BookedRef:
     booked_ordinal: int
     lot: str
     fact_sha256: str
+
+    @cached_property
+    def key(self):
+        return canonical_key(self.as_dict())
+
+    def as_key(self):
+        return self.key
 
     def as_dict(self) -> dict:
         return {
@@ -117,6 +133,22 @@ class ReferenceIndex:
         transactions.sort(key=lambda tx: (str(tx.meta.get("filename", "")), tx.meta.get("lineno", 0)))
         occurrence: Dict[Tuple[str, str], int] = {}
         for tx in transactions:
+            cached = fin.reference_cache.get(id(tx))
+            if cached is not None:
+                txref, posting_refs = cached
+                group = (txref.path, txref.transaction_sha256)
+                occurrence[group] = occurrence.get(group, 0) + 1
+                require(txref.occurrence == occurrence[group] and txref not in self.by_txref,
+                        'CLAIM_REF_AMBIGUOUS', '共享来源身份的重复交易序号不一致')
+                self.by_transaction[id(tx)] = txref
+                self.by_txref[txref] = tx
+                for posting in tx.postings:
+                    ref = posting_refs.get(id(posting))
+                    if ref is not None:
+                        require(ref not in self.by_ref, 'CLAIM_REF_AMBIGUOUS', '两个 booked 事实生成了同一个引用')
+                        self.by_posting[id(posting)] = ref
+                        self.by_ref[ref] = posting
+                continue
             filename, lineno = tx.meta.get("filename"), tx.meta.get("lineno")
             if not isinstance(filename, str) or not isinstance(lineno, int):
                 continue  # A generated transaction requires GeneratedRef, not a guessed RawTxnRef.
@@ -136,6 +168,7 @@ class ReferenceIndex:
             self.by_transaction[id(tx)] = txref
             self.by_txref[txref] = tx
             child_ordinals: Dict[int, int] = {}
+            posting_refs = {}
             for posting in tx.postings:
                 meta = posting.meta or {}
                 line = meta.get("lineno")
@@ -147,6 +180,8 @@ class ReferenceIndex:
                 require(ref not in self.by_ref, "CLAIM_REF_AMBIGUOUS", "两个 booked 事实生成了同一个引用")
                 self.by_posting[id(posting)] = ref
                 self.by_ref[ref] = posting
+                posting_refs[id(posting)] = ref
+            fin.reference_cache[id(tx)] = txref, posting_refs
 
     def for_posting(self, posting: data.Posting) -> BookedRef:
         try:

@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from beancount.core import data
 import yaml
 
+from ..runtime_inputs import input_bytes
 from ..errors import BudgetError, require
 from ..exact import amount_text
 from ..yamlstrict import load_yaml
@@ -85,7 +86,7 @@ def prepare_review(config: Path, item: dict) -> PreparedObligationReview:
             "此入口只审消费责任、新增应付款及已支持的还款；代垫、期初及实现缺口须分别处理", item.get("source"))
     config = config.resolve()
     doc, paths, cutover = read_month_config(config)
-    inputs = {path: path.read_bytes() for path in {config, *paths.values()} if path != paths["ledger"]}
+    inputs = {path: input_bytes(path) for path in {config, *paths.values()} if path != paths["ledger"]}
     with month_inputs(paths["ledger"], doc["month"], cutover) as (fin, last):
         current = audit_month_workflow(config)
         selected = next((row for row in current["review_items"] if row.get("kind") == "booked_obligation" and
@@ -98,7 +99,7 @@ def prepare_review(config: Path, item: dict) -> PreparedObligationReview:
         facts = FactIndex(fin)
         entry = next(entry for entry in fin.entries if isinstance(entry, data.Transaction) and
                      entry.date.isoformat() == selected["date"] and any(
-            _key(facts.for_posting(p).as_dict()) == _key(selected["ref"]) for p in entry.postings))
+            facts.for_posting(p).as_key() == _key(selected["ref"]) for p in entry.postings))
         row = {**selected, "payee": entry.payee, "narration": entry.narration, "event": event}
         owners = load_yaml(paths["obligations"])["owners"]
         aliases = _owners(owners)
@@ -149,9 +150,9 @@ def prepare_review(config: Path, item: dict) -> PreparedObligationReview:
                 if not isinstance(entry, data.Transaction):
                     continue
                 for posting in entry.postings:
-                    if posting.account == event["account"] and _key(facts.for_posting(posting).as_dict()) in wanted:
+                    if posting.account == event["account"] and facts.for_posting(posting).as_key() in wanted:
                         meta = posting.meta or entry.meta
-                        descriptions[_key(facts.for_posting(posting).as_dict())] = (
+                        descriptions[facts.for_posting(posting).as_key()] = (
                             f"{entry.payee or ''} {entry.narration} · {Path(meta['filename']).name}:{meta['lineno']}").strip()
             choices = {record["obligation_id"]: {"label":
                 f"{record.get('purchase_date') or '期初'} · {names[record['owner_id']]} · "
@@ -180,7 +181,7 @@ def save_review(prepared, decision, reason, output: Path, *, approved=False):
     require(prepared.choices[ident].get("same_day_source_ref") == fresh.choices[ident].get("same_day_source_ref"),
             "REVIEW_SOURCE_CHANGED", "同日清算来源或顺序模式已改变；请重新审阅", prepared.row["source"])
     doc, paths, cutover = read_month_config(prepared.config)
-    before = {path: path.read_bytes() for path in {prepared.config, *paths.values()} if path != paths["ledger"]}
+    before = {path: input_bytes(path) for path in {prepared.config, *paths.values()} if path != paths["ledger"]}
     output = output.resolve()
     require(not output.exists(), "SETUP_OUTPUT_EXISTS", "输出目录已存在；请选择新目录", str(output))
     document = load_yaml(paths["obligations"])

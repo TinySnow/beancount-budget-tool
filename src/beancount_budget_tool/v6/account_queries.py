@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from beancount.core import data
 
 from ..console import configure_output
+from ..runtime_inputs import input_bytes
 from ..errors import BudgetError, require
 from ..exact import exact_text, amount_text
 from ..financial import financial_session, booked_through, frozen_financial, month_bounds
@@ -170,7 +171,7 @@ def _query(config: Path, as_of: str, *, account=None, purpose=None, since=None, 
             doc = load_yaml(compiled)
             sidecars = (REQUIRED | OPTIONAL) - {'schema','ledger','cutover','month','report_currency'}
             watched = [compiled, *[config_path(compiled, doc[key], key) for key in sidecars if key in doc]]
-            inputs = {path: path.read_bytes() for path in watched}
+            inputs = {path: input_bytes(path) for path in watched}
             gate = audit_month_workflow(compiled)
             if runtime:
                 gate = runtime.public_sources(gate)

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from ..runtime_inputs import input_text
 from ..errors import BudgetError, require
 from ..exact import exact_text
 from ..yamlstrict import load_yaml, require_yaml, yaml_path_location
@@ -49,7 +50,7 @@ def read_cycles(plans, source, *, root_key="salary_cycles", default_category=Non
                 targets[name] = value
                 continue
             if type(value) is float:
-                tree = tree or yaml.compose(source.read_text(encoding="utf-8"))
+                tree = tree or yaml.compose(input_text(source))
                 node = tree
                 for part in location:
                     node = next(v for k, v in node.value if k.value == part)

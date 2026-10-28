@@ -102,16 +102,7 @@ def review_item(code: str, source: str | None, *, detail: str | None = None,
 
 
 def posting_sources(fin) -> dict[str, str]:
-    facts = FactIndex(fin)
-    result = {}
-    for entry in fin.entries:
-        if not isinstance(entry, data.Transaction):
-            continue
-        for posting in entry.postings:
-            meta = posting.meta or entry.meta
-            result[_key(facts.for_posting(posting).as_dict())] = (
-                f"{meta.get('filename', '?')}:{meta.get('lineno', '?')}")
-    return result
+    return dict(FactIndex(fin).table.sources)
 
 
 def annotate_source_items(items: list[dict]) -> list[dict]:

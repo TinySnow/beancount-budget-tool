@@ -113,8 +113,7 @@ class StateStoreTests(unittest.TestCase):
             return path
         with patch("beancount_budget_tool.v6.simple_config.mkdtemp", side_effect=record):
             self.assertEqual(audit_simple(self.config)["status"], "CERTIFIED_SCOPED")
-        self.assertTrue(paths)
-        self.assertTrue(all(not path.exists() for path in paths))
+        self.assertEqual(paths, [])
         self.assertFalse(state_dir(self.config).exists())
 
     def test_opening_purpose_is_registered_without_a_redundant_goal_or_fund_tag(self):

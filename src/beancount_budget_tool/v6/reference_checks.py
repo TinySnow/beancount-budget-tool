@@ -7,6 +7,8 @@ Formal sidecar audits and the monthly report must still pass independently.
 
 from __future__ import annotations
 
+from ..runtime_inputs import input_text
+
 from collections import defaultdict
 import json
 from pathlib import Path
@@ -56,7 +58,7 @@ def _references(value: object, path: str = "$"):
 
 def _reference_lines(path: Path) -> dict[str, int]:
     """Map a nested review reference to its YAML line, including list rows."""
-    node = yaml.compose(path.read_text(encoding="utf-8-sig"), Loader=StrictLoader)
+    node = yaml.compose(input_text(path), Loader=StrictLoader)
     lines = {}
 
     def visit(part, location: str):

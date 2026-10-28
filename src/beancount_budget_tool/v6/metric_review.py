@@ -1,6 +1,7 @@
 """Turn monthly metric blockers into concrete review items, without values."""
 
 from pathlib import Path
+from ..runtime_inputs import input_is_file
 
 from ..yamlstrict import yaml_key_location, yaml_path_location
 from .review_diagnostics import merge_metric_items, review_item
@@ -28,9 +29,9 @@ def enrich_metric_reviews(config: Path, document: dict, report: dict,
         if metric["metric"] == "最多能花" and report.get("max_spendable", {}).get("basis") == "salary_cycle":
             key, field = "salary_cycle", "cycles"
         sidecar = (config.parent / document[key]).resolve() if key in document else None
-        fallback = (yaml_key_location(sidecar, field) if sidecar and sidecar.is_file()
+        fallback = (yaml_key_location(sidecar, field) if sidecar and input_is_file(sidecar)
                     else yaml_key_location(config, key))
-        if field == "months" and sidecar and sidecar.is_file():
+        if field == "months" and sidecar and input_is_file(sidecar):
             fallback = yaml_path_location(sidecar, (field, document["month"]))
         metric["source"] = fallback
         items = [{**item, "source": item.get("source") or fallback}

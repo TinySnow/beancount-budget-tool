@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from .errors import BudgetError
+from .runtime_inputs import input_text, input_value
 
 
 # Both loaders use the same safe constructors and strict mapping checks.
@@ -45,7 +46,10 @@ def config_path(config: Path, value: str, key: str | None = None) -> Path:
 
 def load_yaml(path: Path) -> Any:
     try:
-        loader = StrictLoader(path.read_text(encoding="utf-8-sig"))
+        present, value = input_value(path)
+        if present:
+            return value
+        loader = StrictLoader(input_text(path))
         loader.source_path = str(path.resolve())
         try:
             return loader.get_single_data()
@@ -85,7 +89,7 @@ def _location_tree(text: str):
 def yaml_path_location(path: Path, keys: tuple[str | int, ...]) -> str:
     """Locate a nested field; an absent field points at its closest ancestor."""
     try:
-        node = _location_tree(path.read_text(encoding="utf-8-sig"))
+        node = _location_tree(input_text(path))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
         source = f"{path.resolve()}:{mark.line + 1}" if mark else str(path.resolve())
@@ -115,7 +119,7 @@ def require_quoted_month_keys(path: Path) -> None:
     自行决定某个键是日期对象还是普通字符串。
     """
     try:
-        document = _location_tree(path.read_text(encoding="utf-8-sig"))
+        document = _location_tree(input_text(path))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise BudgetError("YAML_INVALID", str(exc), str(path)) from exc
     if not isinstance(document, yaml.MappingNode):

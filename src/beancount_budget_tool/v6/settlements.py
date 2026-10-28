@@ -10,18 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from fractions import Fraction
-import json
 
 from beancount.core import data
 
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import FinancialInput, reference_financial
+from ..identity import canonical_key as _key
 from .facts import FactIndex, reference_fact_index
-
-
-def _key(ref: dict) -> str:
-    return json.dumps(ref, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -64,7 +60,7 @@ def validate_same_day_settlements(fin: FinancialInput, facts: FactIndex,
     def source_rows(source_fin, source_facts):
         entries = [entry for entry in source_fin.entries if isinstance(entry, data.Transaction)]
         positions = {id(entry): index for index, entry in enumerate(entries)}
-        by_ref = {_key(source_facts.for_posting(posting).as_dict()): (entry, posting)
+        by_ref = {source_facts.for_posting(posting).as_key(): (entry, posting)
                   for entry in entries for posting in entry.postings}
         return entries, positions, by_ref
 

@@ -36,7 +36,7 @@ class FinancialCaptureTests(unittest.TestCase):
         self.assertEqual(caught.exception.source, str(self.root))
 
     def test_one_official_booking_per_report_and_raw_positions_are_reused(self):
-        with patch.object(financial.loader, "_uncached_load_file", wraps=financial.loader._uncached_load_file) as book, \
+        with patch.object(financial.loader.booking, "book", wraps=financial.loader.booking.book) as book, \
              patch.object(financial.parser, "parse_string", wraps=financial.parser.parse_string) as syntax, \
              patch.object(financial, "_verify_financial", wraps=financial._verify_financial) as verify:
             with financial_session():
@@ -49,7 +49,7 @@ class FinancialCaptureTests(unittest.TestCase):
             self.assertEqual(verify.call_count, 2)  # After booking and before returning the report.
 
     def test_same_size_same_timestamp_edit_between_capture_and_booking_is_rejected(self):
-        original = financial.loader._uncached_load_file
+        original = financial.book_snapshot
         stat = self.child.stat()
 
         def edit(*args, **kwargs):
@@ -57,28 +57,28 @@ class FinancialCaptureTests(unittest.TestCase):
             os.utime(self.child, ns=(stat.st_atime_ns, stat.st_mtime_ns))
             return original(*args, **kwargs)
 
-        with patch.object(financial.loader, "_uncached_load_file", side_effect=edit):
+        with patch.object(financial, "book_snapshot", side_effect=edit):
             self.assert_input_changed(lambda: load_financial(self.root))
 
     def test_edit_after_booking_before_verification_is_rejected(self):
-        original = financial.loader._uncached_load_file
+        original = financial.book_snapshot
 
         def edit(*args, **kwargs):
             result = original(*args, **kwargs)
             self.child.write_text(TX.replace("10 CNY", "20 CNY"), encoding="utf-8")
             return result
 
-        with patch.object(financial.loader, "_uncached_load_file", side_effect=edit):
+        with patch.object(financial, "book_snapshot", side_effect=edit):
             self.assert_input_changed(lambda: load_financial(self.root))
 
     def test_new_glob_member_during_booking_cannot_join_the_frozen_snapshot(self):
-        original = financial.loader._uncached_load_file
+        original = financial.book_snapshot
 
         def add(*args, **kwargs):
             (self.parts / "two.bean").write_text('2026-01-01 open Assets:New\n', encoding="utf-8")
             return original(*args, **kwargs)
 
-        with patch.object(financial.loader, "_uncached_load_file", side_effect=add):
+        with patch.object(financial, "book_snapshot", side_effect=add):
             self.assert_input_changed(lambda: load_financial(self.root))
 
     def test_deleted_glob_member_at_report_exit_is_rejected(self):

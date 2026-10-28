@@ -18,14 +18,16 @@ import os
 from pathlib import Path
 import shutil
 import sys
-from tempfile import TemporaryDirectory, mkdtemp
+from tempfile import TemporaryDirectory, mkdtemp, gettempdir
 from uuid import uuid4
 
 import yaml
 from beancount.core import data
 
+from ..runtime_inputs import input_bytes, input_text
 from ..errors import BudgetError, require
 from ..financial import financial_session, load_financial
+from ..runtime_inputs import register_documents
 from .facts import frozen_fact_indices
 from ..console import configure_output
 from ..yamlstrict import config_path, load_yaml, require_yaml, yaml_path_location
@@ -53,7 +55,7 @@ def state_dir(config: Path) -> Path:
 
 
 def _unchanged(inputs: dict):
-    require(all(not path.exists() if content is None else path.is_file() and path.read_bytes() == content
+    require(all(not path.exists() if content is None else path.is_file() and input_bytes(path) == content
                 for path, content in inputs.items()),
             "INPUT_CHANGED", "配置、预算或审阅记录在计算期间改变；请重算")
 
@@ -91,7 +93,7 @@ def _grouped_accounts(doc: dict, config: Path) -> tuple[dict, dict]:
 
 def _documents(config: Path, inputs: dict | None = None):
     inputs = {} if inputs is None else inputs
-    inputs.setdefault(config, config.read_bytes())
+    inputs.setdefault(config, input_bytes(config))
     doc = load_yaml(config)
     fields = {"schema", "ledger", "budgets", "cutover", "month", "report_currency", "defaults"}
     require_yaml(is_simple(doc) and fields <= set(doc) <= fields | {"accounts", "account_groups", "account_defaults", "spendable_cap_category", "classification_defaults", "expense_budget_basis", "liabilities", "liability_budget_mode"},
@@ -125,7 +127,7 @@ def _documents(config: Path, inputs: dict | None = None):
         except BudgetError as exc:
             raise BudgetError(exc.code, exc.message, yaml_path_location(config, ("defaults", key))) from exc
     budgets = config_path(config, doc["budgets"], "budgets")
-    inputs.setdefault(budgets, budgets.read_bytes())
+    inputs.setdefault(budgets, input_bytes(budgets))
     plans = load_yaml(budgets)
     require_yaml(type(plans) is dict and type(plans.get("schema")) is int and plans["schema"] == 1 and
                  set(plans) <= {"schema", "purposes", "defaults", "effective_templates", "months", "salary_cycles"},
@@ -145,7 +147,7 @@ def _layer(plans: dict, month: str, source: Path):
         # Read its scalar spelling instead, preserving the user's exact goal.
         nonlocal raw_tree
         if raw_tree is None:
-            raw_tree = yaml.compose(source.read_text(encoding="utf-8"))
+            raw_tree = yaml.compose(input_text(source))
         node = raw_tree
         for key in keys:
             node = next(value for name, value in node.value if name.value == str(key))
@@ -196,7 +198,7 @@ def _legacy_baseline(config: Path, inputs: dict, month: str):
     if not manifest.exists():
         inputs[manifest] = None
         return {}, None
-    inputs[manifest] = manifest.read_bytes()
+    inputs[manifest] = input_bytes(manifest)
     pointer = load_yaml(manifest)
     require(type(pointer) is dict and {"snapshot"} <= set(pointer) <= {"snapshot", "months"} and type(pointer["snapshot"]) is str,
             "SIMPLE_STATE_INVALID", "内部审阅指针无效；原审阅文件保留", str(manifest))
@@ -206,23 +208,23 @@ def _legacy_baseline(config: Path, inputs: dict, month: str):
     path = config_path(manifest, pointer["snapshot"], "snapshot")
     require(path.is_relative_to(state_dir(config)), "SIMPLE_STATE_INVALID", "内部审阅指针越界", str(manifest))
     doc = load_yaml(path)
-    inputs[path] = path.read_bytes()
+    inputs[path] = input_bytes(path)
     files = {}
     for key in set(doc) - SCALARS:
         source = config_path(path, doc[key], key)
-        inputs[source] = source.read_bytes()
+        inputs[source] = input_bytes(source)
         files[key] = load_yaml(source)
     monthly = pointer.get("months", {}).get(month)
     if monthly and monthly != pointer["snapshot"]:
         local = config_path(manifest, monthly)
         require(local.is_relative_to(state_dir(config)), "SIMPLE_STATE_INVALID", "月份审阅指针越界", str(manifest))
-        inputs[local] = local.read_bytes()
+        inputs[local] = input_bytes(local)
         local_doc = load_yaml(local)
         for key in ("completeness", "debt_coverage", "debt_settlements"):
             files.pop(key, None)
             if key in local_doc:
                 source = config_path(local, local_doc[key], key)
-                inputs[source] = source.read_bytes()
+                inputs[source] = input_bytes(source)
                 files[key] = load_yaml(source)
     elif not monthly and doc["month"] != month:
         for key in ("completeness", "debt_coverage", "debt_settlements"):
@@ -292,6 +294,10 @@ class Runtime:
     def public_sources(self, outcome):
         """Internal file locations should lead to the two editable inputs."""
         result = deepcopy(outcome)
+        return self.rewrite_sources(result)
+
+    def rewrite_sources(self, result):
+        """Apply this runtime's public names to an already owned result tree."""
         if self.config:
             for row in result.get("months", []):
                 if (row.get("config") or "").startswith(str(self.config.parent)):
@@ -310,9 +316,9 @@ class Runtime:
         return result
 
 
-def build_runtime(config: Path, month: str | None = None) -> Runtime:
+def build_runtime(config: Path, month: str | None = None, *, materialize: bool = True) -> Runtime:
     config = config.resolve()
-    inputs = {config: config.read_bytes()}
+    inputs = {config: input_bytes(config)}
     doc, budgets, plans = _documents(config, inputs)
     month = _month(month or doc["month"])
     goals, locations = _layer(plans, month, budgets)
@@ -425,8 +431,11 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
             target = budgets
         return yaml_path_location(target, public_keys)
 
-    runtime.temporary = RuntimeFiles()
-    destination = Path(runtime.temporary.name) / "compiled"
+    if materialize:
+        runtime.temporary = RuntimeFiles()
+        destination = Path(runtime.temporary.name) / "compiled"
+    else:
+        destination = (Path(gettempdir()) / ('budget-runtime-' + uuid4().hex) / 'compiled').resolve()
     documents, issues = compile_inputs(filled, config, destination, location=input_location)
     if issues:
         items = [{**item, "kind": "configuration", "metrics": ["配置"], "reason_kind": "data_review"}
@@ -518,57 +527,28 @@ def build_runtime(config: Path, month: str | None = None) -> Runtime:
         generated.pop("completeness", None)
         month_config.pop("completeness", None)
     for key, document in generated.items():
-        _write(destination / (key + ".yaml"), document)
         month_config[key] = key + ".yaml"
-    _write(destination / "month.yaml", month_config)
+    documents = {key + '.yaml': value for key, value in generated.items()} | {'month.yaml': month_config}
+    if materialize:
+        for name, document in documents.items():
+            _write(destination / name, document)
+    else:
+        register_documents(destination, documents, SetupDumper)
     runtime.config = destination / "month.yaml"
     runtime.check()
     return runtime
 
 
 def audit_simple(config: Path, month: str | None = None, *, include_transactions=False):
-    with financial_session(), frozen_fact_indices():
-        from .monthly_report import audit_month_workflow
-        runtime = build_runtime(config, month)
-        try:
-            result = runtime.pending or audit_month_workflow(runtime.config, include_transactions=include_transactions)
-            runtime.check()
-            return runtime.public_sources(result)
-        except BudgetError as exc:
-            if exc.source and runtime.config and exc.source.startswith(str(runtime.config.parent)):
-                raise BudgetError(exc.code, exc.message, yaml_path_location(config, ())) from exc
-            raise
-        finally:
-            runtime.close()
+    from ..query import QuerySession
+    with QuerySession() as query:
+        return query.month(config, month, include_transactions=include_transactions)
 
 
 def audit_simple_period(config: Path, since=None, through=None):
-    with financial_session(), frozen_fact_indices():
-        from .period_report import _months, _combine_months, audit_period
-        require((since is None) == (through is None), "PERIOD_RANGE_INVALID", "起止月份须同时填写")
-        doc = load_yaml(config)
-        first, last = _month(since or doc["cutover"][:7]), _month(through or doc["month"])
-        require(first <= last, "PERIOD_RANGE_INVALID", "起始月份不能晚于结束月份")
-        months = _months(first, last)
-        runtimes = []
-        try:
-            for month in months:
-                runtimes.append(build_runtime(config, month))
-            if any(runtime.pending for runtime in runtimes):
-                rows = [{"month": runtime.month, "config": str(config),
-                         "status": "NEEDS_REVIEW" if runtime.pending else "NOT_RUN"} for runtime in runtimes]
-                reviews = [{**item, "month": runtime.month, "config": str(config)} for runtime in runtimes
-                           if runtime.pending for item in runtime.pending["review_items"]]
-                outcome = _combine_months(months, rows, [], reviews, set(), [])
-            else:
-                outcome = audit_period([runtime.config for runtime in runtimes], first, last)
-            for runtime in runtimes:
-                runtime.check()
-                outcome = runtime.public_sources(outcome)
-            return outcome
-        finally:
-            for runtime in runtimes:
-                runtime.close()
+    from ..query import QuerySession
+    with QuerySession() as query:
+        return query.period(config, since, through)
 
 
 def create_files(output: Path, *, ledger: Path | None = None, month: str | None = None, old_config: Path | None = None):
@@ -583,11 +563,11 @@ def create_files(output: Path, *, ledger: Path | None = None, month: str | None 
         old = load_yaml(old_config)
         require(type(old) is dict and REQUIRED <= set(old) <= REQUIRED | OPTIONAL,
                 "SIMPLE_IMPORT_INVALID", "迁移来源须是现有 month.yaml", str(old_config))
-        watched[old_config] = old_config.read_bytes()
+        watched[old_config] = input_bytes(old_config)
         ledger, month = config_path(old_config, old["ledger"], "ledger"), old["month"]
         for key in set(old) - SCALARS:
             path = config_path(old_config, old[key], key)
-            watched[path] = path.read_bytes()
+            watched[path] = input_bytes(path)
             state[key] = load_yaml(path)
         defaults = state["ownership"].get("defaults")
         require(type(defaults) is dict, "SIMPLE_IMPORT_DEFAULTS",

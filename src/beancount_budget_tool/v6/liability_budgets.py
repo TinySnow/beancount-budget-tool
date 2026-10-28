@@ -37,7 +37,7 @@ def apply_budget_responsibilities(fin, facts, cutover, rules, owners, result):
                 break
             continue
         managed = [p for p in entry.postings if p.account in rules]
-        if entry.date >= cutover and not any(_key(facts.for_posting(p).as_dict()) in visible for p in managed):
+        if entry.date >= cutover and not any(facts.for_posting(p).as_key() in visible for p in managed):
             continue
         group = []
         for posting in managed:

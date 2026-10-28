@@ -10,6 +10,7 @@ import re
 
 from beancount.core import data
 
+from ..runtime_inputs import input_bytes
 from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial, shared_audit
@@ -96,7 +97,7 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
         document = load_yaml(declarations)
         validate_event_declaration(document, declarations, cutover, fin.loader_version,
                                    "H_FX_DECLARATION_INVALID")
-        review_sha = sha256(declarations.read_bytes()).hexdigest()
+        review_sha = sha256(input_bytes(declarations)).hexdigest()
         used_to = set()
         for row_index, row in enumerate(document["events"]):
             location = ("events", row_index)
