@@ -38,15 +38,15 @@
 
 ## 本轮验收
 
-- 完整1090项测试通过，包含两项新功能20项和帮助入口隔离测试；原财务、安全、状态与界面测试保留。
+- 最终完整1091项测试通过，包含两项新功能20项、帮助入口隔离以及LF/CRLF证据字节对照；原财务、安全、状态与界面测试保留。
 - 以同一隔离只读账本对照原v6与整合版：2023-07至2024-08的14份完整单月JSON逐字节相同；2024-09至2026-09的25份完整月报、待审或错误结果逐字节相同。2024-09为`CERTIFIED_SCOPED`。
 - 14个月区间金额、证据、认证字段一致；仅有下文说明的配置来源路径修正。隔离账本实际提交为`b0c4f65`，859个非Git文件前后清单/内容摘要一致，运行中另拦截写入。
 - 公开2026-10/11/12连续认证案例，在同一输出路径运行新旧版本，3份JSON及3份文本共6份逐字节相同。
 - 旧版生成非inline月末确认和逐笔ownership/classification人工claim，再由新版读取：完整报表一致、批准理由保留；旧状态导出/重导入、模拟原子替换失败保留旧文件通过。修改被批准交易后，两版均拒绝过期claim，报`OWNERSHIP_REF_INVALID`。未发现用户实际`reviews.json.gz`，因此此项明确是跨版本旧格式fixture验收。
 - macOS arm64真实PyInstaller单文件在Unicode与空格目录、移除源码和Python路径后通过完整`packaging/smoke_executable.py`验收，包含创建/默认启动、来源与状态、月报/工资/区间、CSV不覆盖、负债、H组合转账与赎回、历史/日末、跨平台路径、curses和来源定位。原生PTY另覆盖H失败页`h`诊断、返回后仍失败、日末/历史查询、详情和watch自动重算；CLI历史/日末JSON与源API一致。
-- Windows与macOS x64依赖远程CI构建和平台smoke；本地arm64结果不能代表其他平台真机交互验收。远程CI结果另行记录，不发布未经测试的新版本标签。
+- 最终代码`79ed32e`的远程[Windows/Linux全套测试](https://github.com/TinySnow/beancount-budget-tool/actions/runs/40705319846)及[三平台可执行包构建与smoke](https://github.com/TinySnow/beancount-budget-tool/actions/runs/40705319931)均通过：Windows x64单文件与目录包、macOS arm64/x64单文件均在对应runner运行。人工原生PTY交互只在本机macOS arm64实测，不把CI smoke等同于所有平台的人工终端操作。未创建release标签。
 
-首轮推送`8c5fe70`的三平台独立包构建及smoke全部通过，Linux1090项通过。Windows全套发现两处边界：帮助探针使用默认CP1252解码UTF-8输出；内存YAML使用LF而Windows物理发布使用CRLF，迁移后的证据摘要不同。已将探针显式设为UTF-8，并使内存文档字节遵循同平台`write_text(newline=None)`的行尾；新增LF/CRLF逐字节及SHA256对照。原迁移完整报表断言保持严格，未通过忽略摘要掩盖差异。最终平台结果以补强提交的CI记录为准。
+首轮推送`8c5fe70`的三平台独立包构建及smoke全部通过，Linux1090项通过。Windows全套发现两处边界：帮助探针使用默认CP1252解码UTF-8输出；内存YAML使用LF而Windows物理发布使用CRLF，迁移后的证据摘要不同。已在`79ed32e`将探针显式设为UTF-8，并使内存文档字节遵循同平台`write_text(newline=None)`的行尾；新增LF/CRLF逐字节及SHA256对照。原迁移完整报表断言保持严格，未通过忽略摘要掩盖差异。补强后的完整平台复验全部通过，首轮失败作为问题发现记录保留。
 
 ## 明确的输出变化
 
