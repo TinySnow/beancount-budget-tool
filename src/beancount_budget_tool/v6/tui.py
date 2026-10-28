@@ -464,6 +464,7 @@ HELP = [
     "t：切换完整报告文本和待审列表。待审状态只显示未通过项目，不显示局部正式数字。",
     "a：已签发后切换交易来源列表；可按类别、资金用途、责任 ID、摘要或账户筛选。",
     "h：追查完整会计科目内某预算用途的历史，显示每笔增减、交易后余额、原因和原行；可留空预算看全部。",
+    "用途透支报错时也可按 h：仅查失败交易前的 H 账户诊断流水；不要求签出整月，不放行失败交易。",
     "d：输入 YYYY-MM-DD，查看该日日末的用途分布；两种查询都要求该日所在月份当前能签出月报。",
     "查询不使用截止日之后的交易／还款，不签发当天最多能花；弹窗是本次静态查询，Esc 返回后再次打开会重算。",
     "↑↓ 或 j/k：滚动文本；在待审列表选择项目。PgUp/PgDn 或空格翻页，g/G 到首尾。",
@@ -554,7 +555,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     listing = browser.outcome is not None and browser.view in {"reviews", "transactions"} and not (
         browser.error or browser.detail or browser.help)
     if browser.help:
-        lines = [*HELP, f"当前配置完整路径：{browser.config}"]
+        lines = [f"当前配置完整路径：{browser.config}", *HELP]
         if hasattr(browser, "user_config"):
             lines = ["两文件模式：只维护 config.yml、budgets.yml 和账本；内部审阅记录自动保存。",
                      "m 跳到任意 cutover 后月份；n 直接进入下一月；r 重读两份配置与账本，不用手工编译。",
@@ -576,6 +577,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
                  _review_location(browser.error.source),
                  *f"{browser.error.code}：{browser.error.message}".splitlines(),
                  f"来源：{browser.error.source or '未提供'}"]
+        if browser.error.diagnostic:
+            lines.append('按 h 查该账户在失败交易之前的用途流水；可筛选自由资金等用途。')
         subtitle = "计算失败；不显示旧数字或局部月报"
     elif browser.outcome is None:
         lines = ["正在读取当前账本与配置并运行审计。旧结果已清除，请等待。"]
@@ -654,7 +657,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     elif browser.detail:
         footer = "↑↓ 滚动 PgUp/PgDn 翻页 Esc 返回 ? 帮助 q 退出"
     if browser.error:
-        footer = "[ ] 上/下月 m 跳月 r 重算 ↑↓ 滚动 ? 帮助 q 退出"
+        footer = ("h 报错前流水 " if browser.error.diagnostic else "") + "[ ] 上/下月 m 跳月 r 重算 ↑↓ 滚动 ? 帮助 q 退出"
     if getattr(browser, "watch", False):
         footer = "自动监测保存 · " + footer
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
@@ -1024,6 +1027,10 @@ def _select_period(stdscr, browser: ReportBrowser):
 def _inspect_account(stdscr, browser: ReportBrowser, *, history=False):
     if browser.help:
         return
+    if getattr(browser, 'error', None):
+        if history:
+            _inspect_failed_history(stdscr, browser)
+        return
     from .account_queries import query, render_text
     from .input_compiler import config_metadata as _metadata
     from .salary_plan import month_end
@@ -1060,6 +1067,28 @@ def _inspect_account(stdscr, browser: ReportBrowser, *, history=False):
         _message(stdscr, '科目用途历史', render_text(result).splitlines())
     except (BudgetError, OSError, UnicodeError) as exc:
         _message(stdscr, '未生成用途查询', [str(exc)])
+
+
+def _inspect_failed_history(stdscr, browser):
+    from .diagnostic_history import query, render_text
+    from .input_compiler import config_metadata
+    error = browser.error
+    if not error.diagnostic:
+        _message(stdscr, '无法生成诊断流水', ['该错误没有可重放的用途交易位置；请先处理所示错误。'])
+        return
+    try:
+        config = getattr(browser, 'user_config', browser.config)
+        month = getattr(browser, 'selected_month', None) or config_metadata(config)[0]
+        purpose = _read_field(stdscr, '报错前用途流水',
+            [f"账户：{error.diagnostic['account']}", f'失败位置：{error.source}',
+             '严格停在失败交易之前，不含该笔及后续补款；不签发月报。',
+             '输入自由资金、生活费等用途；留空查看该账户全部用途。'], '用途（可留空）：')
+        if purpose is None:
+            return
+        result = query(config, month, error.source, purpose=purpose.strip() or None, anchor=error.diagnostic)
+        _message(stdscr, '报错前用途流水（诊断，未签发）', render_text(result).splitlines())
+    except (BudgetError, OSError, UnicodeError) as exc:
+        _message(stdscr, '未生成诊断流水', [str(exc)])
 
 
 def _select_salary_cycle(stdscr, browser: ReportBrowser):

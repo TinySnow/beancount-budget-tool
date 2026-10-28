@@ -16,7 +16,7 @@ import re
 
 from beancount.core import data
 
-from ..errors import require
+from ..errors import BudgetError, require
 from ..exact import amount_text, exact, exact_text
 from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
@@ -70,7 +70,7 @@ def _signed_units(value: object, source: str) -> Fraction:
 
 def _require_transfer_balance(coordinate: tuple[str, str, str],
                               before: dict[str, Fraction], after: dict[str, Fraction],
-                              owner_names: dict[str, str], source: str) -> None:
+                              owner_names: dict[str, str], source: str, diagnostic=None) -> None:
     # Consumption may leave a negative purpose balance; a voluntary transfer
     # may neither create a deficit nor deepen an existing one.
     overdrawn = [owner for owner, amount in after.items()
@@ -98,7 +98,7 @@ def _require_transfer_balance(coordinate: tuple[str, str, str],
         name = owner_names.get(owner, "预算外" if owner == "-" else owner)
         lines.append(f"  {name}：{amount_text(balance)} {commodity}（可划出 {amount_text(max(balance, Fraction(0)))} {commodity}）")
     lines.append("以上为该交易前、该账户及币种／批次的余额，不是月末余额。请核对 fund；改用途须明确记虚拟调拨，不会自动挪用其他用途。")
-    require(False, "H_OWNER_NEGATIVE", "\n".join(lines), source)
+    raise BudgetError("H_OWNER_NEGATIVE", "\n".join(lines), source, diagnostic)
 
 
 def _transfer_source_parts(before, required, rule):
@@ -537,7 +537,10 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                             for ident, units in sorted(running.get(coordinate, {}).items(), key=lambda row: owner_names[row[0]]):
                                 lines.append(f'    {owner_names[ident]}：{amount_text(units)} {bundle.currency}（可划出 {amount_text(max(units, Fraction(0)))} {bundle.currency}）')
                         source = next((p.meta for key,p in leg_keys.items() if coordinates[key] in sources and exact(p.units.number)<0), entry.meta)
-                        require(False, 'H_OWNER_NEGATIVE', '\n'.join(lines), _source(source))
+                        raise BudgetError('H_OWNER_NEGATIVE', '\n'.join(lines), _source(source),
+                            {'account': next(coordinate[0] for coordinate in sources),
+                             'transaction_ref': facts.for_transaction(entry).as_dict(),
+                             'ledger_snapshot': fin.digest})
             for coordinate, deltas in changes.items():
                 if coordinate in unknown_coordinates:
                     continue
@@ -556,7 +559,10 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                                     next(posting for key, posting in leg_keys.items()
                                          if coordinates[key] == coordinate))
                     _require_transfer_balance(coordinate, before, after, owner_names,
-                                              _source(outgoing.meta or entry.meta))
+                                              _source(outgoing.meta or entry.meta),
+                                              {'account': coordinate[0],
+                                               'transaction_ref': facts.for_transaction(entry).as_dict(),
+                                               'ledger_snapshot': fin.digest})
                 running[coordinate] = after
 
     if liability_rules:
