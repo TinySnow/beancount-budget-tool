@@ -261,11 +261,11 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
                         Fraction(candidate["signed_to_units"]),
                         "H_TRANSFER_OWNER_MISMATCH", "自动转账双方用途金额未加回 booked 分录", key)
                 source_positive = {owner: -amount for owner, amount in source_units.items()}
-                # Two different mixed splits on different accounts need an
-                # explicit decision; same-account virtual reallocations are
-                # already fully evidenced by their two fund vectors.
+                # One-to-many and many-to-one have a unique purpose mapping.
+                # Two different mixed splits across accounts still need an
+                # explicit virtual reallocation (requirements example 5).
                 if (candidate["from_account"] != candidate["to_account"] and
-                        len(source_units) > 1 and
+                        len(source_units) > 1 and len(target_units) > 1 and
                         source_positive != target_units):
                     auto_reason = "H_TRANSFER_MIXED_REMAP_PENDING"
                 else:
