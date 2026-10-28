@@ -1,0 +1,136 @@
+name: Standalone executables
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Explicit architectures; macos-latest can change its host version.
+          # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+          - runner: macos-15
+            arch: arm64
+            machine: arm64
+          - runner: macos-15-intel
+            arch: x64
+            machine: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.arch }}
+      - name: Verify native Python architecture
+        env:
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: python -c "import os, platform; assert platform.machine() == os.environ['EXPECTED_MACHINE'], platform.machine()"
+      - name: Install build dependencies
+        run: python -m pip install . -r packaging/requirements.txt
+      - name: Build one-file console executable
+        env:
+          BUDGET_BUNDLE_MODE: onefile
+        run: python -m PyInstaller --clean --noconfirm packaging/windows.spec
+      - name: Exercise the standalone executable outside the checkout
+        run: python packaging/smoke_executable.py dist/beancount-budget-tool
+      - name: Prepare archive preserving executable permissions
+        run: >-
+          python packaging/prepare_macos.py
+          --executable dist/beancount-budget-tool
+          --arch ${{ matrix.arch }}
+          --revision "$(git rev-parse HEAD)"
+          --output dist/macos-downloads
+      - name: Check extracted download outside the checkout
+        shell: bash
+        run: |
+          Package="beancount-budget-tool-macos-${{ matrix.arch }}"
+          DownloadCheck="$(mktemp -d)"
+          trap 'rm -rf "$DownloadCheck"' EXIT
+          tar -xzf "dist/macos-downloads/$Package.tar.gz" -C "$DownloadCheck"
+          cd "$DownloadCheck/$Package"
+          test ! -e _internal
+          cp beancount-budget-tool "$DownloadCheck/standalone"
+          cd "$DownloadCheck"
+          ./standalone --version
+          ./standalone --config "$Package/example/simple/config.yml" --format json > result.json
+          python -c "import json; r=json.load(open('result.json')); assert r['status']=='CERTIFIED_SCOPED'; assert r['report']['max_spendable']['max_spendable']=='190'"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beancount-budget-tool-macos-${{ matrix.arch }}
+          path: dist/macos-downloads/beancount-budget-tool-macos-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install build dependencies
+        run: python -m pip install . -r packaging/requirements.txt
+      - name: Build one-file console executable
+        run: python -m PyInstaller --clean --noconfirm packaging/windows.spec
+      - name: Exercise the standalone executable outside the checkout
+        run: python packaging/smoke_executable.py dist/beancount-budget-tool.exe
+      - name: Build folder console executable
+        env:
+          BUDGET_BUNDLE_MODE: onedir
+        run: python -m PyInstaller --noconfirm packaging/windows.spec
+      - name: Exercise folder bundle and unavailable extraction directories
+        run: python packaging/smoke_executable.py dist/beancount-budget-tool-portable/beancount-budget-tool.exe --onedir
+      - name: Prepare download
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/windows-x64
+          Copy-Item dist/beancount-budget-tool.exe dist/windows-x64/
+          Copy-Item packaging/WINDOWS-START.md dist/windows-x64/START-HERE.md
+          Copy-Item LICENSE dist/windows-x64/
+          Copy-Item packaging/THIRD-PARTY-NOTICES.md dist/windows-x64/
+          New-Item -ItemType Directory -Path dist/windows-x64/example
+          Copy-Item examples/v6/simple dist/windows-x64/example/simple -Recurse
+          git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64/BUILD-COMMIT.txt
+          New-Item -ItemType Directory -Path dist/windows-x64-folder
+          Copy-Item dist/beancount-budget-tool-portable/* dist/windows-x64-folder/ -Recurse
+          Copy-Item packaging/WINDOWS-START.md dist/windows-x64-folder/START-HERE.md
+          Copy-Item LICENSE dist/windows-x64-folder/
+          Copy-Item packaging/THIRD-PARTY-NOTICES.md dist/windows-x64-folder/
+          New-Item -ItemType Directory -Path dist/windows-x64-folder/example
+          Copy-Item examples/v6/simple dist/windows-x64-folder/example/simple -Recurse
+          git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64-folder/BUILD-COMMIT.txt
+          foreach ($PackageDir in @('dist/windows-x64', 'dist/windows-x64-folder')) {
+            Copy-Item QUICKSTART.md,LEGACY-WORKFLOWS.md $PackageDir/
+            New-Item -ItemType Directory -Path "$PackageDir/packaging"
+            Copy-Item packaging/MACOS-START.md "$PackageDir/packaging/"
+            New-Item -ItemType Directory -Path "$PackageDir/docs"
+            Copy-Item docs/CONFIGURATION.md,docs/v6-monthly-report.md,docs/ARCHITECTURE.md "$PackageDir/docs/"
+            $StartText = Get-Content packaging/WINDOWS-START.md -Raw -Encoding utf8
+            $StartText = $StartText.Replace('../QUICKSTART.md', 'QUICKSTART.md').Replace('../docs/', 'docs/')
+            Set-Content "$PackageDir/START-HERE.md" $StartText -Encoding utf8
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beancount-budget-tool-windows-x64
+          path: dist/windows-x64/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beancount-budget-tool-windows-x64-folder
+          path: dist/windows-x64-folder/
+          if-no-files-found: error
+          retention-days: 30

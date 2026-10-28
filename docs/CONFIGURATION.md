@@ -1,0 +1,382 @@
+# 配置参考：config.yml 与 budgets.yml
+
+从零操作看 [QUICKSTART](../QUICKSTART.md)。本页列出两文件入口实际支持的字段。它们都用 `schema: 1`；导出状态 `month.yaml` 的 `schema: 6` 是后端格式，不要混用字段。
+
+## config.yml：稳定规则
+
+```yaml
+schema: 1
+ledger: ../../main.bean
+budgets: budgets.yml
+cutover: '2023-07-01'
+month: '2023-07'
+report_currency: CNY
+defaults:
+  income_purpose: 自由资金
+  expense_purpose: 生活费
+  expense_category: 生活开销
+accounts:
+  Assets:Bank:
+    semantics: H
+    payment_scope:
+      CNY: payable
+```
+
+路径相对于 config.yml 所在目录。推荐统一写正斜杠，如 `ledger: ../../main.bean`，Windows 和 macOS 都能读取；两文件入口也兼容从 Windows 带来的反斜杠相对路径，包括 `budgets` 和 `--watch`。Windows 盘符／网络绝对路径在 Mac 上没有对应位置，须改为本机路径或相对路径。账户名必须与账本一致。示例只是结构，请使用实际账户和目录。
+
+| 字段 | 必填 | 含义 |
+|---|---|---|
+| `schema` | 是 | 固定为 `1` |
+| `ledger` | 是 | 根账本文件，可包含其他账本文件 |
+| `budgets` | 是 | 目标文件路径，通常为 `budgets.yml` |
+| `cutover` | 是 | 从哪个自然月第一天开始重放预算；逐月操作时保持不变 |
+| `month` | 是 | 默认查询月份；启动可用 `--month` 覆盖，TUI 可用 `m`／`n` 切换 |
+| `report_currency` | 是 | 报告币种，必须在账本 operating_currency 中 |
+| `defaults.income_purpose` | 是 | 收入资产腿省略 fund 时归入的用途；也用于首次符合条件的 pad 初始化 |
+| `defaults.expense_purpose` | 是 | 普通消费、退款资产腿省略 fund 时使用的用途 |
+| `defaults.expense_category` | 是 | 费用省略 budget 时使用的分类；也是默认消费总上限类别 |
+| `defaults.income_category` | 否 | Income 省略 budget 的分类；默认同 income_purpose，迁移时可能单独保留 |
+| `account_groups` | 二选一 | 按 H 可支付／H 不可支付／K 列出完整账户名，见下例 |
+| `accounts` | 二选一 | 逐账户属性；也可只放分组账户的例外（例如 opening），显式字段覆盖分组设置 |
+| `account_defaults` | 否 | 未单独列出的账户使用的属性；结构同账户。只有明确希望未来新账户也按此处理时才设置 |
+| `spendable_cap_category` | 否 | 用哪个费用类别及其子类的目标差限制最多能花；默认 expense_category。`null` 关闭此指标，不按现金假算上限 |
+| `classification_defaults` | 否 | 默认 `true`；`false` 禁用未写 budget 的默认分类。某些旧配置迁移后会保留 false，不影响资产默认 fund 用途 |
+| `expense_budget_basis` | 否 | 默认 `calendar_month` 沿用自然月消费上限；`salary_cycle` 改为按当前发薪周期剩余额度限制最多能花。账务审核和资金快照仍按自然月 |
+| `liabilities` | 否 | 仅声明特殊财务性质 role 与贷款 due_on；普通应付款无需配置，用途写在逐笔 budget |
+| `liability_budget_mode` | 否 | 旧配置中的 `purpose` 可省略；现在仅有逐笔用途模式，classification 已下线 |
+
+### 负债：逐笔 budget，普通应付款无需配置
+
+负债责任用途写在 Liabilities 分录的 budget，可用多用途金额写法，合计须等于该分录绝对金额。用途名称自动发现，省略新增责任标签时沿用默认支出用途。资产 fund 与责任 budget 分别计算，不因同名就划转现金。
+
+普通信用卡、即期借款和代收款无需逐账户写规则。特殊性质才使用可选配置：
+
+```yaml
+liabilities:
+  Liabilities:Receivable:Employer:
+    role: receivable
+  Liabilities:Loan:
+    role: loan
+    due_on: '2027-06-30'
+```
+
+| role | 含义 |
+|---|---|
+| payable | 未配置账户的默认性质；即期欠款占用可花，预付不冒充现金 |
+| credit_card | 可显式标明信用卡；刷卡只由 Expenses 计消费，还款不重复计消费 |
+| receivable | 单位代垫应收；收回恢复原用途，不能自动把负余额当自己欠款 |
+| loan | 到期一次还本的简单贷款，须明示 due_on；本月到期及逾期本金计入责任，分期须另外表达到期份额 |
+
+没有整户 purpose，不从账户名猜贷款或到期日。多人往来应分会计子账户或用明确不同的责任用途区分，不能让同一池的净额掩盖欠款。
+
+```beancount
+2024-03-15 * "收到自己的报销及代同事收款"
+  Assets:Bank 520 CNY
+    fund: "生活费"
+  Liabilities:Payable:Colleague -260 CNY
+    budget: "同事差旅费"
+  Income:Work -260 CNY
+
+2024-03-15 * "转交同事款项"
+  Assets:Wallet -260 CNY
+    fund: "生活费"
+  Liabilities:Payable:Colleague 260 CNY
+    budget: "同事差旅费"
+```
+
+只有 Income 的 260 元是个人收入；代收、转交不增加消费或 G，无须逐笔挑责任 ID、填理由。转交前责任会占用实际可花，结清后释放；非生活费用途的专款覆盖、外币及到期贷款仍走各自的核对规则。
+
+例如同一账户借入 1000，负债腿写 `budget: "生活费600,旅游400"`。部分归还 500 时，可写 `budget: "生活费300,旅游200"`；剩余责任分别为 300、200。省略还款 budget 时，仅在单一用途或金额恰好完整清偿全部用途时自动分配。部分金额不能唯一分配会提示 `LIABILITY_BUDGET_AMBIGUOUS`，显示交易前各用途欠款，并定位到需要补标签的分录。程序不会用 FIFO 或比例猜。
+
+借款与还款的 **budget 名称应对应**。借入写「生活费」、还款写「旅游」，会保留生活费欠款和旅游预付，不能凭会计账户净额为零宣告两者结清。预付退回恢复原来付款的资产用途，不把责任 budget 当成收款 fund。不同人的往来仍应分子账户或用不同的责任预算名称明确区分，避免把多人债权债务写成同一个池。
+
+消费仍只统计 Expenses；还本 1000＋Expenses 利息 10，消费只有 10。`budget: "-"` 不列预算分类，但不能抹掉已经发生的财务债务，责任沿默认／已知用途处理。已有单一用途可沿用；`role: receivable`、`role: loan` 及贷款 `due_on` 等账户性质可继续配置，不再配置整户 purpose。未配置账户按普通即期应付款处理，不推断长期贷款的未来到期日。
+
+偿还本金和利息用两条分录区分：Liabilities 1000、Expenses 10、Assets −1010，消费只有 10。本金责任可在负债腿写多用途 budget；fund 仍只允许写在 Assets。月报、交易详情与 CSV 单列负债变动，不并入消费上限。
+
+**旧配置迁移**：整户 purpose 和 classification 模式已下线。旧标签“借款／偿债／退款”若原本只作分类，须核对并改为配对的责任用途。程序会对旧配置及可识别旧状态给出有文件位置的迁移错误，不静默重解释。已有 `liability_budget_mode: purpose` 可保留，也可删除。
+
+完整可运行示例：[负债账本](../examples/v6/liabilities/main.bean)、[config.yml](../examples/v6/liabilities/config.yml)、[budgets.yml](../examples/v6/liabilities/budgets.yml)。在项目目录运行：
+
+```bash
+python -m beancount_budget_tool --config examples/v6/liabilities/config.yml --format tui
+```
+
+预期消费净额 90、实际可花 2150、最多能花 410 CNY；无需逐笔填写理由。
+
+### 预付、溢缴退回和合并报销
+
+信用卡上的退款／溢缴余额尚不是银行卡现金。真正退到银行卡时，程序恢复已证明的预付款用途，不把它当个人收入。例如先用储蓄预付 150、清偿欠款 100、再取回多付的 50，这 50 恢复储蓄；不能因为信用卡责任是生活费就改归生活费。
+
+已明确的多用途预付款全部退回，可以自动恢复完整用途向量；只退一部分而有多种可能来源时，收款资产腿须明确 fund，程序不按比例猜。明确的 fund 也不能超过该用途已证明的预付余额或可能上限。期初溢缴用途未知时同样需要声明，不能按默认收入用途自动补齐。修改已审原交易会重新校验引用，不沿用失效的逐笔批准。
+
+同一付款中重复出现同一负债账户时，用途追踪先按账户／币种合计，共享现金只使用一次；原分录、金额和来源引用仍逐条保留。多个不同用途的代垫合并付款／报销时，核对实际已编译的现金用途合计，包括已保存的侧文件认领，不再要求每条应收占用整笔现金。单一付款同时还债和代垫，能由明确用途约束唯一拆分时正常计算。
+
+默认支出资金收付、区间累计和 CSV 另列 `credit_returns`（预付／溢缴退回），不冲减 Expenses，不重复记个人收入。没有此类流量时不增加该字段。
+
+支持**预付收回与个人收入一起到账**：同币、无成本／价格的一条 H 现金、一条负债和一条或多条 Income，且负债减少的全部金额确实来自先前预付。允许部分收回，剩余预付继续结转。比如先转交同事 240，随后收到银行 480，其中负债腿 −240、Income −240，按「480＝原预付收回240＋个人收入240」核对；不要求改日期或补 budget-order。
+
+原预付部分须恢复已经证明的资产 fund，用途不足会报具体缺口。收款没写 fund 时，恢复旧预付用途，仅个人收入沿默认收入用途；显式 fund 则必须容纳原预付份额，剩余才是本次收入的资金用途。个人收入只计 Income 的 240；默认资金收付的 `credit_returns` 也只计恢复的那部分，不能把实收 480 全当收入或全当预付收回。TUI 详情显示等式和两部分用途。该协议不新增消费或正式划拨；原预付用途不明时仍待审。
+
+**剩余实现边界**：同笔退回预付还新增借款、多条现金／负债或其他清算，或尚不能证明来源约束的多账户混合预付退回，仍显示 `LIABILITY_CREDIT_MIXED_UNSUPPORTED`／`LIABILITY_CREDIT_GROUP_UNSUPPORTED`。这些是程序缺口，不能通过选择 fund、填写理由或批准来跳过；不会伪装成普通待审。
+
+### 账户多时，按三组填写
+
+普通账户可以只列名称，不必逐户重复属性。分组只声明报告币种的支付范围；其他币种仍须单独审定：
+
+```yaml
+account_groups:
+  H:
+    payable:
+      - Assets:Bank
+      - Assets:Wallet
+    excluded:
+      - Assets:TermDeposit
+  K:
+    - Assets:FundBook:FundA
+    - Assets:FundBook:FundB
+```
+
+账户不能在组间重复。K 自动排除直接支付；不按前缀猜账户性质，新增账户仍须加入对应组。需要期初或外币例外时，只补该账户：
+
+```yaml
+accounts:
+  Assets:Bank:
+    opening:
+      CNY: {自由资金: '100'}
+    payment_scope: {USD: excluded}
+```
+
+旧的逐账户写法继续有效；分组不会改变预算用途，不会把钱包的收入自动改成生活费。
+
+### 账户属性
+
+| 字段 | 可填什么 |
+|---|---|
+| `semantics` | `H`：真实原币数量／余额；`K`：只有累计申赎，不把账面数当基金份额或市值。`null` 尚未决定 |
+| `payment_scope` | 每个币种填 `payable`、`excluded` 或 `pending`／`null`。是否能直接支付与是否持有专款是两件事；K 必须 excluded |
+| `opening` | cutover 之前的余额用途拆分。没有非零期初可省略；不要逐月再填一次 |
+
+例如银行里有自由资金 100、储蓄 200，真实期初余额须合计为 300：
+
+```yaml
+accounts:
+  Assets:Bank:
+    semantics: H
+    payment_scope: {CNY: payable}
+    opening:
+      CNY:
+        自由资金: '100'
+        储蓄: '200'
+```
+
+无成本原币余额用上面的简写。带成本批次的高级 H 期初使用完整坐标列表：`commodity`、`lot`、`signed_units`、`owners`；迁移会保留已审内容，程序按真实 booked 坐标核对，不能猜 lot。K 不填写用途持仓切片。
+
+首次正数、无成本 Assets／Equity pad 在该坐标此前没有交易时，自动归默认收入用途；不算收入或正式划拨。已有记录后的 pad 仍是余额校正，不能反复当作初始化。Beancount 自带的 balance 不要删除。
+
+### 证券卖出有多个成本批次
+
+保留 importer 生成的各个成本批次、现金、手续费和 Income 分录，不必拆交易。程序按全部批次成本和全部费用核对「实收＝成本本金合计＋损益－费用合计」，不限制证券批次条数。来源明确且等式精确成立时自动完成来源核对；空白 Income 可由 Beancount 正常补齐。本金不算收入，费用只计一次；费用和收益的 budget 分类、资产 fund 及已审证券池规则仍分别生效，不会凭等式选择用途。TUI 交易详情显示合计核对等式和每批成本。
+
+### 收入直接分配，也完成用途目标
+
+普通同币种 Income 到 H 资产的收入，资产腿显式写 `fund` 时，拨给默认收入用途以外的部分直接计入本月净划拨；默认收入用途记对应的净划出。收入冲回按符号扣回。例：工资 3000 分成生活费 2000、储蓄 1000，即确认这两份实际分配，不要求再补一笔虚拟划拨。同用途换银行或申购基金不重复计数，正式改回其他用途才扣减。月度目标以净额判断：实际 ≥ 目标显示已达成。
+
+未写 fund 的收入仍按默认用途入账，不自动完成其他用途目标；pad 期初、借款／代收款、本金赎回和独立损益协议也不会套用普通收入分配规则。预算分类 budget 不决定钱的用途。钱包中出现自由资金时，先用交易来源查有没有收入资产腿漏写 fund。
+
+### 多张信用卡和现金共同付款
+
+保留完整交易，不必为了通过审核拆成几次消费。例如：
+
+```beancount
+2026-09-02 * "共同付款"
+  Expenses:Food 25 CNY
+    budget: "生活开销.餐饮"
+  Expenses:Travel 15 CNY
+    budget: "生活开销.交通"
+  Assets:Cash -10 CNY
+    fund: "生活费"
+  Liabilities:CardA -20 CNY
+  Liabilities:CardB -10 CNY
+```
+
+消费共 40、现金实付 10、卡债分别为 20／10。支持三张以上或完全由卡支付，费用不会重复。现金沿 Assets fund；卡债沿各 Liabilities budget，省略新增责任用途时使用默认支出用途。普通场景自动计算，不需要逐笔选责任 ID 或填理由。
+
+部分还款、跨月还款、退款与预付按各账户／责任用途／币种结转，不能用不同用途之间的净零掩盖欠款。借款 budget 写生活费、还款写旅游，会留下生活费欠款与旅游预付；不能仅凭账户余额为零结清。
+
+### 待审与复杂清算
+
+分类或资产用途有歧义可在 TUI `e` 保存来源决定；理由存于 `.budget-state`。普通负债用途不明时，应补对应 Liabilities 分录的 budget；多用途部分清偿须明确金额，不按 FIFO 或比例猜。
+
+复杂的逐来源关联、同日先后未知清算、期初责任和外币锁定成本仍由高级来源协议核对。可用 `state --export` 检查已有协议；它们不属于每笔普通负债的必填步骤，也不能用批准绕过程序实现缺口。原顺序、原币金额、责任容量与真实资产库存都须成立。详见[高级状态说明](v6-monthly-report.md)。
+
+### K 基金申赎、损益和零金额记录
+
+活动赠送等记录若整笔所有分录都为 `0 CNY`／`-0 CNY`，且没有成本或价格，可以保留原样。程序保留订单来源和已写的 fund 标注，按零金额备注处理，不增加收入、现金或正式划拨；月报及交易详情会说明实际基金份额和价值未记录。CNY 金额为零不代表赠送份额没有价值。
+
+支持同一笔交易中的 K 本金、H 实收现金和 Income 损益。两条资产腿明确归同一用途时，按原金额记录即可：
+
+```beancount
+2023-10-19 * "基金赎回"
+  Assets:Bank 1012.17 CNY
+    fund: "投资"
+  Assets:FundBook -1000 CNY
+    fund: "投资"
+  Income:Fund -12.17 CNY
+    budget: "投资"
+```
+
+账户名替换为实际科目，并分别配置 H／K。本金不算收入；这笔收益为 12.17 元，同用途赎回的正式划拨为 0。亏损时 Income 写正数，例如本金 1000、实收 924.67、Income 75.33，投资用途相应减少 75.33。可另列非负 Expenses 内扣费用，程序精确核对「实收＝本金＋损益－费用」。多用途时，两边 fund 写同一组名称，各用途实收减本金记净变动，赎回 G=0；改用途另记同账户虚拟调拨。TUI 详情显示整笔等式与逐用途净差额；K 仍只显示账面申赎，不表示市值。完整示例见[月报说明](v6-monthly-report.md#多用途赎回)。
+
+申购时，H 转出腿的 fund 应写**扣款前真实持有的用途**。例如从自由资金首次划入投资，现金腿写 `fund: "自由资金"`，K 腿写 `fund: "投资"`；两边都写投资表示该现金原本已经属于投资用途，需要该账户确有足够投资份额。
+
+### H 理财赎回：本金与收益分开
+
+有可核对真实原币余额的理财账户可继续配置为 H。赎回时两条资产腿明确写同名 fund，无须改成 K 或新增审阅文件：
+
+```beancount
+2024-03-01 * "理财赎回"
+  Assets:Bank 1010.71 CNY
+    fund: "额外储蓄"
+  Assets:Wealth -1000 CNY
+    fund: "额外储蓄"
+  Income:Gain -10.71 CNY
+```
+
+程序精确核对「实收＝本金＋损益－内扣费用」；本金只是搬回，收入只计 10.71 元，正式划拨 G=0。Income 的 budget 分类独立于资产 fund，不会把储蓄现金自动变成生活费。亏损用正数 Income，可同时列非负 Expenses 内扣费用；源账户必须有足够的对应用途本金，不能借赎回挪用其他用途。
+
+多用途也沿用同名差额规则：两边用途名称相同，各自金额加回对应分录，各用途实收减本金表示净损益／费用；改用途另记虚拟调拨。TUI 交易详情显示本金、实收、损益与来源。当前协议限定同币、无成本／价格、两个不同 H 账户及一条 Income；没有 Income 的「两资产＋费用」也可能是付款找零，不会自动当成赎回。跨币、多条 Income 等复合形状仍明确列为程序实现缺口；证券池沿用自己的协议。
+
+### 工资周期只有一个总上限时
+
+额度默认作用于 `spendable_cap_category`，未配置时用 `defaults.expense_category`：
+
+```yaml
+salary_cycles:
+  '2023-08-14': '5299.32'
+  '2023-09-12': '1288'
+  '2023-10-10': '2208'
+```
+
+这与 `日期: {expense_targets: {生活开销: 金额}}` 完全等价；多类别仍可用原结构，两种写法也可混用。`null` 仍是未决定，`not_assessed` 是明确不考核。
+
+## budgets.yml：目标
+
+```yaml
+schema: 1
+defaults:
+  expense_targets:
+    生活开销: 2000
+  allocation_targets:
+    生活费: 2000
+effective_templates:
+  '2023-09':
+    expense_targets:
+      生活开销: 2200
+months:
+  '2023-07':
+    expense_targets:
+      生活开销: not_assessed
+    allocation_targets:
+      额外储蓄: not_assessed
+```
+
+这些是目标示例，不代表资金已实际分配。
+
+| 字段 | 含义 |
+|---|---|
+| `schema` | 必填，固定为 `1` |
+| `purposes` | 可选的用途名称列表，预先声明尚无交易的用途；明确 fund 和目标名称也会自动发现，无需重复列出 |
+| `defaults` | 每月沿用的目标 |
+| `effective_templates` | 从某月起沿用，直到被后续模板覆盖 |
+| `months` | 只覆盖指定月份的同名目标 |
+| `expense_targets` | 消费目标，包含该类别及所有子类别 |
+| `expense_direct_targets` | 高级用法：只考核该节点直接费用，不包含子类 |
+| `allocation_targets` | 正式用途净划拨目标 Q，实际 G 从账本得出；不等于消费目标或持仓 |
+| `months.<月份>.completeness_confirmed` | 只针对该月的资料完整性声明：true 已核对，false 明确未确认。不能放在 defaults 中跨月自动批准；也可省略，用 TUI `f` 核对并保存记录 |
+
+覆盖顺序是 defaults → 已生效模板（按日期顺序）→ 当月设置，按每个名称覆盖，未覆盖项继续沿用。
+
+目标金额可以是整数、普通小数或金额字符串，按原文精确解析，不经二进制浮点取近似。金额必须有限且非负。
+
+| 写法 | 结果 |
+|---|---|
+| `2000`／`'2000.50'` | 真实目标 |
+| `0` | 真实零额度，不是未知值 |
+| `not_assessed` | 明确不考核，仍计算实际收支／用途余额 |
+| `null` | 尚未决定，列待审 |
+| 没有设置 | 新用途通常不考核；迁移的旧目标缺失会保留为 null 待审。只设子类目标时父类可派生汇总，但不能把派生值冒充整个父类别硬上限 |
+
+要按「整个生活费最多 2000」限制可花，应在所选口径中设置对应费用父节点的 `expense_targets`。历史上限不记得时填 not_assessed；此时不计算目标差及受该目标限制的最多能花，实际现金和消费仍另行核对。
+
+### 持久保存发薪周期目标
+
+当 config.yml 的 `expense_budget_basis: salary_cycle` 时，在 budgets.yml 顶层添加：
+
+```yaml
+salary_cycles:
+  '2023-07-08':
+    expense_targets:
+      生活开销: 2000
+      生活开销.餐饮: 800
+  '2023-08-02':
+    expense_targets:
+      生活开销: 2000
+```
+
+每个键是已确认的实际发薪日，包含当天；下一条发薪日结束上一周期，下一发薪日全天归新周期。末周期不假定未来发薪日，只统计到查询截止日。只设置周期目标时，不要求自然月 `expense_targets`；旧自然月字段若保留，仍作为独立月度目标审核，不会被静默覆盖。周期字段不继承月度 defaults 或 effective_templates，不会在月初重置。
+
+`months`／`effective_templates` 的键只能是 YYYY-MM；YYYY-MM-DD 的发薪日放在顶层 salary_cycles。首个已配置日期同时定义周期目标的生效起点：之前月份仍正常审核费用、资产和责任，但周期状态为 `NOT_STARTED`、上限为 `NOT_ASSESSED`，不编造周期或零额度，也不将现金余额冒称最多能花。若 salary_cycles 完全为空，则尚未定义任何生效区间，保留待审。日期代表到账日，不因工资归属上个月而回填。
+
+周期的 `expense_targets` 均含子类别，父子目标各自检查，不把它们相加。金额、精确小数、0、null 和 not_assessed 的意义与前文一致；缺少当前上限类别的周期目标会待审并定位 budgets.yml。类别名称自动登记，别名不能与原名重复设置同一目标。切换此模式不改变 fund、预算划拨 G、实际现金、债务或 cutover，也不创造或提前认定收入。
+
+月报仅使用**月末所在的当前周期、截至该月末**的消费，最多能花取已审可支付资金与周期剩余额度的较小值；月报、累计及 CSV 会注明周期和统计截止日，周期余额快照不相加。TUI `w`／`report --cycle YYYY-MM-DD` 使用已保存的目标；闭合周期默认查完整范围，末周期默认查配置月份末。`--cycle current --as-of YYYY-MM-DD` 可指定截止日。单独周期报告不签发现金库存或可花，月末完整性也须单独确认。
+
+## 账本标签与配置的分工
+
+- `budget`：费用／收入分类；`fund`：资产资金用途；`tracking`：专题。
+- 标签在分录下面。省略标签时只使用配置中可确定的默认规则；混合资金部分转出不能唯一判断时待审。
+- 多用途可写 `fund: "保险200,电子产品900,旅游900"`。每项为正数金额，合计须等于该分录金额的绝对值；扣款的符号由分录决定，不能凭标签增加钱。
+- 新用途名称自动识别只代表名称可使用，不替代金额守恒、真实余额、责任、计价和流向检查。
+- 工资周期可用上述 salary_cycles 长期保存；没有保存时，TUI `w` 或 report 手填参数仍可临时查询，不复制自然月目标。
+
+`tracking: "健康,大额支出"` 可写在交易头下（统计该笔全部 Expenses）或费用分录下（只统计该腿），名称不必登记。同笔同腿重复出现同一专题只算一次。已审月报下方“专题支出”、区间／累计及 CSV 都按原币列出支出、退款与净额；不统计 Income 或纯转账，也不把多个重叠专题相加为总消费。
+
+### 显式同日顺序：budget-order
+
+这是账本**交易级**元数据，不是 config 字段，也不是分录 fund：
+
+```beancount
+2023-08-24 * "充值确实先发生"
+  budget-order: -1
+  Assets:Bank -200 CNY
+  Assets:Wallet 200 CNY
+```
+
+值为不加引号的整数，越小越先；未填为 0，同值保留 Beancount 原顺序。只改变同一日期普通交易的预算重放先后，跨 include 文件有效，原日期、金额、账户、价格、成本和源行号不变。程序不根据金额、账户名或负余额推测顺序。
+
+`budget-order v1` 只支持无成本普通交易。不得标记成本交易／自动 pad，也不得跨越这两类事件，以免影响成本批次或初始化语义；遇到这些形状返回 TRANSACTION_ORDER_UNSUPPORTED。不能在 posting、其他指令或 pushmeta 中设置。真实负库存检查、用途校验和跨日边界仍然生效；Fava 等外部工具不会因此自动改排序。添加元数据改变了来源内容，已有来源认领仍按正常规则校验失效。
+
+## 文件与存储
+
+`_internal` 是目录版 exe 的依赖；完整保留。单文件版没有这个目录，启动前会解包依赖；不能通过删除目录版依赖来转换版本。Windows 单文件版在 `%LOCALAPPDATA%\BeancountBudgetTool\Runtime` 下创建每次运行的私有解包目录，正常退出清理；该设置在 Python 启动前生效，不依赖系统 TEMP 路径。原 VS Code 故障根因尚未确认，不能据此承诺所有权限问题已经解决；目录版保留作兼容选择。
+
+当前 Mac 的 arm64／x64 包均为单文件版，可单独移动 `beancount-budget-tool`；Windows 仍提供目录版与单文件版。更换程序不影响账本、两份配置和审阅状态，后者继续单独备份。
+
+正常使用只会在有已审数据时保存 `.budget-state/config/reviews.json.gz`，包含已审来源决定、月末声明、债务证据和恢复资料。它不是缓存，需备份。运行输入放系统临时目录，正常重算／退出自动释放；纯行内配置可完全没有持久状态。
+
+审阅理由在最终输入 y 后随决定一起保存到这个压缩文件，不追加到原账本、config.yml 或 budgets.yml；未批准／取消的表单内容不持久保存。保存成功页显示理由和文件位置，已审交易详情显示分类／用途／责任依据。需要在月报尚未签发时查看文字版，可用下方 state --export 导出只读用途的副本，在 obligations.yaml 的 events[].reason 查看负债理由；分类／H 用途决定在相应 classifications.yaml／ownership.yaml 中。查看无须执行 import-reviewed，也不要直接修改压缩记录。
+
+升级后退出其他预算工具窗口，执行 `clean --config config.yml`，可将旧 latest.yaml、snapshots、reviews 收拢并删除旧 runtime 缓存。`--dry-run` 只预览。文件损坏或无法证明安全时会保留原文件，不通过删除审阅记录来消除错误。
+
+## 高级审阅数据
+
+复杂证券池、责任、同日结算和旧认领失效处理继续兼容高级入口；不会为了减少文件而自动批准。需要修改时，可导出一份自包含副本：
+
+```powershell
+& $Exe state --config $Config --export "D:\budget-advanced"
+# 用高级工具核对、修改副本后，再保存其最新 month.yaml：
+& $Exe state --config $Config --import-reviewed "D:\budget-advanced\month.yaml"
+```
+
+输出目录必须不存在。使用刚导出的最新副本，避免覆盖后来保存的决定；不要直接编辑压缩状态。日常逐月标账无需执行这两条命令。高级输入说明见[月报与待审](v6-monthly-report.md)。

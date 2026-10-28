@@ -1,0 +1,144 @@
+; 全部为虚构交易。例 4/5 与例 6/7 使用不同账户，避免省略的前提互相干扰。
+option "operating_currency" "CNY"
+
+2026-09-01 open Assets:Bank:Daily
+2026-09-01 open Assets:Bank:Savings
+2026-09-01 open Assets:Mixed:A
+2026-09-01 open Assets:Mixed:B
+2026-09-01 open Assets:Trip:Bank
+2026-09-01 open Assets:Trip:Fund
+2026-09-01 open Assets:Appliance
+2026-09-01 open Assets:Outside:Cash
+2026-09-01 open Assets:Outside:Bank
+2026-09-01 open Equity:Opening
+2026-09-01 open Income:Salary
+2026-09-01 open Income:Others
+2026-09-01 open Expenses:Traffic
+2026-09-01 open Expenses:Hotel
+2026-09-01 open Expenses:Appliance
+2026-09-01 open Expenses:Snack
+2026-09-01 open Expenses:Fraud
+2026-09-01 open Expenses:Daily
+2026-09-01 open Liabilities:Card
+2026-09-01 open Liabilities:Employer
+
+2026-09-30 * "虚构期初：用途拆分见 decisions.yaml"
+  Assets:Mixed:A 1300 CNY
+  Assets:Trip:Bank 600 CNY
+  Assets:Appliance 800 CNY
+  Assets:Outside:Bank 760 CNY
+  Equity:Opening -3460 CNY
+
+2026-10-08 * "E1 工资到账"
+  Assets:Bank:Daily 5000 CNY
+    fund: "自由资金"
+  Income:Salary -5000 CNY
+
+2026-10-08 * "E1 同账户正式留出生活费"
+  Assets:Bank:Daily 2000 CNY
+    fund: "生活费"
+  Assets:Bank:Daily -2000 CNY
+
+2026-10-09 * "E2 首次划入储蓄"
+  Assets:Bank:Daily -700 CNY
+    fund: "自由资金"
+  Assets:Bank:Savings 700 CNY
+    fund: "储蓄"
+
+2026-10-09 * "E3 默认支出用途消费，允许用途为负"
+  Expenses:Traffic 700 CNY
+    budget: "交通费用"
+    tracking: "第一次旅行"
+  Assets:Bank:Savings -700 CNY
+
+2026-10-09 * "E4 首次混合分配"
+  Assets:Mixed:A -700 CNY
+    fund: "自由资金"
+  Assets:Mixed:B 700 CNY
+    fund: "储蓄100，电子产品200，旅游400"
+
+2026-10-09 * "E5 混合用途搬家"
+  Assets:Mixed:A -600 CNY
+    fund: "电子产品100，储蓄200，旅游300"
+  Assets:Mixed:B 600 CNY
+    fund: "电子产品100，储蓄200，旅游300"
+
+2026-10-09 * "E5 同账户用途调整"
+  Assets:Mixed:B -100 CNY
+    fund: "旅游"
+  Assets:Mixed:B 100 CNY
+    fund: "电子产品"
+
+; 例 7 的资金先到，再支付例 6；实际资产余额始终非负。
+2026-10-09 * "E7 旅游资金换账户，单一用途自动继承"
+  Assets:Trip:Fund 500 CNY
+    fund: "旅游"
+  Assets:Trip:Bank -500 CNY
+
+2026-10-09 * "E6 用旅游资金支付酒店"
+  Expenses:Hotel 461 CNY
+    budget: "酒店"
+    tracking: "第二次旅行"
+  Assets:Trip:Fund -461 CNY
+    fund: "旅游"
+
+2026-10-10 * "E8 家电购买，退款在下一月"
+  Expenses:Appliance 800 CNY
+    budget: "家电"
+    tracking: "大额支出"
+  Assets:Appliance -800 CNY
+    fund: "家电"
+
+2026-10-11 * "E9 完全预算外收入"
+  Assets:Outside:Cash 100 CNY
+    fund: "-"
+  Income:Others -100 CNY
+    budget: "-"
+
+2026-10-11 * "E9 完全预算外消费"
+  Expenses:Snack 100 CNY
+    budget: "-"
+  Assets:Outside:Cash -100 CNY
+    fund: "-"
+
+2026-10-11 * "E9 类别预算外，仍花储蓄资金"
+  Expenses:Fraud 760 CNY
+    budget: "-"
+  Assets:Outside:Bank -760 CNY
+    fund: "储蓄"
+
+2026-10-11 * "E9 类别预算外，仍补储蓄资金"
+  Assets:Outside:Cash 100 CNY
+    fund: "储蓄"
+  Income:Others -100 CNY
+    budget: "-"
+
+2026-10-12 * "跨月：单位代垫"
+  Liabilities:Employer 300 CNY
+  Assets:Bank:Daily -300 CNY
+    fund: "生活费"
+
+2026-10-13 * "跨月：信用卡消费"
+  Expenses:Daily 120 CNY
+  Liabilities:Card -120 CNY
+
+2026-11-02 * "E8 家电退款"
+  Expenses:Appliance -760 CNY
+    budget: "家电"
+    tracking: "大额支出"
+  Assets:Appliance 760 CNY
+    fund: "家电"
+
+2026-11-03 * "跨月：信用卡还款"
+  Liabilities:Card 120 CNY
+  Assets:Bank:Daily -120 CNY
+    fund: "生活费"
+
+2026-11-04 * "跨月：单位报销"
+  Assets:Bank:Daily 300 CNY
+    fund: "生活费"
+  Liabilities:Employer -300 CNY
+
+2026-11-05 * "下一月日常消费"
+  Expenses:Daily 20 CNY
+  Assets:Bank:Daily -20 CNY

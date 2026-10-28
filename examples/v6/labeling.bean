@@ -1,0 +1,24 @@
+option "operating_currency" "CNY"
+
+2026-10-01 open Assets:Bank:Daily
+2026-10-01 open Assets:Bank:Savings
+2026-10-01 open Income:Salary
+2026-10-01 open Expenses:Food
+
+2026-10-08 * "Employer" "Salary"
+  Assets:Bank:Daily 5000 CNY
+    fund: "-"
+  Income:Salary -5000 CNY
+    budget: "生活费"
+
+2026-10-09 * "Bank" "First transfer into savings"
+  Assets:Bank:Daily -700 CNY
+    fund: "-"
+  Assets:Bank:Savings 700 CNY
+    fund: "储蓄"
+
+2026-10-10 * "Restaurant" "Lunch"
+  Expenses:Food 30 CNY
+    budget: "生活费.餐饮"
+  Assets:Bank:Daily -30 CNY
+    fund: "-"

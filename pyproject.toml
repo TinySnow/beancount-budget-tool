@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beancount-budget-tool"
+version = "0.4.0.dev0"
+description = "Evidence-first v6 budget review for Beancount"
+requires-python = ">=3.10"
+dependencies = [
+    "beancount==3.2.3",
+    "PyYAML>=6,<7",
+    "windows-curses>=2.4.2,<3; sys_platform == 'win32'",
+]
+
+[project.scripts]
+beancount-budget-tool = "beancount_budget_tool.launcher:main"
+beancount-budget-report = "beancount_budget_tool.v6.period_report:main"
+beancount-budget-audit = "beancount_budget_tool.v6.cli:main"
+beancount-budget-configure = "beancount_budget_tool.v6.simple_config:main"
+beancount-budget-state = "beancount_budget_tool.v6.state_store:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

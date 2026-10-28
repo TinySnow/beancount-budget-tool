@@ -1,0 +1,16 @@
+schema: 1
+ledger: main.bean
+budgets: budgets.yml
+cutover: '2026-09-01'
+month: '2026-09'
+report_currency: CNY
+defaults:
+  income_purpose: 自由资金
+  expense_purpose: 生活费
+  expense_category: 生活开销
+accounts:
+  Assets:Bank:
+    semantics: H
+    payment_scope: {CNY: payable}
+    opening:
+      CNY: {生活费: '2000'}

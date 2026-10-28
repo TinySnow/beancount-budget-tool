@@ -1,0 +1,18 @@
+option "operating_currency" "CNY"
+2026-09-01 open Assets:Cash
+2026-09-01 open Income:Salary
+2026-09-01 open Expenses:Food
+
+2026-09-02 * "虚拟工资"
+  Assets:Cash 500 CNY
+  Income:Salary -500 CNY
+
+2026-09-02 * "正式分出生活费"
+  Assets:Cash -200 CNY
+  Assets:Cash 200 CNY
+    fund: "生活费"
+
+2026-09-03 * "虚拟午餐"
+  Expenses:Food 10 CNY
+    budget: "生活开销.餐饮"
+  Assets:Cash -10 CNY

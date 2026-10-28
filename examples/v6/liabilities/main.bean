@@ -1,0 +1,45 @@
+option "operating_currency" "CNY"
+2026-08-01 open Assets:Bank
+2026-08-01 open Equity:Opening
+2026-08-01 open Expenses:Food
+2026-08-01 open Expenses:Interest
+2026-08-01 open Income:Work
+2026-08-01 open Liabilities:Card
+2026-08-01 open Liabilities:Colleague
+
+2026-08-31 * "期初生活费"
+  Assets:Bank 2000 CNY
+  Equity:Opening -2000 CNY
+
+2026-09-02 * "刷卡消费：消费发生时计入预算"
+  Expenses:Food 100 CNY
+    budget: "生活开销"
+  Liabilities:Card -100 CNY
+    budget: "生活费"
+
+2026-09-03 * "退回信用卡：冲减消费，不增加银行卡现金"
+  Expenses:Food -20 CNY
+    budget: "生活开销"
+  Liabilities:Card 20 CNY
+    budget: "生活费"
+
+2026-09-04 * "还本金80及利息10：仅利息新增消费"
+  Assets:Bank -90 CNY
+    fund: "生活费"
+  Liabilities:Card 80 CNY
+    budget: "生活费"
+  Expenses:Interest 10 CNY
+    budget: "生活开销"
+
+2026-09-05 * "收到自己的报销240及代同事收款240"
+  Assets:Bank 480 CNY
+    fund: "生活费"
+  Income:Work -240 CNY
+  Liabilities:Colleague -240 CNY
+    budget: "生活费"
+
+2026-09-06 * "转交同事款项：不计个人消费"
+  Assets:Bank -240 CNY
+    fund: "生活费"
+  Liabilities:Colleague 240 CNY
+    budget: "生活费"
