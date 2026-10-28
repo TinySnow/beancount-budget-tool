@@ -2,6 +2,8 @@
 
 from contextlib import redirect_stdout
 import io
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +12,24 @@ from beancount_budget_tool.launcher import COMMANDS, main
 
 
 class LauncherTests(unittest.TestCase):
+    def test_audit_help_does_not_import_the_financial_engine(self):
+        # Use a fresh process: test discovery already imports most rule modules.
+        probe = '''
+import sys
+from beancount_budget_tool.launcher import main
+try:
+    main(["audit", "--help"])
+except SystemExit as exc:
+    assert exc.code == 0
+assert "beancount_budget_tool.financial" not in sys.modules
+assert "beancount_budget_tool.v6.ownership" not in sys.modules
+assert "beancount" not in sys.modules
+'''
+        result = subprocess.run([sys.executable, "-c", probe], capture_output=True,
+                                text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--ownership-audit", result.stdout)
+
     def test_every_command_reaches_its_real_parser(self):
         for name in COMMANDS:
             with self.subTest(command=name), redirect_stdout(io.StringIO()) as output:
