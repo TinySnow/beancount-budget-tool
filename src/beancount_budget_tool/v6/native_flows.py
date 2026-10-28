@@ -280,7 +280,11 @@ def compile_h_bundle(native, entry, facts, claims, report_currency):
     allocations = {owner: exact_text(amount) for owner, amount in net.items() if amount and owner != '-'}
     outgoing = {part['owner_id'] for p,ref in zip(native.assets, refs) if p.units.number < 0
                 for part in claims[_key(ref)]['slices'] if Fraction(part['signed_units'])}
-    if allocations and len(outgoing)>1 and len(set(event['asset_accounts']))>1:
+    incoming = {part['owner_id'] for p,ref in zip(native.assets, refs) if p.units.number > 0
+                for part in claims[_key(ref)]['slices'] if Fraction(part['signed_units'])}
+    # Pure many-to-one merges are as explicit as one-to-many splits. Keep
+    # mixed remaps with fees/refunds behind their existing attribution gate.
+    if allocations and len(outgoing)>1 and (expense or len(incoming)>1) and len(set(event['asset_accounts']))>1:
         return {**event, 'reason_code': 'H_TRANSFER_MIXED_REMAP_PENDING'}
     if allocations and native.currency != report_currency:
         return {**event, 'reason_code': 'H_BUNDLE_ALLOCATION_CURRENCY_UNSUPPORTED'}

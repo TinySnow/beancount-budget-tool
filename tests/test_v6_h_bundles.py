@@ -149,11 +149,19 @@ class HBundleTests(unittest.TestCase):
         self.assertEqual({report['owner_names'][k]:v for k,v in e['net_allocations'].items()},{'生活费':'-10','额外储蓄':'10'})
         self.assertEqual({report['owner_names'][k]:v for k,v in e['expense_by_owner'].items()},{'生活费':'1/10'})
 
-    def test_mixed_source_cross_account_remap_still_requires_explicit_virtual_allocation(self):
+    def test_mixed_source_cross_account_merge_to_one_purpose_is_explicit(self):
+        self.f.doc['accounts']['Assets:Destination']={'semantics':'H','payment_scope':{'CNY':'payable'}}
+        report=self.f.audit('2026-09-01 open Assets:Destination\n2026-09-02 * "mixed merge"\n'+
+            self.leg('Assets:Bank','-10','生活费')+self.leg('Assets:Wealth','-10','额外储蓄')+
+            self.leg('Assets:Destination','20','旅游'))
+        self.assertEqual({report['owner_names'][k]:v for k,v in self.event(report)['net_allocations'].items()},
+                         {'生活费':'-10','额外储蓄':'-10','旅游':'20'})
+
+    def test_both_sides_mixed_cross_account_remap_still_requires_virtual_allocation(self):
         self.f.doc['accounts']['Assets:Destination']={'semantics':'H','payment_scope':{'CNY':'payable'}}
         result=self.f.audit('2026-09-01 open Assets:Destination\n2026-09-02 * "mixed remap"\n'+
             self.leg('Assets:Bank','-10','生活费')+self.leg('Assets:Wealth','-10','额外储蓄')+
-            self.leg('Assets:Destination','20','旅游'),certified=False)
+            self.leg('Assets:Destination','20','生活费5,额外储蓄15'),certified=False)
         self.assertEqual(result['status'],'NEEDS_REVIEW')
         self.assertEqual({r['reason_code'] for r in result['review_items']},{'H_TRANSFER_MIXED_REMAP_PENDING'})
 

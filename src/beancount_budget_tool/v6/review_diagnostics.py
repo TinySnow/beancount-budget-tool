@@ -34,7 +34,7 @@ MESSAGES = {
     "POOL_BOUNDARY_PENDING": "这笔资金跨越证券池边界，需要确认现金转入或转出的用途。",
     "H_TRANSFER_PENDING": "这笔资产转账尚未完成用途审阅。",
     "H_TRANSFER_OWNER_PENDING": "资产转账的一侧或两侧资金用途尚未认领。",
-    "H_TRANSFER_MIXED_REMAP_PENDING": "跨账户转账的多用途金额不一致；核对两侧 fund，重新分配用途须另记同账户虚拟调拨。",
+    "H_TRANSFER_MIXED_REMAP_PENDING": "跨账户两侧均为多用途且金额不对应，或转账混有费用／退款而用途变更未明确；核对 fund，改用途须另记同账户虚拟调拨。单用途拆分与多用途合并为单用途可直接标注。",
     "H_TRANSFER_SHAPE_UNSUPPORTED": "该复合资产转账不符合当前简单转账协议，需补程序实现。",
     "H_FX_SHAPE_UNSUPPORTED": "该复合购汇交易不符合当前简单购汇协议，需补程序实现。",
     "H_FX_PENDING": "该购汇事件尚未审阅；在 h_fx 中核对两条来源、原文价格、资金用途和金额。",
