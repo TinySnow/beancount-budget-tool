@@ -1,5 +1,7 @@
 # 独立副本重构记录
 
+用户已选定本项目为维护主线。后续基于7662ae4的进一步优化与原型退役记录见[ROUND2-PERFORMANCE.md](ROUND2-PERFORMANCE.md)；下文保留首轮重构验收。
+
 ## 范围
 
 独立分支 refactor/session-engine，基线4d2cefd包含上一轮性能改动。原工作树和真实账本未修改。用户最新账本5ceed169通过隔离bare clone提取；未在原账本目录执行fetch/pull。基线已复现2023-07至2024-08全部14个月CERTIFIED_SCOPED。测试前后核对隔离账本694个文件的清单与摘要。

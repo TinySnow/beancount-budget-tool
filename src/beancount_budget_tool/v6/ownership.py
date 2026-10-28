@@ -120,15 +120,18 @@ def _transfer_source_parts(before, required, rule):
 
 
 @shared_audit
-def audit_ownership(root: Path, cutover: date, accounts: Path,
-                    declarations: Path | None = None,
-                    opening: Path | None = None) -> dict:
-    """Validate H ownership slices and identify unknown H/K/account domains."""
+def _ownership_inputs(root: Path, cutover: date, accounts: Path,
+                      declarations: Path | None = None, *, facts: FactIndex) -> dict:
+    """Validate source-bound declarations once for both opening variants.
+
+    This projection contains references and immutable values only. Booked
+    posting objects and mutable replay state stay in their own cutoff view.
+    Opening-dependent inference is deliberately outside this shared stage.
+    """
     scan_v6_source(root, cutover)
     account_audit = audit_accounts(root, cutover, accounts)
     semantics = {row["account"]: row.get("semantics") for row in account_audit["accounts"]}
-    fin = load_financial(root)
-    facts = FactIndex(fin)
+    fin = facts._financial
     assets = fin.options["name_assets"]
     future_keys = None
     known_coordinates = {(row["account"], commodity) for row in account_audit["accounts"]
@@ -171,9 +174,6 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     transfer_orders = {}
     liability_rules = {}
     budget_owners = None
-    responsibilities = None
-    credit_income_receipts = []
-    h_bundles = []
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
@@ -301,6 +301,39 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                            "signed_units": exact_text(amount)})
         compiled_by_key[key] = {**record, "origin": "inline", "slices": slices}
 
+    return {"ledger_snapshot": fin.digest, "account_audit": account_audit,
+            "semantics": semantics, "candidates": {key: record for key, (_, record) in h_candidates.items()},
+            "order": order, "unknown": unknown, "k_postings": k_postings,
+            "names": names, "owner_names": owner_names,
+            "defaults": defaults, "transfer_orders": transfer_orders,
+            "liability_rules": liability_rules, "budget_owners": budget_owners,
+            "compiled": compiled_by_key}
+
+
+@shared_audit
+def audit_ownership(root: Path, cutover: date, accounts: Path,
+                    declarations: Path | None = None,
+                    opening: Path | None = None) -> dict:
+    """Validate H ownership slices and identify unknown H/K/account domains."""
+    fin = load_financial(root)
+    facts = FactIndex(fin)
+    prepared = _ownership_inputs(root, cutover, accounts, declarations, facts=facts)
+    require(prepared["ledger_snapshot"] == fin.digest, "INPUT_CHANGED",
+            "用途声明与账本事实在准备期间发生变化", str(root))
+    assets = fin.options["name_assets"]
+    account_audit = prepared["account_audit"]
+    semantics = prepared["semantics"]
+    h_candidates = prepared["candidates"]
+    order, unknown, k_postings = prepared["order"], prepared["unknown"], prepared["k_postings"]
+    names, owner_names = prepared["names"], prepared["owner_names"]
+    ids = set(names.values())
+    defaults, transfer_orders = prepared["defaults"], prepared["transfer_orders"]
+    liability_rules, budget_owners = prepared["liability_rules"], prepared["budget_owners"]
+    # Only the index changes during replay. Shared source-bound slices remain
+    # read only; inferred rows and all capacity state belong to this call.
+    compiled_by_key = dict(prepared["compiled"])
+    responsibilities = None
+    credit_income_receipts, h_bundles = [], []
     pending_reasons: dict[str, str] = {}
     if defaults is not None:
         initial_pads = initial_pad_postings(fin, cutover)
@@ -353,7 +386,8 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             missing_keys = [key for key in leg_keys if key not in compiled_by_key]
 
             def inferred(key: str, owner_parts: list[tuple[str, Fraction]], reason: str) -> None:
-                posting, record = h_candidates[key]
+                posting, _ = facts.table.postings[key]
+                record = h_candidates[key]
                 stem = "inferred:" + sha256(key.encode()).hexdigest()
                 compiled_by_key[key] = {**record, "origin": "inferred",
                                         "review_reason": reason,
@@ -576,7 +610,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     compiled_by_key.pop(key, None)
                     pending_reasons[key] = "LIABILITY_RULE_PURPOSE_MISMATCH"
     compiled = [compiled_by_key[key] for key in order if key in compiled_by_key]
-    missing = [{**h_candidates[key][1],
+    missing = [{**h_candidates[key],
                 **({"reason_code": pending_reasons[key]} if key in pending_reasons else {})}
                for key in order if key not in compiled_by_key]
     return {"mode": "v6_ownership_audit_only", "cutover": cutover.isoformat(),

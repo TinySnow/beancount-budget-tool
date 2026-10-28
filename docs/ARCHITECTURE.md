@@ -20,6 +20,8 @@ audit_simple与audit_simple_period是原API薄适配，编排交给QuerySession�
 
 只读月报和区间不再生成临时schema 6文件再回读。内部文档作用域结束即不可见，内容不可修改，消费者收到独立副本。物理用户文件仍每次读内容验证，不能由虚拟文档掩盖变化。
 
+同一截止日视图的账户基础盘点与声明overlay分层；用途来源/声明/行内切片准备在opening变体之间共享，但期初容量和真实库存仍分别重放。准备层显式接收该视图FactIndex作为依赖，只存身份键和纯值，不把booked AST放进只读投影。进一步性能与边界见[ROUND2-PERFORMANCE.md](ROUND2-PERFORMANCE.md)。
+
 高级文件接口、状态导入/导出及TUI审阅编辑继续使用物理文件适配。TUI当前保留临时编辑文件以兼容原操作，计算进入同一QuerySession。已审状态是用户数据，不能当缓存删除。
 
 ## 只读计算与输出

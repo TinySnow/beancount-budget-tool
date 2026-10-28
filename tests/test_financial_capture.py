@@ -228,3 +228,19 @@ class FinancialCaptureTests(unittest.TestCase):
                 alias.unlink()
                 alias.symlink_to(other)
         self.assert_input_changed(retarget)
+
+    def test_alias_change_is_detected_when_both_targets_are_already_captured(self):
+        other = self.parts / 'two.bean'
+        other.write_text(TX.replace('income', 'other income').replace('10 CNY', '20 CNY'), encoding='utf-8')
+        alias = self.folder / 'alias.bean'
+        self.symlink(alias, self.child)
+        self.root.write_text(HEADER + 'include "parts/*.bean"\ninclude "alias.bean"\n', encoding='utf-8')
+        fin = load_financial(self.root)
+        frozen_paths = set(fin.sources)
+        alias.unlink()
+        alias.symlink_to(other)
+        fresh = load_financial(self.root)
+        self.assertEqual(set(fresh.sources), frozen_paths)
+        self.assertEqual(fin.digest, fresh.digest)  # Physical content alone cannot prove alias identity.
+        self.assertNotEqual(fin.source_names, fresh.source_names)
+        self.assert_input_changed(lambda: financial._verify_financial(fin))
