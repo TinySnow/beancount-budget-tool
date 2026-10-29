@@ -112,6 +112,10 @@ class HistoryNavigationTests(unittest.TestCase):
             tui._report_browser(screen, browser)
         listing_frames = [frame for frame in screen.frames if any("[选中]" in text for _, _, text in frame)]
         selected = [next(text for _, _, text in frame if "[选中]" in text) for frame in listing_frames]
+        first_rows = [next(text for row, _, text in frame if row == 3) for frame in listing_frames]
+        self.assertIn("交易001", first_rows[0])
+        self.assertIn("交易007", first_rows[1])
+        self.assertIn("交易001", first_rows[2])
         self.assertIn("交易001", selected[0])
         self.assertIn("交易007", selected[1])
         self.assertIn("交易001", selected[2])

@@ -1132,6 +1132,10 @@ def _report_browser(stdscr, browser: ReportBrowser):
                 delta = page
             attribute = "selected" if listing else "offset"
             value = getattr(browser, attribute) + delta
+            if listing and browser.view == "transactions" and key in (curses.KEY_PPAGE, "b", curses.KEY_NPAGE, " "):
+                # Move the viewport as well as the cursor. Otherwise selecting
+                # the first row on the next page only scrolls the screen one row.
+                browser.offset = max(0, browser.offset + delta)
             if listing and browser.view == "reviews" and key in (curses.KEY_PPAGE, "b", curses.KEY_NPAGE, " "):
                 value = _review_page_target(browser, page, stdscr.getmaxyx()[1] - 1,
                                             key not in (curses.KEY_PPAGE, "b"))
