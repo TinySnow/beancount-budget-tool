@@ -63,6 +63,25 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert {(row["currency"], row["net"]) for row in native} == {("JPY", "550"), ("CNY", "5")}, native
         native_text = run("--config", multi_config, "--format", "text")[0]
         assert "550" in native_text and "JPY" in native_text and '缺价' not in native_text, native_text
+        cycle_args = ('report', '--config', multi_config, '--payday', '2025-01-01',
+                      '--next-payday', '2025-02-01', '--cycle-budget', '100')
+        cycle = document(*cycle_args)
+        assert cycle['status'] == 'CERTIFIED_NATIVE_SCOPED', cycle
+        assert cycle['report']['cycle_budget']['remaining'] == '100', cycle
+        multi_ledger = multicurrency / 'main.bean'
+        multi_source = multi_ledger.read_text(encoding='utf-8')
+        multi_ledger.write_text(multi_source + '\n2025-01-20 * "uncovered responsibility"\n'
+            '  Expenses:Entertainment 1 JPY\n  Liabilities:Card -1 JPY\n    budget: "信用卡"\n', encoding='utf-8')
+        blocked_cycle = document(*cycle_args)
+        assert blocked_cycle['status'] == 'NEEDS_REVIEW' and blocked_cycle['report'] is None, blocked_cycle
+        assert any(row['reason_code'] == 'SETTLEMENT_VALUE_MISSING' for row in blocked_cycle['review_items']), blocked_cycle
+        assert blocked_cycle['native_report']['status'] == 'NEEDS_REVIEW', blocked_cycle
+        multi_ledger.write_text(multi_source + '\n2025-01-20 * "negative inventory"\n'
+            '  Expenses:Entertainment 1 JPY\n  Assets:Yen -1 JPY\n    fund: "信用卡"\n', encoding='utf-8')
+        blocked_cycle = document(*cycle_args)
+        assert blocked_cycle['status'] == 'NEEDS_REVIEW' and blocked_cycle['report'] is None, blocked_cycle
+        assert any(row['reason_code'] == 'H_NEGATIVE_INVENTORY' for row in blocked_cycle['review_items']), blocked_cycle
+        multi_ledger.write_text(multi_source, encoding='utf-8')
         equity_dir = directory / "已有本金权益入账"
         shutil.copytree(source / "simple", equity_dir)
         equity_ledger = equity_dir / "main.bean"
@@ -252,7 +271,7 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         fx_config.write_text(yaml.safe_dump(fx_profile, allow_unicode=True), encoding="utf-8")
         fx_inputs = {p: p.read_bytes() for p in fx_dir.iterdir() if p.is_file()}
         approved_fx = document("--config", fx_config)
-        assert approved_fx["status"] == "CERTIFIED_SCOPED", approved_fx
+        assert approved_fx["status"] == "CERTIFIED_NATIVE_SCOPED", approved_fx
         assert all(p.read_bytes() == body for p, body in fx_inputs.items())
         assert not (fx_dir / ".budget-state").exists()
         # An explicitly excluded H account covers all real commodities,
@@ -266,7 +285,7 @@ def check(executable: Path, *, onedir: bool = False) -> None:
                 f'\n2026-09-05 price {code} 10 CNY\n2026-09-05 * "security income"\n'
                 f'  Assets:Foreign 1 {code}\n  Income:Salary -1 {code}\n', encoding="utf-8")
             securities = document("--config", fx_config)
-            assert securities["status"] == "CERTIFIED_SCOPED", securities
+            assert securities["status"] == "CERTIFIED_NATIVE_SCOPED", securities
             assert fx_config.read_bytes() == original_fx_config
         fx_text = fx_ledger.read_text(encoding="utf-8") + (
             '\n2026-09-06 * "exact yen purchase"\n'
@@ -280,7 +299,7 @@ def check(executable: Path, *, onedir: bool = False) -> None:
                     '  Assets:YenBank 550 JPY\n    fund: "生活费"\n')
         fx_ledger.write_text(fx_text, encoding="utf-8")
         exact_fx = document("--config", fx_config)
-        assert exact_fx["status"] == "CERTIFIED_SCOPED", exact_fx
+        assert exact_fx["status"] == "CERTIFIED_NATIVE_SCOPED", exact_fx
         living = next(row for row in exact_fx["report"]["purpose_progress"]["owners"]
                       if exact_fx["report"]["owner_names"][row["owner_id"]] == "生活费")
         assert living["actual_g"] == "200", exact_fx

@@ -125,7 +125,23 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
             from .multicurrency import has_foreign
             if has_foreign(spending['multicurrency']):
                 result['native_report'] = spending['multicurrency']
-            issues = expense["review_items"]
+            issues = list(expense["review_items"])
+            if native_only and has_foreign(spending['multicurrency']):
+                from .review_queue import audit_review_queue
+                from .actual_snapshot import audit_actual_snapshot
+                issues.extend(audit_review_queue(config, first, last)['items'])
+                # Check booked cash/responsibilities at this exact endpoint.
+                # A consumption-only cycle does not claim month-end completeness
+                # for unbooked obligations, nor publish an actual-spendable cap.
+                if not issues:
+                    actual = audit_actual_snapshot(paths['ledger'], cutover, last,
+                        paths['accounts'], paths['opening'], paths['ownership'], paths['obligations'],
+                        debt_coverage=paths.get('debt_coverage'), debt_settlements=paths.get('debt_settlements'))
+                    issues.extend(row for row in actual['review_items'] if row['reason_code'] != 'EXTERNAL_SCOPE_PENDING')
+                unique = {}
+                for row in issues:
+                    unique.setdefault((row['reason_code'], str(row.get('ref')), row.get('source')), row)
+                issues = list(unique.values())
             if issues and result.get('native_report'):
                 result['native_report'] = {**result['native_report'], 'status': 'NEEDS_REVIEW'}
             if not issues:
