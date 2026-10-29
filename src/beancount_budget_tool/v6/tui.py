@@ -208,6 +208,7 @@ class ReportBrowser:
         self.help = False
         self.selected = 0
         self.offset = 0
+        self.newest_first = True
         self.clear()
 
     @property
@@ -367,6 +368,9 @@ class ReportBrowser:
 
     def transactions(self) -> list[dict]:
         items = self.outcome["report"]["transactions"]["rows"] if self.has_transactions() else []
+        # Replay and exported reports keep their canonical chronological order.
+        # Only this browser's presentation is reversed, including same-day ties.
+        items = list(reversed(items)) if self.newest_first else list(items)
         query = self.query.casefold()
         if not query:
             return items
@@ -385,6 +389,12 @@ class ReportBrowser:
         self.view = "report" if self.view == "transactions" else "transactions"
         self.selected = self.offset = 0
         self.detail, self.help = None, False
+
+    def toggle_order(self):
+        if self.view != "transactions" or self.detail or self.help or self.error:
+            return
+        self.newest_first = not self.newest_first
+        self.selected = self.offset = 0
 
     def report_lines(self) -> list[str]:
         if not self.query:
@@ -430,11 +440,12 @@ HELP = [
     "/：输入关键词筛选；支持中文、账户、用途、原因码和来源路径。空查询清除筛选。",
     "t：切换完整报告文本和待审列表。待审状态只显示未通过项目，不显示局部正式数字。",
     "a：已签发后切换交易来源列表；可按类别、资金用途、责任 ID、摘要或账户筛选。",
+    "o / O：交易来源列表和 h 流水页切换正序／倒序；默认倒序，最新在上。同日顺序也随之反转，逐笔余额仍是该笔交易后的余额。",
     "h：追查完整会计科目内某预算用途的历史，显示每笔增减、交易后余额、原因和原行；可留空预算看全部。",
     "用途透支报错时也可按 h：仅查失败交易前的 H 账户诊断流水；不要求签出整月，不放行失败交易。",
     "d：输入 YYYY-MM-DD，查看该日日末的用途分布；两种查询都要求该日所在月份当前能签出月报。",
     "查询不使用截止日之后的交易／还款，不签发当天最多能花；弹窗是本次静态查询，Esc 返回后再次打开会重算。",
-    "↑↓ 或 j/k：滚动文本；在待审列表选择项目。PgUp/PgDn 或空格翻页，g/G 到首尾。",
+    "↑↓ 或 j/k：滚动文本；在待审列表选择项目。空格／PgDn 下翻整页，b／PgUp 上翻整页，g/G 或 Home/End 到首尾。",
     "Enter：打开所选待审／交易详情；交易显示逐腿原币、分类、用途、责任及原始账本内容。",
     "待审项分行显示：日期与本笔金额、文件名与行号、账户、原因。Enter 查看完整路径；详情可用 ↑↓／PgUp／PgDn 滚动。",
     "e：查看所选待审项的来源和修改指引；请在账本或两份 YAML 中明确配置后重算。",
@@ -527,6 +538,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
                      "e 查看修改指引；分类与用途请在账本写 budget／fund，或修改两份 YAML 后按 r。",
                      "f 查看月末填写指引；在 budgets.yml 对应月份明确配置 completeness_confirmed，不保存内部批准。",
                      "x 导出；t 报告／待审；a 已审交易明细；? 关闭帮助。",
+                     "流水默认倒序（最新在上）；o/O 正倒序切换。空格/PgDn 下页，b/PgUp 上页，g/G 或 Home/End 到首尾。",
                      "未写目标表示不考核；写 null 表示尚未决定，仍待审；0 是真实零目标。",
                      f"用户配置：{browser.user_config}"]
             if browser.runtime is not None:
@@ -568,7 +580,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         subtitle += f"；匹配 {len(items)} 项"
         if browser.view == "transactions":
             count = browser.outcome["report"]["transactions"]["count"] if browser.has_transactions() else 0
-            subtitle += f"；交易总数 {count}"
+            subtitle = f"{_order_label(browser.newest_first)}；" + subtitle + f"；交易总数 {count}"
         if (browser.outcome or {}).get("review_queue", {}).get("preflight_only"):
             subtitle += "；仅当前预检阻断层，其余尚未检查"
         browser.selected = max(0, min(browser.selected, max(0, len(items) - 1)))
@@ -616,8 +628,10 @@ def _draw_browser(stdscr, browser: ReportBrowser):
               "h 科目流水 d 日末分布 w 工资周期 p 区间 m 跳月 n 下一月 f 月末配置 x 导出 r 重算 ? 帮助 q 退出")
     if listing and browser.view == "reviews":
         footer = "↑↓ 选项 Enter 详情 e 修改指引 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
+    elif listing and browser.view == "transactions":
+        footer = "o 正/倒序 空格/PgDn 下页 b/PgUp 上页 g/G 首尾 / 筛选 Enter 详情 t 报告"
     elif browser.detail:
-        footer = "↑↓ 滚动 PgUp/PgDn 翻页 Esc 返回 ? 帮助 q 退出"
+        footer = "空格/PgDn 下页 b/PgUp 上页 g/G 首尾 ↑↓ 滚动 Esc 返回"
     if browser.error:
         footer = ("h 报错前流水 " if browser.error.diagnostic else "") + "[ ] 上/下月 m 跳月 r 重算 ↑↓ 滚动 ? 帮助 q 退出"
     if getattr(browser, "watch", False):
@@ -716,7 +730,11 @@ def _read_field(stdscr, title: str, context: list[str], prompt: str,
             pass
 
 
-def _message(stdscr, title: str, lines: list[str]):
+def _order_label(newest_first: bool) -> str:
+    return "倒序（最新在上）" if newest_first else "正序（最早在上）"
+
+
+def _message(stdscr, title: str, lines: list[str], *, reorder: Callable | None = None):
     """A read-only notice; never present an input box that discards text."""
     offset = 0
     while True:
@@ -729,15 +747,46 @@ def _message(stdscr, title: str, lines: list[str]):
         if height >= 3:
             for row, line in enumerate(wrapped[offset:offset + page], 1):
                 _put(stdscr, row, line)
-        _put(stdscr, max(0, height - 1), "PgUp/PgDn 查看全文；Enter 或 Esc 返回")
+        footer = ("o 正/倒序 " if reorder else "") + "空格/PgDn 下页 b/PgUp 上页 g/G 首尾 Enter 或 Esc 返回"
+        _put(stdscr, max(0, height - 1), footer)
         stdscr.refresh()
         key = _read_key(stdscr)
         if key in ("\n", "\r", curses.KEY_ENTER, "\x1b"):
             return
-        if key in (curses.KEY_PPAGE, curses.KEY_UP):
-            offset -= page if key == curses.KEY_PPAGE else 1
-        elif key in (curses.KEY_NPAGE, curses.KEY_DOWN):
-            offset += page if key == curses.KEY_NPAGE else 1
+        if reorder and key in ("o", "O"):
+            title, lines = reorder()
+            offset = 0
+        elif key in (curses.KEY_PPAGE, "b"):
+            offset -= page
+        elif key in (curses.KEY_NPAGE, " "):
+            offset += page
+        elif key in (curses.KEY_UP, "k"):
+            offset -= 1
+        elif key in (curses.KEY_DOWN, "j"):
+            offset += 1
+        elif key in (curses.KEY_HOME, "g"):
+            offset = 0
+        elif key in (curses.KEY_END, "G"):
+            offset = len(wrapped)
+
+
+def _history_message(stdscr, browser, title: str, result: dict, renderer: Callable):
+    """Reorder complete events, preserving each event's source and audited balance."""
+    def display():
+        key = "history" if "history" in result else "report"
+        report = result[key]
+        newest_first = getattr(browser, "newest_first", True)
+        view = {**result, key: {**report, "events": list(reversed(report["events"]))
+                              if newest_first else list(report["events"])}}
+        return f"{title} · {_order_label(newest_first)}", renderer(view).splitlines()
+
+    def reorder():
+        browser.newest_first = not getattr(browser, "newest_first", True)
+        browser.selected = browser.offset = 0
+        return display()
+
+    label, lines = display()
+    _message(stdscr, label, lines, reorder=reorder)
 
 
 def _edit_review(stdscr, browser: ReportBrowser):
@@ -909,7 +958,10 @@ def _inspect_account(stdscr, browser: ReportBrowser, *, history=False):
         if budget is None:
             return
         result = query(config, day.strip(), account=value, purpose=budget.strip() or None)
-        _message(stdscr, '科目用途历史', render_text(result).splitlines())
+        if result['report'] is not None:
+            _history_message(stdscr, browser, '科目用途历史', result, render_text)
+        else:
+            _message(stdscr, '科目用途历史', render_text(result).splitlines())
     except (BudgetError, OSError, UnicodeError) as exc:
         _message(stdscr, '未生成用途查询', [str(exc)])
 
@@ -931,7 +983,7 @@ def _inspect_failed_history(stdscr, browser):
         if purpose is None:
             return
         result = query(config, month, error.source, purpose=purpose.strip() or None, anchor=error.diagnostic)
-        _message(stdscr, '报错前用途流水（诊断，未签发）', render_text(result).splitlines())
+        _history_message(stdscr, browser, '报错前用途流水（诊断，未签发）', result, render_text)
     except (BudgetError, OSError, UnicodeError) as exc:
         _message(stdscr, '未生成诊断流水', [str(exc)])
 
@@ -1053,6 +1105,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             browser.help, browser.offset = not browser.help, 0
         elif key == "a":
             browser.toggle_transactions()
+        elif key in ("o", "O"):
+            browser.toggle_order()
         elif key == "e":
             _edit_review(stdscr, browser)
         elif key == "x":
@@ -1070,17 +1124,17 @@ def _report_browser(stdscr, browser: ReportBrowser):
             else:
                 browser.open_detail()
         elif key in (curses.KEY_UP, "k", curses.KEY_DOWN, "j", curses.KEY_PPAGE,
-                     curses.KEY_NPAGE, " ", curses.KEY_HOME, "g", curses.KEY_END, "G"):
+                     curses.KEY_NPAGE, " ", "b", curses.KEY_HOME, "g", curses.KEY_END, "G"):
             delta = -1 if key in (curses.KEY_UP, "k") else 1
-            if key == curses.KEY_PPAGE:
+            if key in (curses.KEY_PPAGE, "b"):
                 delta = -page
             elif key in (curses.KEY_NPAGE, " "):
                 delta = page
             attribute = "selected" if listing else "offset"
             value = getattr(browser, attribute) + delta
-            if listing and browser.view == "reviews" and key in (curses.KEY_PPAGE, curses.KEY_NPAGE, " "):
+            if listing and browser.view == "reviews" and key in (curses.KEY_PPAGE, "b", curses.KEY_NPAGE, " "):
                 value = _review_page_target(browser, page, stdscr.getmaxyx()[1] - 1,
-                                            key != curses.KEY_PPAGE)
+                                            key not in (curses.KEY_PPAGE, "b"))
             if key in (curses.KEY_HOME, "g"):
                 value = 0
             elif key in (curses.KEY_END, "G"):
