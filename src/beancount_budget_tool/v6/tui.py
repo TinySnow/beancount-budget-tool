@@ -137,7 +137,12 @@ def _review_location(source: str | None) -> str:
     # A Windows drive colon is part of the path, not a line number.
     if not separator or not line.isdigit():
         path, line = source, ""
-    name = re.split(r"[\\/]", path)[-1]
+    parts = re.split(r"[\\/]", path)
+    name = parts[-1]
+    # Import files may contain transactions dated outside their folder month.
+    # Keep a YYYY/MM suffix visible so duplicate basenames are not misleading.
+    if len(parts) >= 3 and re.fullmatch(r"\d{4}", parts[-3]) and re.fullmatch(r"0[1-9]|1[0-2]", parts[-2]):
+        name = "/".join(parts[-3:])
     return f"位置：第 {line} 行 · {name}" if line else f"位置：{name}"
 
 

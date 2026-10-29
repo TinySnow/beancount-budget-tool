@@ -86,7 +86,7 @@ class ReviewLayoutTests(unittest.TestCase):
         _draw_browser(screen, browser)
         text = self.body(screen)
         self.assertIn("2023-07-29  本笔 -4.5 CNY", text)
-        self.assertIn("位置：第 123 行 · 支付宝.bean", text)
+        self.assertIn("位置：第 123 行 · 2023/07/支付宝.bean", text)
         self.assertIn("账户真实余额为 -3.02 CNY", text)
         self.assertNotIn("-9/2", text)
         self.assertNotIn("-151/50", text)
@@ -124,6 +124,16 @@ class ReviewLayoutTests(unittest.TestCase):
         self.assertEqual(_review_location("/ledger/month.yaml:8"), "位置：第 8 行 · month.yaml")
         self.assertEqual(_review_location(None), "位置：未提供")
 
+    def test_source_label_keeps_actual_month_folder_even_when_transaction_month_differs(self):
+        for source in ('/ledger/src/transactions/2024/11/jd.bean:11',
+                       r'C:\账本\src\transactions\2024\11\jd.bean:11'):
+            self.assertEqual(_review_location(source), '位置：第 11 行 · 2024/11/jd.bean')
+        item = pending()['review_items'][0]
+        item = {**item, 'date': '2024-12-20', 'source': '/ledger/src/transactions/2024/11/jd.bean:11'}
+        lines, _ = _review_layout([item], 0, 79, False)
+        self.assertIn('2024-12-20', '\n'.join(lines))
+        self.assertIn('2024/11/jd.bean', '\n'.join(lines))
+
     def test_multiline_error_keeps_source_position_and_amounts_readable(self):
         error = BudgetError("H_OWNER_NEGATIVE", "主动资产用途划拨不能透支交易前余额\n"
                             "账户：Assets:Bank-银行:中国:工商银行\n"
@@ -140,7 +150,7 @@ class ReviewLayoutTests(unittest.TestCase):
                 _draw_browser(screen, browser)
                 body = self.body(screen)
                 text = body.replace("\n", "")
-                self.assertIn("位置：第 51 行 · icbc.bean", text)
+                self.assertIn("位置：第 51 行 · 2023/10/icbc.bean", text)
                 self.assertLess(text.index("第 51 行"), text.index("账户："))
                 self.assertIn("资金用途：额外储蓄", text)
                 self.assertIn("划拨前余额：0 CNY（可划出 0 CNY）", text)
