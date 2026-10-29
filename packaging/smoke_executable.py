@@ -214,6 +214,20 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert approved_fx["status"] == "CERTIFIED_SCOPED", approved_fx
         assert all(p.read_bytes() == body for p, body in fx_inputs.items())
         assert not (fx_dir / ".budget-state").exists()
+        # An explicitly excluded H account covers all real commodities,
+        # including subsequently added security codes, with no code list.
+        fx_profile.pop("accounts")
+        fx_profile["account_groups"]["H"] = {"payable": ["Assets:Cash"], "excluded": ["Assets:Foreign"]}
+        fx_config.write_text(yaml.safe_dump(fx_profile, allow_unicode=True), encoding="utf-8")
+        original_fx_config = fx_config.read_bytes()
+        for code in ("SEC_000001", "SEC_000002"):
+            fx_ledger.write_text(fx_ledger.read_text(encoding="utf-8") +
+                f'\n2026-09-05 price {code} 10 CNY\n2026-09-05 * "security income"\n'
+                f'  Assets:Foreign 1 {code}\n  Income:Salary -1 {code}\n', encoding="utf-8")
+            securities = document("--config", fx_config)
+            assert securities["status"] == "CERTIFIED_SCOPED", securities
+            assert fx_config.read_bytes() == original_fx_config
+        assert not (fx_dir / ".budget-state").exists()
         # Same source, portable path spelling, same complete audited report.
         profile = yaml.safe_load(config.read_text(encoding="utf-8"))
         profile["ledger"], profile["budgets"] = ".\\main.bean", ".\\budgets.yml"

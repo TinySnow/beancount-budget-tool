@@ -73,9 +73,13 @@ def _grouped_accounts(doc: dict, config: Path, commodities: dict[str, set[str]])
             require_yaml(type(name) is str and bool(name) and name == name.strip(),
                          "SIMPLE_ACCOUNT_INVALID", "账户名须为非空字符串", config, (*keys, index))
             require_yaml(name not in accounts, "SIMPLE_ACCOUNT_DUPLICATE", "账户不能重复列入多个组", config, (*keys, index))
-            # A group decides only the report currency. Do not invent a CNY
-            # posting for an account whose actual inventory is JPY-only.
-            payment = {doc["report_currency"]: scope} if doc["report_currency"] in commodities.get(name, set()) else {}
+            actual = commodities.get(name, set())
+            # Excluding an entire H account covers its actual holdings,
+            # including new securities, without guessing from commodity names.
+            # A payable group approves only existing report-currency cash.
+            payment = ({commodity: "excluded" for commodity in sorted(actual)}
+                       if semantics == "H" and scope == "excluded" else
+                       {doc["report_currency"]: scope} if doc["report_currency"] in actual else {})
             accounts[name] = {"semantics": semantics, "payment_scope": payment}
             locations[name] = (*keys, index)
     for name, settings in doc.get("accounts", {}).items():

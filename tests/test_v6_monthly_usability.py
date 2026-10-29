@@ -156,10 +156,13 @@ class MonthlyUsabilityTests(unittest.TestCase):
                 self.profile.pop('accounts', None)
                 self.save()
                 result = audit_simple(self.config)
-                self.assertEqual(result['status'], 'NEEDS_REVIEW')
-                self.assertIsNone(result['report'])
-                self.assertTrue(any('Assets:Foreign / JPY' in item['detail']
-                                    for item in result['review_items']), result['review_items'])
+                if group == 'payable':
+                    self.assertEqual(result['status'], 'NEEDS_REVIEW')
+                    self.assertIsNone(result['report'])
+                    self.assertTrue(any('Assets:Foreign / JPY' in item['detail']
+                                        for item in result['review_items']), result['review_items'])
+                else:
+                    self.assertEqual(result['status'], 'CERTIFIED_SCOPED', result['review_items'])
                 self.profile['accounts'] = {'Assets:Foreign': {'payment_scope': {'JPY': 'excluded'}}}
                 self.save()
                 before = {p: p.read_bytes() for p in (self.config, self.budgets, self.ledger)}
@@ -200,6 +203,86 @@ class MonthlyUsabilityTests(unittest.TestCase):
         with self.assertRaises(BudgetError) as caught:
             audit_simple(self.config)
         self.assertEqual(caught.exception.code, 'SETUP_ACCOUNT_INVALID')
+
+    def securities(self):
+        self.profile['account_groups']['H']['excluded'] = ['Assets:Broker']
+        self.ledger.write_text(self.source + '2024-01-01 open Assets:Broker\n'
+            '2024-01-08 * "fund broker"\n  Assets:Cash -100 CNY\n    fund: "储蓄"\n'
+            '  Assets:Broker 100 CNY\n    fund: "储蓄"\n'
+            '2024-01-09 * "buy two securities"\n  Assets:Broker -30 CNY\n    fund: "储蓄"\n'
+            '  Assets:Broker 1 SEC_000001 {10 CNY}\n    fund: "储蓄"\n'
+            '  Assets:Broker 2 SEC_000002 {10 CNY}\n    fund: "储蓄"\n', encoding='utf-8')
+        self.save()
+
+    def broker_inventory(self):
+        from datetime import date
+        from beancount_budget_tool.v6.accounts import audit_accounts
+        from beancount_budget_tool.v6.simple_config import build_runtime
+        with closing(build_runtime(self.config)) as runtime:
+            self.assertIsNone(runtime.pending)
+            return audit_accounts(self.ledger, date(2024, 1, 1), runtime.config.parent / 'accounts.yaml')
+
+    def test_excluded_security_account_covers_all_codes_and_new_holdings_without_config_edits(self):
+        self.securities()
+        original = self.config.read_bytes()
+        inventory = self.broker_inventory()
+        row = next(row for row in inventory['accounts'] if row['account'] == 'Assets:Broker')
+        self.assertEqual(row['payment_scope'], {'CNY': 'excluded', 'SEC_000001': 'excluded', 'SEC_000002': 'excluded'})
+        self.assertEqual(inventory['pending_payment_scope'], [])
+        self.ledger.write_text(self.ledger.read_text(encoding='utf-8') +
+            '2024-02-01 * "new code"\n  Assets:Broker -10 CNY\n    fund: "储蓄"\n'
+            '  Assets:Broker 1 SEC_000003 {10 CNY}\n    fund: "储蓄"\n', encoding='utf-8')
+        # The January inventory and its scope still exclude future holdings.
+        from beancount_budget_tool.v6.simple_config import build_runtime
+        with closing(build_runtime(self.config, '2024-01')) as runtime:
+            rows = yaml.safe_load((runtime.config.parent/'accounts.yaml').read_text(encoding='utf-8'))['accounts']
+            self.assertNotIn('SEC_000003', next(row for row in rows if row['account']=='Assets:Broker')['payment_scope'])
+        with closing(build_runtime(self.config, '2024-02')) as runtime:
+            rows = yaml.safe_load((runtime.config.parent/'accounts.yaml').read_text(encoding='utf-8'))['accounts']
+            self.assertEqual(next(row for row in rows if row['account']=='Assets:Broker')['payment_scope']['SEC_000003'], 'excluded')
+        self.assertEqual(self.config.read_bytes(), original)
+
+    def test_excluded_security_scope_keeps_explicit_cash_exception_and_rejects_unknown_code(self):
+        self.securities()
+        self.profile['accounts'] = {'Assets:Broker': {'payment_scope': {'CNY': 'payable'}}}
+        self.save()
+        row = next(row for row in self.broker_inventory()['accounts'] if row['account'] == 'Assets:Broker')
+        self.assertEqual(row['payment_scope'], {'CNY': 'payable', 'SEC_000001': 'excluded', 'SEC_000002': 'excluded'})
+        self.profile['accounts']['Assets:Broker']['payment_scope']['SEC_UNKNOWN'] = 'excluded'
+        self.save()
+        with self.assertRaises(BudgetError) as caught:
+            self.broker_inventory()
+        self.assertEqual(caught.exception.code, 'SETUP_ACCOUNT_INVALID')
+
+    def test_excluded_securities_still_reject_negative_lot_inventory(self):
+        self.securities()
+        source = self.ledger.read_text(encoding='utf-8')
+        for transaction, code in [
+            ('2024-01-10 * "invalid short cost lot"\n  Assets:Broker -2 SEC_000001 {10 CNY}\n'
+             '  Assets:Broker 20 CNY\n', 'LOADER_ERROR'),
+            ('2024-01-10 * "invalid short inventory"\n  Assets:Broker -1 SEC_000003\n'
+             '  Income:Salary 1 SEC_000003\n', 'H_NEGATIVE_INVENTORY')]:
+            with self.subTest(code=code):
+                self.ledger.write_text(source + transaction, encoding='utf-8')
+                with self.assertRaises(BudgetError) as caught:
+                    self.broker_inventory()
+                self.assertEqual(caught.exception.code, code)
+
+    def test_securities_are_not_approved_by_payable_group_or_by_k_semantics(self):
+        from beancount_budget_tool.v6.simple_config import build_runtime
+        self.securities()
+        self.profile['account_groups']['H']['excluded'] = []
+        self.profile['account_groups']['H']['payable'].append('Assets:Broker')
+        self.save()
+        with closing(build_runtime(self.config)) as runtime:
+            self.assertTrue(any('SEC_000001' in row['detail'] for row in runtime.pending['review_items']))
+        self.profile['account_groups']['H']['payable'].remove('Assets:Broker')
+        self.profile['account_groups']['K'].append('Assets:Broker')
+        self.profile['accounts'] = {'Assets:Broker': {'payment_scope': {'SEC_000001': 'excluded', 'SEC_000002': 'excluded'}}}
+        self.save()
+        with self.assertRaises(BudgetError) as caught:
+            self.broker_inventory()
+        self.assertEqual(caught.exception.code, 'K_SHAPE_INVALID')
 
     def test_group_opening_exception_and_unknown_account_stays_pending(self):
         self.profile['accounts'] = {'Assets:Cash': {'opening': {}}}
