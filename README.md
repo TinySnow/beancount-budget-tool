@@ -28,6 +28,12 @@ TUI：`r` 重算，`m` 跳月，`n` 下一月，`Enter` 看完整来源，`?` �
 
 消费上限可按实际发薪周期：config.yml 设置 `expense_budget_basis: salary_cycle`，budgets.yml 的 `salary_cycles` 保存日期和额度。账务仍逐月核对，最多能花取当前周期剩余额度与已审可支付资金的较小值，额度不在月初重置。TUI `w` 直接选保存的周期，CLI 可用 `report --config config.yml --cycle current`。
 
+
+> **`bgbudget/`**：本仓库内的单引擎预算工具（轻量视图与 v6 已审月报逐行一致；完整视图实现 REQUIREMENTS 语义）。
+> 推送本仓 `codex/v6-implementation` 或 `dpsk/v6` 且改动 `bgbudget/**` 时，GitHub Actions（**bgbudget executables**）
+> 自动构建 macOS / Linux / Windows 单文件可执行程序。Windows 从零到一与验证流程见
+> **[bgbudget/docs/WINDOWS.md](bgbudget/docs/WINDOWS.md)**，用法见 **[bgbudget/README.md](bgbudget/README.md)**。
+
 ## 哪些文件不能删
 
 - 目录版 exe 旁边的 `_internal` 是运行依赖，必须和 exe 一起保留。
