@@ -44,6 +44,25 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             return json.loads(run(*args, "--format", "json")[0])
 
         run("--version")
+        multicurrency = directory / "多币种收支"
+        shutil.copytree(source / "multicurrency", multicurrency)
+        multi_config = multicurrency / "config.yml"
+        multi = document("--config", multi_config, "--transactions")
+        assert multi["status"] == "CERTIFIED_NATIVE_SCOPED", multi
+        view = multi["report"]["multicurrency"]
+        assert view["native_expenses"][0]["currency"] == "JPY", view
+        assert view["native_expenses"][0]["net"] == "550", view
+        assert 'report_value' not in view["native_expenses"][0], view
+        assert view["native_income"][0]["net"] == "25", view
+        assert 'report_value' not in view["native_income"][0], view
+        assert multi["report"]["actual_spendable"]["actual_spendable"] == "1000", multi
+        assert multi["report"]["max_spendable"]["max_spendable"] == "100", multi
+        multi_period = document("report", "--config", multi_config, "--from", "2025-01", "--through", "2025-02")
+        assert multi_period["status"] == "CERTIFIED_NATIVE_SCOPED", multi_period
+        native = multi_period["report"]["multicurrency"]["native_expenses"]
+        assert {(row["currency"], row["net"]) for row in native} == {("JPY", "550"), ("CNY", "5")}, native
+        native_text = run("--config", multi_config, "--format", "text")[0]
+        assert "550" in native_text and "JPY" in native_text and '缺价' not in native_text, native_text
         equity_dir = directory / "已有本金权益入账"
         shutil.copytree(source / "simple", equity_dir)
         equity_ledger = equity_dir / "main.bean"
@@ -278,8 +297,10 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             '2026-09-09 * "unvalued yen card expense"\n  Expenses:Food 550 JPY\n'
             '  Liabilities:YenCard -550 JPY\n    budget: "生活费"\n'), encoding="utf-8")
         unvalued = document("--config", fx_config)
-        assert unvalued["status"] == "NEEDS_REVIEW" and unvalued["report"] is None, unvalued
-        assert any(row["reason_code"] == "VALUATION_MISSING" for row in unvalued["review_items"]), unvalued
+        assert unvalued["status"] == "CERTIFIED_NATIVE_SCOPED" and unvalued["report"] is not None, unvalued
+        assert next(row for row in unvalued['report']['multicurrency']['native_expenses']
+                    if row['currency'] == 'JPY')['net'] == '550', unvalued
+        assert not any(row["reason_code"] == "VALUATION_MISSING" for row in unvalued["review_items"]), unvalued
         assert not any(row["reason_code"] in ("UNSUPPORTED", "NAMED_H_EVENT_UNSUPPORTED")
                        for row in unvalued["review_items"]), unvalued
         assert fx_config.read_bytes() == original_fx_config

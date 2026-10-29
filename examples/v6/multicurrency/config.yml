@@ -1,0 +1,22 @@
+schema: 1
+ledger: main.bean
+budgets: budgets.yml
+cutover: '2025-01-01'
+month: '2025-01'
+report_currency: CNY
+liability_budget_mode: purpose
+defaults:
+  income_purpose: 自由资金
+  expense_purpose: 生活费
+  expense_category: 生活开销
+account_groups:
+  H:
+    payable: [Assets:Cash]
+    excluded: [Assets:Yen, Assets:Dollars]
+accounts:
+  Assets:Cash:
+    opening:
+      CNY: {生活费: '1000'}
+  Assets:Yen:
+    opening:
+      JPY: {信用卡: '550'}

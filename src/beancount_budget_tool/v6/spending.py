@@ -19,12 +19,14 @@ from .classification import _key, audit_classification
 from .facts import FactIndex
 from .valuation import audit_classification_valuation
 from .review_diagnostics import posting_sources, review_item
+from .multicurrency import spending_view
 
 
 def _audit_monthly_spending(root: Path, cutover: date, month: str,
                             classifications: Path, report_currency: str,
                             benefit_groups: Path | None = None,
-                            budget_values: list[dict] | None = None, *, include_evidence: bool = False) -> dict:
+                            budget_values: list[dict] | None = None, *, include_evidence: bool = False,
+                            native_only: bool = False) -> dict:
     """Certify each monthly booked budget projection only when its inputs close.
 
     This is not a cash or plan report. Income-supplement classification does
@@ -40,19 +42,28 @@ def _audit_monthly_spending(root: Path, cutover: date, month: str,
     require(first >= cutover, "MONTH_INVALID", "报表月份不得早于 v6 cutover", month)
     last = date(first.year, first.month, monthrange(first.year, first.month)[1])
     return _audit_spending_window(root, cutover, first, last, classifications, report_currency,
-                                  benefit_groups, budget_values, month=month, include_evidence=include_evidence)
+                                  benefit_groups, budget_values, month=month, include_evidence=include_evidence,
+                                  native_only=native_only)
 
 
 def _audit_spending_window(root: Path, cutover: date, first: date, last: date,
                             classifications: Path, report_currency: str,
                             benefit_groups: Path | None = None,
                             budget_values: list[dict] | None = None, *, month: str | None = None,
-                            include_evidence: bool = False) -> dict:
+                            include_evidence: bool = False, native_only: bool = False) -> dict:
     """Project booked flows inside inclusive dates, retaining earlier source context."""
     require(cutover <= first <= last, "SPENDING_RANGE_INVALID", "费用区间须不早于 cutover，且起止有序")
     classification = audit_classification(root, cutover, classifications)
-    valuation = audit_classification_valuation(root, cutover, classifications,
-                                              report_currency)
+    if native_only:
+        valuation = {'missing_historical_value': [], 'valued': [
+            {'ref': row['ref'], 'account': row['account'], 'report_currency': report_currency,
+             'proof': 'native_report_currency',
+             'historical_report_value': exact_text(sum((Fraction(part['signed_units']) for part in row['slices']), Fraction(0))),
+             'slices': [{'id': part['id'], 'category_id': part['category_id'],
+                         'signed_report_value': part['signed_units']} for part in row['slices']]}
+            for row in classification['classifications'] if row['commodity'] == report_currency]}
+    else:
+        valuation = audit_classification_valuation(root, cutover, classifications, report_currency)
     replacement = {_key(row["ref"]): row for row in (budget_values or [])}
     missing_keys = {_key(row["ref"]) for row in valuation["missing_historical_value"]}
     require(set(replacement) <= missing_keys and len(replacement) == len(budget_values or []),
@@ -76,15 +87,16 @@ def _audit_spending_window(root: Path, cutover: date, first: date, last: date,
                             ("income_supplement", fin.options["name_income"])):
         role_claims = [row for row in classification["classifications"]
                        if row["account"].split(":", 1)[0] == root_name and
-                       in_range(row)]
+                       in_range(row) and (not native_only or row['commodity'] == report_currency)]
         role_missing = [row for row in missing_classification
                         if row["account"].split(":", 1)[0] == root_name and
                         in_range(row)]
         role_unvalued = [row for row in missing_value
                          if row["account"].split(":", 1)[0] == root_name and
+                         not native_only and
                          in_range(row) and
                          (role != "net_expense" or _key(row["ref"]) not in replacement)]
-        historical_unvalued_count = sum(
+        historical_unvalued_count = 0 if native_only else sum(
             row["account"].split(":", 1)[0] == root_name and
             in_range(row) for row in missing_value)
         role_benefits = [row for row in pending_benefit
@@ -130,6 +142,8 @@ def _audit_spending_window(root: Path, cutover: date, first: date, last: date,
                     gross_returned[category] -= value
 
         for row in valuation["valued"]:
+            if native_only:
+                continue
             if (row["account"].split(":", 1)[0] != root_name or
                     not in_range(row)):
                 continue
@@ -145,6 +159,12 @@ def _audit_spending_window(root: Path, cutover: date, first: date, last: date,
                 for part in row["slices"]:
                     if part["category_id"] != "-":
                         add_value(part["category_id"], Fraction(part["signed_report_value"]))
+        if native_only:
+            for row in role_claims:
+                for part in row['slices']:
+                    if part['category_id'] != '-':
+                        amount = Fraction(part['signed_units'])
+                        add_value(part['category_id'], amount if role == 'net_expense' else -amount)
         blocked_direct = set()
         for row in role_unvalued:
             blocked_direct.update(part["category_id"] for part in row["native_slices"]
@@ -210,10 +230,12 @@ def _audit_spending_window(root: Path, cutover: date, first: date, last: date,
         metrics[role] = result
     evidence = ({"_transaction_evidence": {
         "classifications": [row for row in classification["classifications"] if in_range(row)],
-        "valuations": [row for row in valuation["valued"] if in_range(row)],
+        "valuations": [row for row in valuation["valued"] if in_range(row) and
+                       (not native_only or row['proof'] == 'native_report_currency')],
         "benefits": [row for row in benefits["proved"] if in_range(row)],
     }} if include_evidence else {})
-    return {**evidence, "mode": "v6_date_spending_report" if month is None else
+    native_view = spending_view(fin, first, last, classification, report_currency, names) if native_only else None
+    return {**evidence, 'multicurrency': native_view, "mode": "v6_date_spending_report" if month is None else
                     "v6_monthly_budget_comparison_spending" if budget_values is not None
                     else "v6_monthly_spending_report", **({"month": month} if month is not None else
                           {"from": first.isoformat(), "through": last.isoformat()}),

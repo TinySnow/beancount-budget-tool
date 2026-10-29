@@ -124,7 +124,8 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
                                   accounts: Path | None = None,
                                   ownership: Path | None = None,
                                   obligations: Path | None = None,
-                                  h_fx: Path | None = None, *, include_evidence: bool = False) -> dict:
+                                  h_fx: Path | None = None, *, include_evidence: bool = False,
+                                  native_only: bool = False) -> dict:
     """Compare certified direct/subtree expense with targets, per category.
 
     A category with a booked expense slice is active even if refunds make its
@@ -137,10 +138,11 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
     settlement = (audit_settlement_budget_values(root, cutover, month, classifications,
                                                  report_currency, accounts, ownership,
                                                  obligations, h_fx)
-                  if all(settlement_paths) else None)
+                  if all(settlement_paths) and not native_only else None)
     spending = _audit_monthly_spending(root, cutover, month, classifications,
                                        report_currency, benefit_groups,
-                                       settlement["values"] if settlement else None, include_evidence=include_evidence)
+                                       settlement["values"] if settlement else None, include_evidence=include_evidence,
+                                       native_only=native_only)
     category_doc = load_yaml(classifications)
     expanded = load_expense_targets(plans, month, report_currency,
                                     category_doc["categories"])
@@ -241,14 +243,15 @@ def audit_monthly_expense_targets(root: Path, cutover: date, month: str,
         detail=f"本月消费类别「{names[ident]}」缺少目标；填写该类别目标或覆盖它的父类别子树目标，历史目标无法确认时可明确写 not_assessed。")
         for ident in sorted(missing))
     evidence = ({"_transaction_evidence": spending["_transaction_evidence"]} if include_evidence else {})
-    return {**evidence, "mode": "v6_monthly_expense_target_report", "month": month,
+    return {**evidence, "multicurrency": spending["multicurrency"], "mode": "v6_monthly_expense_target_report", "month": month,
             "cutover": cutover.isoformat(), "ledger_snapshot": spending["ledger_snapshot"],
             "plan_sha256": expanded["plan_sha256"], "report_currency": report_currency,
             "spendable_cap_category_id": expanded["spendable_cap_category_id"],
             "status": "NEEDS_REVIEW" if reasons else "CERTIFIED", "reason_codes": reasons,
             "review_items": review_items,
             "missing_target_ids": sorted(missing), "categories": details,
-            "comparison_basis": "actual_settlement_cost_where_proved" if settlement else
+            "comparison_basis": "native_report_currency_only" if native_only else
+                                "actual_settlement_cost_where_proved" if settlement else
                                 "historical_report_value",
             "foreign_settlement_costs": settlement["values"] if settlement else [],
             "note": ("外币消费保留原币；已核实的人民币还款成本只用于预算目标差额，"

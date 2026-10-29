@@ -103,6 +103,7 @@ jobs:
           Copy-Item packaging/THIRD-PARTY-NOTICES.md dist/windows-x64/
           New-Item -ItemType Directory -Path dist/windows-x64/example
           Copy-Item examples/v6/simple dist/windows-x64/example/simple -Recurse
+          Copy-Item examples/v6/multicurrency dist/windows-x64/example/multicurrency -Recurse
           git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64/BUILD-COMMIT.txt
           New-Item -ItemType Directory -Path dist/windows-x64-folder
           Copy-Item dist/beancount-budget-tool-portable/* dist/windows-x64-folder/ -Recurse
@@ -111,6 +112,7 @@ jobs:
           Copy-Item packaging/THIRD-PARTY-NOTICES.md dist/windows-x64-folder/
           New-Item -ItemType Directory -Path dist/windows-x64-folder/example
           Copy-Item examples/v6/simple dist/windows-x64-folder/example/simple -Recurse
+          Copy-Item examples/v6/multicurrency dist/windows-x64-folder/example/multicurrency -Recurse
           git rev-parse HEAD | Out-File -Encoding utf8 dist/windows-x64-folder/BUILD-COMMIT.txt
           foreach ($PackageDir in @('dist/windows-x64', 'dist/windows-x64-folder')) {
             Copy-Item QUICKSTART.md,LEGACY-WORKFLOWS.md $PackageDir/

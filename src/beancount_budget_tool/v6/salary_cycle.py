@@ -56,7 +56,7 @@ def select_config(configs: list[Path], payday: str, next_payday: str) -> Path:
 
 def audit_salary_cycle(config: Path, payday: str, next_payday: str,
                        budget: str | None = None, category: str | None = None, *,
-                       expected_identity: tuple | None = None) -> dict:
+                       expected_identity: tuple | None = None, native_only: bool = False) -> dict:
     first, last = cycle_bounds(payday, next_payday, budget)
     from .simple_config import is_simple, build_runtime
     if is_simple(load_yaml(config)):
@@ -66,7 +66,8 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
                 return {"mode": "v6_salary_cycle_spending", "from": first.isoformat(), "through": last.isoformat(),
                         "next_payday": next_payday, "status": "NEEDS_REVIEW", "report": None,
                         "review_items": runtime.pending["review_items"]}
-            result = audit_salary_cycle(runtime.config, payday, next_payday, budget, category, expected_identity=expected_identity)
+            result = audit_salary_cycle(runtime.config, payday, next_payday, budget, category,
+                                         expected_identity=expected_identity, native_only=True)
             runtime.check()
             return runtime.public_sources(result)
         finally:
@@ -103,24 +104,30 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
             facts = FactIndex(fin)
             sources = {facts.for_posting(p).as_key(): (e, p) for e in fin.entries
                        if isinstance(e, data.Transaction) for p in e.postings}
-            valuation = audit_classification_valuation(paths["ledger"], cutover, paths["classifications"],
-                                                        document["report_currency"])
+            valuation = ({'missing_historical_value': []} if native_only else
+                         audit_classification_valuation(paths["ledger"], cutover, paths["classifications"],
+                                                        document["report_currency"]))
             missing_months = {row["month"] for row in valuation["missing_historical_value"]
                               if row["account"].split(":", 1)[0] == fin.options["name_expenses"] and
                               first <= sources[_key(row["ref"])][0].date <= last}
             values = []
             # All settlement evidence is bounded by the cycle's last day,
             # including settlements in a later calendar month of this cycle.
-            for month in sorted(missing_months):
+            for month in sorted(missing_months) if not native_only else []:
                 values.extend(audit_settlement_budget_values(
                     paths["ledger"], cutover, month, paths["classifications"], document["report_currency"],
                     paths["accounts"], paths["ownership"], paths["obligations"], paths["h_fx"],
                     through=last)["values"])
             spending = _audit_spending_window(paths["ledger"], cutover, first, last,
                 paths["classifications"], document["report_currency"], paths.get("benefit_groups"),
-                values, include_evidence=True)
+                values, include_evidence=True, native_only=native_only)
             expense = spending["metrics"]["net_expense"]
+            from .multicurrency import has_foreign
+            if has_foreign(spending['multicurrency']):
+                result['native_report'] = spending['multicurrency']
             issues = expense["review_items"]
+            if issues and result.get('native_report'):
+                result['native_report'] = {**result['native_report'], 'status': 'NEEDS_REVIEW'}
             if not issues:
                 selected = next(row for row in expense["categories"] if row["id"] == ident)
                 target = Fraction(budget) if budget is not None else None
@@ -141,7 +148,8 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
                         "classification": claim["slices"],
                         "valuation": priced.get(_key(claim["ref"])),
                         "settlement_budget_value": comparison})
-                result.update(status="CERTIFIED_SCOPED", report={
+                result.update(status="CERTIFIED_NATIVE_SCOPED" if native_only and has_foreign(spending['multicurrency']) else "CERTIFIED_SCOPED", report={
+                    "multicurrency": spending["multicurrency"],
                     "report_currency": document["report_currency"], "ledger_snapshot": fin.digest,
                     "categories": expense["categories"], "native_totals": expense["native_totals"],
                     "total_net_expense": expense["report_total"], "events": events,
@@ -156,6 +164,8 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
                                   for row in annotate_source_items(issues)]
         if any(row["reason_kind"] == "implementation_limit" for row in result["review_items"]):
             result["status"] = "IMPLEMENTATION_BLOCKED"
+        if result['report'] is not None:
+            result.pop('native_report', None)
     from hashlib import sha256
     require(all(input_is_file(path) and sha256(input_bytes(path)).hexdigest() == digest
                 for path, digest in watched.items()), "INPUT_CHANGED", "周期查询期间配置或审阅资料发生变化")
@@ -171,7 +181,9 @@ def render_text(outcome: dict) -> str:
              boundary + "本报告只统计周期消费及额度差。"]
     if outcome["report"] is None:
         lines.extend(f"{row['reason_code']}：{row['detail']} [{row['source']}]" for row in outcome["review_items"])
-        return "\n".join([*lines, "本次未签发周期数字，请处理待审或实现缺口后重算。"])
+        from .multicurrency import render_text as native_text
+        return "\n".join([*lines, "本次未签发周期数字，请处理待审或实现缺口后重算。",
+                          *native_text(outcome.get('native_report'))])
     report, amount = outcome["report"], amount_text
     cycle, currency = report["cycle_budget"], report["report_currency"]
     lines += [f"{cycle['category_name']}：原支出 {amount(cycle['gross_spent'])}，退款 {amount(cycle['refunded'])}，净消费 {amount(cycle['net_spent'])} {currency}"]
@@ -192,7 +204,8 @@ def render_text(outcome: dict) -> str:
             value = row["settlement_budget_value"]
             lines.append(f"外币消费 {row['date']} {amount(row['signed_units'])} {row['commodity']}；预算比较采用 {value['settlement_date']} 实际清偿成本 {amount(value['budget_comparison_value'])} {currency} [{row['source']}]")
     lines += [f"警告：{warning}" for warning in report["warnings"]]
-    return "\n".join([*lines, report["note"]])
+    from .multicurrency import render_text as native_text
+    return "\n".join([*lines, *native_text(report.get('multicurrency')), report["note"]])
 
 
 def render_csv(outcome: dict) -> str:
@@ -201,6 +214,14 @@ def render_csv(outcome: dict) -> str:
     writer = csv.DictWriter(stream, fieldnames=fields)
     writer.writeheader()
     base = {key: outcome[key] for key in fields[:4]}
+    native = outcome.get('native_report') or (outcome.get('report') or {}).get('multicurrency')
+    if native:
+        from .multicurrency import csv_records
+        for row in csv_records(native):
+            writer.writerow({**base, 'category': row.get('name', ''),
+                             'metric': row['section'] + '_' + row['metric'],
+                             'value': row['value'], 'commodity': row['commodity'],
+                             'source': row.get('source', ''), 'detail': row['detail']})
     if outcome["status"] == "NOT_STARTED":
         writer.writerow({**base, "metric": "salary_cycle_not_started", "detail": f"首个已配置发薪日：{outcome['first_payday']}；此前无适用周期目标，不生成额度或差额。"})
         return stream.getvalue()

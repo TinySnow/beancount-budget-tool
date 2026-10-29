@@ -216,6 +216,11 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
             if key == 'purpose_progress':
                 for row in (before, after):
                     row['owners'].sort(key=lambda v:v['owner_id'])
+            if key == 'expense_targets':
+                self.assertEqual(after.pop('comparison_basis'), 'native_report_currency_only')
+                before.pop('comparison_basis')
+                for row in (before, after):
+                    row.pop('note')
             self.assertEqual(before, after, key)
         self.assertEqual({p: p.read_bytes() for p in self.original}, self.original)
         self.assertEqual(sorted(p.name for p in self.config.parent.iterdir() if p.is_file()), ["budgets.yml", "config.yml"])

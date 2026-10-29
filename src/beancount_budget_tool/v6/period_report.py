@@ -125,16 +125,16 @@ def _sum_rows(reports, section, list_key, keys, metrics):
             for key, values in sorted(totals.items())]
 
 
-def audit_period(configs: list[Path], since: str | None = None, through: str | None = None) -> dict:
+def audit_period(configs: list[Path], since: str | None = None, through: str | None = None, *, native_only=False) -> dict:
     from .simple_config import is_simple, audit_simple_period
     if len(configs) == 1 and is_simple(load_yaml(configs[0])):
         return audit_simple_period(configs[0], since, through)
     rows, ordered, watched = _inputs(configs, since, through)
-    months, reports, reviews, snapshots, warnings = [], [], [], set(), []
+    months, reports, reviews, snapshots, warnings, native_views = [], [], [], set(), [], []
     for month in ordered:
         config = rows[month]["config"]
         try:
-            outcome = audit_month_workflow(config)
+            outcome = audit_month_workflow(config, **({'native_only': True} if native_only else {}))
             require(outcome["month"] == month, "INPUT_CHANGED", "区间配置的月份发生变化", str(config))
         except BudgetError as exc:
             if exc.code in {"INPUT_CHANGED", "MONTH_REPORT_MISMATCH"}:
@@ -145,18 +145,21 @@ def audit_period(configs: list[Path], since: str | None = None, through: str | N
                 "reason_code": exc.code, "reason_kind": "implementation_limit" if implementation else "input_error", "detail": exc.message,
                 "source": exc.source or str(config)}]}
         months.append({"month": month, "config": str(config), "status": outcome["status"]})
+        view = outcome.get('native_report') or (outcome.get('report') or {}).get('multicurrency')
+        if view is not None:
+            native_views.append(view)
         reviews.extend({**item, "month": month, "config": str(config)} for item in outcome["review_items"])
         snapshot = (outcome.get("report") or {}).get("ledger_snapshot") or outcome.get("review_queue", {}).get("ledger_snapshot")
         if snapshot:
             snapshots.add(snapshot)
-        if outcome["status"] == "CERTIFIED_SCOPED":
+        if outcome["status"] in {"CERTIFIED_SCOPED", "CERTIFIED_NATIVE_SCOPED"}:
             reports.append(outcome["report"])
             warnings.extend({"month": month, "detail": line} for line in render_workflow_text(outcome).splitlines()
                             if "警告" in line)
     require(len(snapshots) <= 1 and all(input_is_file(path) and sha256(input_bytes(path)).hexdigest() == digest
                                       for path, digest in watched.items()),
             "INPUT_CHANGED", "区间运行期间账本、配置或审阅资料发生变化；请重新运行")
-    return _combine_months(ordered, months, reports, reviews, snapshots, warnings)
+    return _combine_months(ordered, months, reports, reviews, snapshots, warnings, native_views=native_views)
 
 
 
@@ -171,23 +174,30 @@ def _single_month_period(outcome: dict, config: Path) -> dict:
     reviews = [{**item, "month": month, "config": str(config.resolve())}
                for item in outcome["review_items"]]
     reports, snapshots, warnings = [], set(), []
-    if outcome["status"] == "CERTIFIED_SCOPED":
+    if outcome["status"] in {"CERTIFIED_SCOPED", "CERTIFIED_NATIVE_SCOPED"}:
         reports = [outcome["report"]]
         snapshots.add(outcome["report"]["ledger_snapshot"])
         warnings = [{"month": month, "detail": line} for line in render_workflow_text(outcome).splitlines()
                     if "警告" in line]
-    return _combine_months([month], months, reports, reviews, snapshots, warnings)
+    view = outcome.get('native_report') or (outcome.get('report') or {}).get('multicurrency')
+    return _combine_months([month], months, reports, reviews, snapshots, warnings,
+                          native_views=[view] if view is not None else [])
 
 
-def _combine_months(ordered, months, reports, reviews, snapshots, warnings) -> dict:
+def _combine_months(ordered, months, reports, reviews, snapshots, warnings, *, native_views=None) -> dict:
     """Combine audited results; source and cross-month validation stays upstream."""
     states = {row["status"] for row in months}
     status = ("INPUT_ERROR" if "INPUT_ERROR" in states else
               "IMPLEMENTATION_BLOCKED" if "IMPLEMENTATION_BLOCKED" in states else
-              "NEEDS_REVIEW" if states != {"CERTIFIED_SCOPED"} else "CERTIFIED_SCOPED")
+              "NEEDS_REVIEW" if not states <= {"CERTIFIED_SCOPED", "CERTIFIED_NATIVE_SCOPED"} else
+              "CERTIFIED_NATIVE_SCOPED" if "CERTIFIED_NATIVE_SCOPED" in states else "CERTIFIED_SCOPED")
     result = {"mode": "v6_period_report", "schema": 6, "from": ordered[0], "through": ordered[-1],
               "status": status, "months": months, "review_items": reviews, "report": None}
-    if status != "CERTIFIED_SCOPED":
+    from .multicurrency import combine as combine_native
+    native = combine_native(native_views) if native_views and len(native_views) == len(ordered) else None
+    if status not in {"CERTIFIED_SCOPED", "CERTIFIED_NATIVE_SCOPED"}:
+        if native is not None:
+            result['native_report'] = native
         return result
     expenses = _sum_rows(reports, "expense_targets", "categories", ("id", "name"), EXPENSE_METRICS)
     expense_total = {metric: exact_text(sum((Fraction(row[metric]) for row in expenses), Fraction(0)))
@@ -200,6 +210,7 @@ def _combine_months(ordered, months, reports, reviews, snapshots, warnings) -> d
     outflow_metrics = OUTFLOW_METRICS + (("credit_returns",) if any(
         "credit_returns" in row for report in reports for row in report["default_outflows"]["totals"] or []) else ())
     result["report"] = {
+        **({'multicurrency': native} if native is not None else {}),
         "report_currency": last["report_currency"], "ledger_snapshot": next(iter(snapshots)),
         "monthly_reports": reports, "warnings": warnings,
         "expense_totals": expense_total, "expenses": expenses, "purpose_allocations": purpose_rows,
@@ -221,8 +232,12 @@ def render_text(outcome: dict) -> str:
         lines.extend(f"  {row['month']} {row['reason_code']}：{row['detail']} [{row.get('source') or row['config']}]"
                      for row in outcome["review_items"])
         lines.append("有月份未通过，未生成区间数字；未提供的月份不能视为零。")
+        from .multicurrency import render_text as native_text
+        lines.extend(native_text(outcome.get('native_report')))
         return "\n".join(lines)
     report = outcome["report"]
+    from .multicurrency import render_text as native_text
+    lines.extend(native_text(report.get('multicurrency')))
     currency = report["report_currency"]
     lines.append(f"月份 | 消费原支出 | 退款 | 净消费 | 月末实际可花 | 月末最多能花（{currency}）")
     for row in report["monthly_reports"]:
@@ -304,6 +319,14 @@ def csv_rows(outcome: dict) -> list[dict]:
                      "denominator": str(numeric.denominator) if numeric is not None else "",
                      "status": "CERTIFIED_SCOPED", **fields})
 
+    native = outcome.get('native_report') or (outcome.get('report') or {}).get('multicurrency')
+    from .multicurrency import has_foreign
+    if has_foreign(native):
+        from .multicurrency import csv_records
+        for record in csv_records(native):
+            fields = dict(record)
+            section, metric, value = (fields.pop(key) for key in ('section', 'metric', 'value'))
+            add('native', native['from'] + '..' + native['through'], section, metric, value, **fields)
     if outcome["report"] is None:
         for month in outcome["months"]:
             add("month", month["month"], "audit", "status", status=month["status"], source=month["config"])

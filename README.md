@@ -28,6 +28,8 @@ TUI：`r` 重算，`m` 跳月，`n` 下一月，`Enter` 看完整来源，`?` �
 
 消费上限可按实际发薪周期：config.yml 设置 `expense_budget_basis: salary_cycle`，budgets.yml 的 `salary_cycles` 保存日期和额度。账务仍逐月核对，最多能花取当前周期剩余额度与已审可支付资金的较小值，额度不在月初重置。月报显示截至月末的周期进度；TUI `w` 直接选保存的周期，CLI 可用 `report --config config.yml --cycle current`。例如 6 月 9 日发薪、7 月 15 日再次发薪，选择 6 月 9 日周期会连续统计 6 月 9 日至 7 月 14 日消费；6 月月报的进度只统计至 6 月 30 日，保持与月末资金余额相同的截止日。
 
+多币种收支按原币并列：例如 550 JPY 消费与 5 CNY 消费分别累计，不要求汇率或 `price`，不自动折成人民币。原币完整且相关资金审核通过时显示 `CERTIFIED_NATIVE_SCOPED`。人民币目标和最多能花只包含原生人民币消费，外币预算／剩额显示 `-`；外币资产不因此变成人民币可支付资金。月报、区间、薪资周期及文本／TUI／JSON／CSV使用相同原币数据，见[合成示例](examples/v6/multicurrency/README.md)。
+
 ## 哪些文件不能删
 
 - 目录版 exe 旁边的 `_internal` 是运行依赖，必须和 exe 一起保留。

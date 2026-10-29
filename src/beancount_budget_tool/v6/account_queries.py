@@ -172,10 +172,10 @@ def _query(config: Path, as_of: str, *, account=None, purpose=None, since=None, 
             sidecars = (REQUIRED | OPTIONAL) - {'schema','ledger','cutover','month','report_currency'}
             watched = [compiled, *[config_path(compiled, doc[key], key) for key in sidecars if key in doc]]
             inputs = {path: input_bytes(path) for path in watched}
-            gate = audit_month_workflow(compiled)
+            gate = audit_month_workflow(compiled, **({'native_only': True} if simple else {}))
             if runtime:
                 gate = runtime.public_sources(gate)
-            if gate['status'] != 'CERTIFIED_SCOPED':
+            if gate['status'] not in {'CERTIFIED_SCOPED', 'CERTIFIED_NATIVE_SCOPED'}:
                 return {**envelope, 'status': gate['status'], 'review_items': gate['review_items'],
                         'note': '先完成查询日期所在月份的审核；本次只显示待审原因，不出历史余额或日末分布。'}
             _unchanged(inputs)

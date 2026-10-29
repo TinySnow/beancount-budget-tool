@@ -112,7 +112,7 @@ def summarize_max_spendable(actual: dict, expense: dict) -> dict:
             "note": "最多能花取已审可支付能力与指定消费目标子树差额的较小值；负数表示超支或资金缺口"}
 
 
-def audit_reviewed_month(config: Path, *, include_transactions: bool = False) -> dict:
+def audit_reviewed_month(config: Path, *, include_transactions: bool = False, native_only: bool = False) -> dict:
     """Run existing audits without promoting a partial metric to a complete home."""
     document = load_yaml(config)
     require(type(document) is dict, "MONTH_REPORT_CONFIG_INVALID",
@@ -163,7 +163,8 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
                                        ownership, obligations, path("completeness"), path("debt_coverage"), path("debt_settlements"))
         expense = audit_monthly_expense_targets(
             root, cutover, month, path("classifications"), path("expense_plans"),
-            currency, path("benefit_groups"), accounts, ownership, obligations, h_fx, include_evidence=include_transactions)
+            currency, path("benefit_groups"), accounts, ownership, obligations, h_fx,
+            include_evidence=include_transactions, native_only=native_only)
         purpose = audit_monthly_purpose_progress(
             root, cutover, month, accounts, opening, ownership, path("purpose_plans"),
             currency, path("h_transfers"), path("k_events"), h_fx, path("purpose_pools"),
@@ -186,13 +187,13 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
         salary = None
         if path("salary_cycle"):
             from .salary_plan import audit_plan
-            salary = audit_plan(config, path("salary_cycle"), as_of)
+            salary = audit_plan(config, path("salary_cycle"), as_of, native_only=native_only)
         owner_document = load_yaml(ownership)
         owner_names = {row["id"]: row["name"] for row in owner_document["owners"]}
         purpose_balances = summarize_purpose_balances(account_purposes, pool, k_book,
                                                       owner_document,
                                                       yaml_key_location(ownership, "owners"))
-        details = {}
+        details = {"multicurrency": expense.pop("multicurrency")}
         if include_transactions:
             from .transaction_details import project_transactions
             details["transactions"] = project_transactions(load_financial(root), month, expense, purpose, pool,
@@ -232,7 +233,8 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False) ->
             "note": "各项独立认证；此报表不签发完整首页或证券市值。历史日末数字不代表今天余额。"}
 
 
-def audit_month_workflow(config: Path, *, include_transactions: bool = False, month: str | None = None) -> dict:
+def audit_month_workflow(config: Path, *, include_transactions: bool = False, month: str | None = None,
+                         native_only: bool = False) -> dict:
     """Give a new month one entry point, without presenting partial audits as complete."""
     with financial_session(), frozen_fact_indices():
         document = load_yaml(config)
@@ -248,11 +250,12 @@ def audit_month_workflow(config: Path, *, include_transactions: bool = False, mo
         as_of = date(first_day.year, first_day.month, last_day)
         with booked_through(as_of):
             return _audit_month_workflow_bounded(config, document, month, first_day, as_of,
-                                                include_transactions=include_transactions)
+                                                include_transactions=include_transactions, native_only=native_only)
 
 
 def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
-                                  first_day: date, as_of: date, *, include_transactions: bool = False) -> dict:
+                                  first_day: date, as_of: date, *, include_transactions: bool = False,
+                                  native_only: bool = False) -> dict:
     review = audit_review_queue(config, first_day, as_of)
     if review["items"]:
         review["items"] = annotate_source_items(review["items"])
@@ -263,7 +266,10 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
                 "review_items": review["items"],
                 "pending_metrics": []}
 
-    report = (audit_reviewed_month(config, include_transactions=True) if include_transactions else audit_reviewed_month(config))
+    kwargs = {'include_transactions': True} if include_transactions else {}
+    if native_only:
+        kwargs['native_only'] = True
+    report = audit_reviewed_month(config, **kwargs)
     require(report["ledger_snapshot"] == review["ledger_snapshot"],
             "MONTH_REPORT_MISMATCH", "待审清单与月报不属于同一账本快照")
     pending = []
@@ -318,8 +324,14 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
                             "source": yaml_key_location(config, "purpose_pools")})
     items = enrich_metric_reviews(config, document, report, pending)
     blocked = any(item["reason_kind"] == "implementation_limit" for item in items)
-    return {"status": "IMPLEMENTATION_BLOCKED" if blocked else
-            "NEEDS_REVIEW" if pending else "CERTIFIED_SCOPED",
+    from .multicurrency import has_foreign
+    native_signed = native_only and has_foreign(report.get('multicurrency'))
+    pending_native = ({**report['multicurrency'], 'status': 'NEEDS_REVIEW',
+                       'note': report['multicurrency']['note'] + ' 本次仍有资金或预算待审，原币汇总不代表完整认证。'}
+                      if pending and native_signed else None)
+    return {**({"native_report": pending_native} if pending_native else {}),
+            "status": "IMPLEMENTATION_BLOCKED" if blocked else
+            "NEEDS_REVIEW" if pending else 'CERTIFIED_NATIVE_SCOPED' if native_signed else "CERTIFIED_SCOPED",
             "stage": "metrics" if pending else "report", "month": month,
             "review_queue": review, "report": None if pending else report,
             "review_items": items,
@@ -364,6 +376,9 @@ def render_workflow_text(outcome: dict, *, columns: int = 76) -> str:
             lines.append("本次不签发完整月报；" + (
                 "处理上述程序实现缺口与待审事实后重跑。" if outcome["status"] == "IMPLEMENTATION_BLOCKED"
                 else "处理上述待审事实后重跑。"))
+            if outcome.get('native_report'):
+                from .multicurrency import render_text as native_text
+                lines.extend(native_text(outcome['native_report'], columns=columns))
             return "\n".join(lines)
         lines = [f"v6 {outcome['month']} 月报待审：以下指标尚未认证"]
         for item in outcome["pending_metrics"]:
@@ -417,6 +432,11 @@ def render_text(report: dict, *, columns: int = 76) -> str:
         headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
              headline, "", (f"自然月消费目标（{currency}；与发薪周期额度分别显示）" if "salary_cycle" in report else f"消费目标（{currency}；差额=目标-实际，负数为超支）")]
+    if report.get('multicurrency'):
+        from .multicurrency import render_text as native_text
+        native_lines = native_text(report['multicurrency'], columns=columns)
+        if native_lines:
+            lines[2:2] = [*native_lines, '']
     if actual.get("same_day_clearings"):
         lines[2:2] = [f"本月已审同日责任清算 {len(actual['same_day_clearings'])} 条：已确认付款与责任来源对应，"
                       "未确认实际日内先后；保留原顺序，按日末余额签发。", ""]

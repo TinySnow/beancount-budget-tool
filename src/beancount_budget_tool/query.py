@@ -47,7 +47,8 @@ class QuerySession:
         from .v6.simple_config import build_runtime
         runtime = build_runtime(config, month, materialize=False)
         try:
-            result = runtime.pending or audit_month_workflow(runtime.config, include_transactions=include_transactions)
+            result = runtime.pending or audit_month_workflow(runtime.config, include_transactions=include_transactions,
+                                                             native_only=True)
             runtime.check()
             return runtime.public_sources(result)
         except BudgetError as exc:
@@ -79,7 +80,7 @@ class QuerySession:
                            if runtime.pending for item in runtime.pending['review_items']]
                 result = _combine_months(months, rows, [], reviews, set(), [])
             else:
-                result = audit_period([runtime.config for runtime in runtimes], first, last)
+                result = audit_period([runtime.config for runtime in runtimes], first, last, native_only=True)
             result = deepcopy(result)
             for runtime in runtimes:
                 runtime.check()

@@ -31,6 +31,7 @@ def prepare(executable: Path, output: Path, arch: str, revision: str, *, source:
     for filename in ("CONFIGURATION.md", "v6-monthly-report.md", "ARCHITECTURE.md", "STATELESS.md"):
         shutil.copy2(source / "docs" / filename, package / "docs" / filename)
     (package / "example").mkdir()
+    shutil.copytree(source / "examples/v6/multicurrency", package / "example/multicurrency")
     shutil.copytree(source / "examples/v6/simple", package / "example/simple",
                     ignore=shutil.ignore_patterns(".budget-state", "__pycache__"))
     start = (source / "packaging/MACOS-START.md").read_text(encoding="utf-8")

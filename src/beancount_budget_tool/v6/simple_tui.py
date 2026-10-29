@@ -24,9 +24,10 @@ class SimpleReportBrowser(ReportBrowser):
         self.saved_cycle = None
         self.visited_months = {self.selected_month}
         self.source_cache = FinancialSourceCache()
+        self.native_only = True
         super().__init__([config], audit_month_workflow, render_workflow_text)
         # Transaction details remain available just as in the normal browser.
-        self.loader = lambda path: audit_month_workflow(path, include_transactions=True)
+        self.loader = lambda path: audit_month_workflow(path, include_transactions=True, native_only=True)
 
     @property
     def display_config(self):

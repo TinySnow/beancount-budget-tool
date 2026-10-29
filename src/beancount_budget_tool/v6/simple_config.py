@@ -383,7 +383,7 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
 
     if materialize:
         runtime.temporary = RuntimeFiles()
-        destination = Path(runtime.temporary.name) / "compiled"
+        destination = Path(runtime.temporary.name).resolve() / "compiled"
     else:
         destination = (Path(gettempdir()) / ('budget-runtime-' + uuid4().hex) / 'compiled').resolve()
     documents, issues = compile_inputs(filled, config, destination, location=input_location)

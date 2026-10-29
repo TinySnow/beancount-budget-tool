@@ -1,0 +1,36 @@
+; Synthetic accounts and amounts for demonstrating native reports only.
+option "operating_currency" "CNY"
+2024-12-01 open Assets:Cash
+2024-12-01 open Assets:Yen
+2024-12-01 open Assets:Dollars
+2024-12-01 open Equity:Opening
+2024-12-01 open Liabilities:Card
+2024-12-01 open Expenses:Entertainment
+2024-12-01 open Income:Bonus
+
+2024-12-31 * "Synthetic opening"
+  Assets:Cash 1000 CNY
+  Equity:Opening -1000 CNY
+  Assets:Yen 550 JPY
+  Equity:Opening -550 JPY
+
+2025-01-16 * "Prepay card in original currency"
+  Assets:Yen -550 JPY
+    fund: "信用卡"
+  Liabilities:Card 550 JPY
+    budget: "信用卡"
+
+2025-01-17 * "Synthetic foreign purchase"
+  Expenses:Entertainment 550 JPY
+  Liabilities:Card -550 JPY
+    budget: "信用卡"
+
+2025-01-18 * "Synthetic foreign income"
+  Assets:Dollars 25 USD
+    fund: "自由资金"
+  Income:Bonus -25 USD
+
+2025-02-01 * "Synthetic native purchase"
+  Expenses:Entertainment 5 CNY
+  Assets:Cash -5 CNY
+    fund: "生活费"

@@ -237,11 +237,13 @@ class ReportBrowser:
                 self.period_inputs = self.period_configs()
                 if self.salary_cycle is not None:
                     from .salary_cycle import audit_salary_cycle, render_text as salary_text
-                    outcome = audit_salary_cycle(self.period_inputs[0], *self.salary_cycle)
+                    outcome = audit_salary_cycle(self.period_inputs[0], *self.salary_cycle,
+                                                 **({'native_only': True} if getattr(self, 'native_only', False) else {}))
                     renderer = salary_text
                 else:
-                    outcome = (audit_period(self.period_inputs, *self.period_range) if self.period_range is not None else
-                               audit_period(self.period_inputs))
+                    options = {'native_only': True} if getattr(self, 'native_only', False) else {}
+                    outcome = (audit_period(self.period_inputs, *self.period_range, **options) if self.period_range is not None else
+                               audit_period(self.period_inputs, **options))
                     renderer = render_text
             else:
                 outcome = self.loader(self.config)
@@ -255,7 +257,7 @@ class ReportBrowser:
     def _accept_outcome(self, outcome: dict, renderer: Callable):
         """Display a fresh audit result, including one returned after publication."""
         previous_view = self.view
-        if outcome["status"] != "CERTIFIED_SCOPED":
+        if outcome["status"] not in {"CERTIFIED_SCOPED", "CERTIFIED_NATIVE_SCOPED"}:
             outcome = {**outcome, "report": None}
         rendered = renderer(outcome)
         self.outcome, self.lines = outcome, rendered.splitlines()
@@ -368,7 +370,7 @@ class ReportBrowser:
                 _review_card(item, 0, -1, 100000, self.period))).casefold()]
 
     def has_transactions(self) -> bool:
-        return bool(not self.period and self.outcome and self.outcome["status"] == "CERTIFIED_SCOPED" and
+        return bool(not self.period and self.outcome and self.outcome["status"] in {"CERTIFIED_SCOPED", "CERTIFIED_NATIVE_SCOPED"} and
                     self.outcome.get("report") and self.outcome["report"].get("transactions") is not None)
 
     def transactions(self) -> list[dict]:
@@ -863,7 +865,8 @@ def _export_report(stdscr, browser: ReportBrowser):
         exported_scope = (f"{browser.outcome['from']} 至 {browser.outcome['through']}" if browser.period else
                           browser.outcome["month"])
         _message(stdscr, "已导出", [f"文件：{path}", f"范围：{exported_scope}", f"状态：{state}",
-                                    "完整报表已保存。" if state == "CERTIFIED_SCOPED" else
+                                    "完整报表已保存。" if state in {"CERTIFIED_SCOPED", "CERTIFIED_NATIVE_SCOPED"} else
+                                    "已保存待审及单独列示的原币收支；未签发完整资金报告或消费上限。" if browser.outcome.get('native_report') else
                                     "当前未通过审计，已保存完整待审清单；文件不含局部预算数字。"])
     except (BudgetError, OSError, UnicodeError, ValueError) as exc:
         _message(stdscr, "导出失败", [str(exc), "本次导出未完成。可核对路径或输入文件后重新按 x 导出。"])

@@ -53,9 +53,9 @@ class MonthlyUsabilityTests(unittest.TestCase):
         for path, doc in ((self.config, self.profile), (self.budgets, self.plans)):
             path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding='utf-8')
 
-    def outcome(self, month='2024-01'):
+    def outcome(self, month='2024-01', *, status='CERTIFIED_SCOPED'):
         value = audit_simple(self.config, month, include_transactions=True)
-        self.assertEqual(value['status'], 'CERTIFIED_SCOPED', value['review_items'])
+        self.assertEqual(value['status'], status, value['review_items'])
         return value
 
     def test_income_split_and_staged_moves_count_once_with_net_release(self):
@@ -162,7 +162,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
                     self.assertTrue(any('Assets:Foreign / JPY' in item['detail']
                                         for item in result['review_items']), result['review_items'])
                 else:
-                    self.assertEqual(result['status'], 'CERTIFIED_SCOPED', result['review_items'])
+                    self.assertEqual(result['status'], 'CERTIFIED_NATIVE_SCOPED', result['review_items'])
                 self.profile['accounts'] = {'Assets:Foreign': {'payment_scope': {'JPY': 'excluded'}}}
                 self.save()
                 before = {p: p.read_bytes() for p in (self.config, self.budgets, self.ledger)}
@@ -170,7 +170,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
                     accounts = yaml.safe_load((runtime.config.parent / 'accounts.yaml').read_text(encoding='utf-8'))
                     row = next(row for row in accounts['accounts'] if row['account'] == 'Assets:Foreign')
                     self.assertEqual(row['payment_scope'], {'JPY': 'excluded'})
-                self.outcome()
+                self.outcome(status='CERTIFIED_NATIVE_SCOPED')
                 self.assertTrue(all(p.read_bytes() == body for p, body in before.items()))
                 self.assertFalse((self.base / '.budget-state').exists())
 
@@ -185,7 +185,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
             accounts = yaml.safe_load((runtime.config.parent / 'accounts.yaml').read_text(encoding='utf-8'))
             row = next(row for row in accounts['accounts'] if row['account'] == 'Assets:Cash')
             self.assertEqual(row['payment_scope'], {'CNY': 'payable', 'JPY': 'excluded'})
-        self.outcome()
+        self.outcome(status='CERTIFIED_NATIVE_SCOPED')
 
     def test_future_foreign_scope_does_not_break_earlier_month_or_change_cash(self):
         previous = self.outcome()['report']['max_spendable']
@@ -193,7 +193,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
         self.profile['accounts'] = {'Assets:Cash': {'payment_scope': {'JPY': 'excluded'}}}
         self.save()
         self.assertEqual(self.outcome()['report']['max_spendable'], previous)
-        self.outcome('2024-02')
+        self.outcome('2024-02', status='CERTIFIED_NATIVE_SCOPED')
 
     def test_unknown_currency_still_fails_and_open_currency_is_not_a_cash_fact(self):
         self.ledger.write_text(self.source.replace('open Assets:Cash\n', 'open Assets:Cash CNY, JPY\n'), encoding='utf-8')

@@ -1,0 +1,7 @@
+schema: 1
+defaults:
+  expense_targets:
+    生活开销: '100'
+months:
+  '2025-01': {completeness_confirmed: true}
+  '2025-02': {completeness_confirmed: true}

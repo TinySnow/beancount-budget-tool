@@ -102,11 +102,13 @@ class StatelessInputsTests(unittest.TestCase):
         ledger.write_text(source + '\n2026-09-05 * "foreign expense"\n'
             '  Expenses:Food 10 JPY\n  Assets:JPY -10 JPY\n    fund: "生活费"\n', encoding='utf-8')
         result = audit_simple(self.config)
-        self.assertEqual(result['status'], 'NEEDS_REVIEW')
-        self.assertIsNone(result['report'])
-        self.assertTrue(any(row['reason_code'] == 'VALUATION_MISSING' for row in result['review_items']), result['review_items'])
+        self.assertEqual(result['status'], 'CERTIFIED_NATIVE_SCOPED')
+        row = next(row for row in result['report']['multicurrency']['native_expenses'] if row['currency'] == 'JPY')
+        self.assertEqual(row['net'], '10')
+        self.assertNotIn('report_value', row)
+        self.assertFalse(result['review_items'])
 
-    def test_foreign_move_removes_protocol_blockers_but_keeps_unvalued_consumption_pending(self):
+    def test_foreign_move_preserves_purpose_and_native_consumption(self):
         ledger, source = self.fx_source()
         source += ('\n2026-09-01 open Assets:JPYBank\n2026-09-05 * "yen move"\n'
             '  Assets:JPY -550 JPY\n    fund: "生活费"\n'
@@ -125,9 +127,11 @@ class StatelessInputsTests(unittest.TestCase):
         ledger.write_text(source + '\n2026-09-06 * "unvalued foreign expense"\n'
             '  Expenses:Food 10 JPY\n  Assets:JPYBank -10 JPY\n    fund: "生活费"\n',encoding='utf-8')
         result = audit_simple(self.config)
-        self.assertEqual(result['status'],'NEEDS_REVIEW')
+        self.assertEqual(result['status'],'CERTIFIED_NATIVE_SCOPED')
         codes = {row['reason_code'] for row in result['review_items']}
-        self.assertIn('VALUATION_MISSING',codes)
+        self.assertNotIn('VALUATION_MISSING',codes)
+        row = next(row for row in result['report']['multicurrency']['native_expenses'] if row['currency'] == 'JPY')
+        self.assertEqual(row['net'], '10')
         self.assertFalse(codes & {'NAMED_H_EVENT_UNSUPPORTED','UNSUPPORTED','H_TRANSFER_SHAPE_UNSUPPORTED'})
 
     def test_foreign_card_prices_clear_valuation_without_approving_unsupported_debt(self):

@@ -88,7 +88,7 @@ def _location(plan, path, start=None, name=None):
     return yaml_path_location(path, ("cycles",))
 
 
-def audit_plan(config, path, as_of, *, start=None):
+def audit_plan(config, path, as_of, *, start=None, native_only=False):
     """Audit consumption through as_of; never consume a future payday's facts."""
     plan = load_yaml(path)
     require(type(plan) is dict and set(plan) == {"schema", "cycles", "category", "source"} and type(plan["schema"]) is int and plan["schema"] == 1,
@@ -121,7 +121,8 @@ def audit_plan(config, path, as_of, *, start=None):
     from .salary_cycle import audit_salary_cycle
     # The old auditor's exclusive endpoint is an audit cutoff here, not an
     # assertion that salary was received on the following day.
-    audited = audit_salary_cycle(config, first, (last + timedelta(days=1)).isoformat(), category=plan["category"])
+    audited = audit_salary_cycle(config, first, (last + timedelta(days=1)).isoformat(),
+                                category=plan["category"], **({'native_only': True} if native_only else {}))
     result.update(audited, configured_cycle=True, next_payday=following)
     if not audited["report"]:
         return result
@@ -208,7 +209,7 @@ def audit_configured_cycle(config, start=None, as_of=None):
                     "review_items": runtime.pending["review_items"]}
         path = runtime.config.parent / "configured_salary_query.yaml"
         _write(path, {"schema": 1, "cycles": cycles, "category": doc.get("spendable_cap_category", doc["defaults"]["expense_category"]), "source": str(budgets)})
-        result = audit_plan(runtime.config, path, cutoff, start=start)
+        result = audit_plan(runtime.config, path, cutoff, start=start, native_only=True)
         _unchanged(watched)
         runtime.check()
         return runtime.public_sources(result)
