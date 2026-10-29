@@ -106,6 +106,57 @@ class StatelessInputsTests(unittest.TestCase):
         self.assertIsNone(result['report'])
         self.assertTrue(any(row['reason_code'] == 'VALUATION_MISSING' for row in result['review_items']), result['review_items'])
 
+    def test_foreign_move_removes_protocol_blockers_but_keeps_unvalued_consumption_pending(self):
+        ledger, source = self.fx_source()
+        source += ('\n2026-09-01 open Assets:JPYBank\n2026-09-05 * "yen move"\n'
+            '  Assets:JPY -550 JPY\n    fund: "生活费"\n'
+            '  Assets:JPYBank 550 JPY\n    fund: "生活费"\n')
+        doc = yaml.safe_load(self.config.read_text(encoding='utf-8'))
+        doc['account_groups']['H']['excluded'].append('Assets:JPYBank')
+        _write(self.config, doc)
+        ledger.write_text(source, encoding='utf-8')
+        before = self.manifest()
+        result = audit_simple(self.config, include_transactions=True)
+        self.assertEqual(result['status'],'CERTIFIED_SCOPED',result['review_items'])
+        living = next(row for row in result['report']['purpose_progress']['owners']
+                      if result['report']['owner_names'][row['owner_id']]=='生活费')
+        self.assertEqual(living['actual_g'],'200')
+        self.assertEqual(self.manifest(),before)
+        ledger.write_text(source + '\n2026-09-06 * "unvalued foreign expense"\n'
+            '  Expenses:Food 10 JPY\n  Assets:JPYBank -10 JPY\n    fund: "生活费"\n',encoding='utf-8')
+        result = audit_simple(self.config)
+        self.assertEqual(result['status'],'NEEDS_REVIEW')
+        codes = {row['reason_code'] for row in result['review_items']}
+        self.assertIn('VALUATION_MISSING',codes)
+        self.assertFalse(codes & {'NAMED_H_EVENT_UNSUPPORTED','UNSUPPORTED','H_TRANSFER_SHAPE_UNSUPPORTED'})
+
+    def test_foreign_card_prices_clear_valuation_without_approving_unsupported_debt(self):
+        ledger, source = self.fx_source()
+        source += ('\n2026-09-01 open Liabilities:JPYCard\n'
+            '2026-09-05 * "prepay yen card"\n'
+            '  Assets:JPY -550 JPY\n    fund: "生活费"\n'
+            '  Liabilities:JPYCard 550 JPY\n    budget: "生活费"\n'
+            '2026-09-06 * "foreign card expense with explicit independent quote"\n'
+            '  Expenses:Food 550 JPY @@ 26.10 CNY\n'
+            '  Liabilities:JPYCard -550 JPY @@ 26.10 CNY\n    budget: "生活费"\n')
+        ledger.write_text(source,encoding='utf-8')
+        result = audit_simple(self.config)
+        self.assertEqual(result['status'],'IMPLEMENTATION_BLOCKED',result['review_items'])
+        self.assertNotIn('VALUATION_MISSING',{row['reason_code'] for row in result['review_items']})
+        self.assertIn('OBLIGATION_EVENT_UNSUPPORTED',{row['reason_code'] for row in result['review_items']})
+        # A source quote proves consumption value, not every foreign debt protocol.
+        from contextlib import closing
+        from datetime import date
+        from beancount_budget_tool.v6.valuation import audit_classification_valuation
+        with closing(build_runtime(self.config)) as runtime:
+            valuation = audit_classification_valuation(ledger,date(2026,9,1),runtime.config.parent/'classifications.yaml','CNY')
+        self.assertEqual(valuation['valued'][-1]['historical_report_value'],'261/10')
+        ledger.write_text(source.replace('  Liabilities:JPYCard -550 JPY @@ 26.10 CNY',
+                                         '  Liabilities:JPYCard -550 JPY'),encoding='utf-8')
+        with self.assertRaises(BudgetError) as caught:
+            audit_simple(self.config)
+        self.assertEqual(caught.exception.code,'LOADER_ERROR')
+
     def test_poisoned_old_review_file_is_never_read_or_used(self):
         expected = audit_simple(self.config)
         old = self.base / '.budget-state/config/reviews.json.gz'

@@ -36,6 +36,7 @@ MESSAGES = {
     "H_TRANSFER_OWNER_PENDING": "资产转账的一侧或两侧资金用途尚未认领。",
     "H_TRANSFER_MIXED_REMAP_PENDING": "跨账户两侧均为多用途且金额不对应，或转账混有费用／退款而用途变更未明确；核对 fund，改用途须另记同账户虚拟调拨。单用途拆分与多用途合并为单用途可直接标注。",
     "H_TRANSFER_SHAPE_UNSUPPORTED": "该复合资产转账不符合当前简单转账协议，需补程序实现。",
+    "H_TRANSFER_FOREIGN_PURPOSE_UNSUPPORTED": "外币搬移目前只支持无成本、无报价、精确等额的两条 H 分录，且两腿各自明确同一个单用途 fund；缺少这些依据或涉及外币跨用途划拨时不自动认证，不能把原币数量直接当成人民币划拨额。",
     "H_FX_SHAPE_UNSUPPORTED": "该复合购汇交易不符合当前简单购汇协议，需补程序实现。",
     "H_FX_PENDING": "购汇用途尚不能由账本唯一证明。核对同笔交易的两条 H 资产分录：转入腿须保留与扣款精确相等的原文 @@ 报告货币总价，两腿须分别写明同一个单用途 fund。缺少或冲突时请修正账本；含费用、多用途或其他复杂形态暂不自动认证，无需新增 h_fx 配置。",
     "PAYABLE_CASH_PENDING": "可直接支付账户的用途库存尚未审定；核对期初用途、分录归属或支付范围。",
@@ -87,7 +88,7 @@ IMPLEMENTATION_LIMITS = frozenset((
     "SETTLEMENT_PATH_UNSUPPORTED",
     "OBLIGATION_EVENT_UNSUPPORTED", "OBLIGATION_OPENING_SOURCE_UNSUPPORTED",
     "K_EVENT_SHAPE_UNSUPPORTED", "K_REDEMPTION_PURPOSE_UNSUPPORTED",
-    "H_TRANSFER_SHAPE_UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED",
+    "H_TRANSFER_SHAPE_UNSUPPORTED", "H_TRANSFER_FOREIGN_PURPOSE_UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED",
     "NAMED_H_EVENT_UNSUPPORTED",
     "BENEFIT_GROUP_SHAPE_UNSUPPORTED",
 ))

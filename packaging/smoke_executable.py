@@ -231,6 +231,12 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             '\n2026-09-06 * "exact yen purchase"\n'
             '  Assets:Foreign 550 JPY @@ 25.70 CNY\n    fund: "生活费"\n'
             '  Assets:Cash -25.70 CNY\n    fund: "生活费"\n')
+        fx_profile["account_groups"]["H"]["excluded"].append("Assets:YenBank")
+        fx_config.write_text(yaml.safe_dump(fx_profile, allow_unicode=True), encoding="utf-8")
+        original_fx_config = fx_config.read_bytes()
+        fx_text += ('\n2026-09-01 open Assets:YenBank\n2026-09-07 * "same-purpose yen move"\n'
+                    '  Assets:Foreign -550 JPY\n    fund: "生活费"\n'
+                    '  Assets:YenBank 550 JPY\n    fund: "生活费"\n')
         fx_ledger.write_text(fx_text, encoding="utf-8")
         exact_fx = document("--config", fx_config)
         assert exact_fx["status"] == "CERTIFIED_SCOPED", exact_fx
@@ -243,6 +249,17 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert missing_fund["report"] is None, missing_fund
         assert any(row["reason_code"] == "H_FX_PENDING" and "在 h_fx 中" not in row["detail"]
                    for row in missing_fund["review_items"]), missing_fund
+        fx_ledger.write_text(fx_text + (
+            '\n2026-09-01 open Liabilities:YenCard\n2026-09-08 * "prepay yen card"\n'
+            '  Assets:YenBank -550 JPY\n    fund: "生活费"\n'
+            '  Liabilities:YenCard 550 JPY\n    budget: "生活费"\n'
+            '2026-09-09 * "unvalued yen card expense"\n  Expenses:Food 550 JPY\n'
+            '  Liabilities:YenCard -550 JPY\n    budget: "生活费"\n'), encoding="utf-8")
+        unvalued = document("--config", fx_config)
+        assert unvalued["status"] == "NEEDS_REVIEW" and unvalued["report"] is None, unvalued
+        assert any(row["reason_code"] == "VALUATION_MISSING" for row in unvalued["review_items"]), unvalued
+        assert not any(row["reason_code"] in ("UNSUPPORTED", "NAMED_H_EVENT_UNSUPPORTED")
+                       for row in unvalued["review_items"]), unvalued
         assert fx_config.read_bytes() == original_fx_config
         assert not (fx_dir / ".budget-state").exists()
         # Same source, portable path spelling, same complete audited report.

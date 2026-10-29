@@ -115,6 +115,66 @@ class HTransferTests(unittest.TestCase):
         self.assertEqual(report["events"][0]["reason_codes"], ["H_TRANSFER_OWNER_PENDING"])
         self.assertIsNone(report["events"][0]["net_allocations"])
 
+    def foreign_legs(self, source='储蓄', target='储蓄', price='', commodity='JPY'):
+        text = ('option "operating_currency" "CNY"\n2026-08-01 open Assets:Bank\n'
+                '2026-08-01 open Assets:Wallet\n2026-08-01 open Equity:Opening\n'
+                '2026-08-31 * "opening"\n  Assets:Bank 500 JPY\n  Equity:Opening -500 JPY\n'
+                f'2026-09-02 * "foreign move"\n  Assets:Bank -200 JPY{price}\n' +
+                (f'    fund: "{source}"\n' if source is not None else '') +
+                f'  Assets:Wallet 200 {commodity}{price}\n' +
+                (f'    fund: "{target}"\n' if target is not None else ''))
+        self.root.write_text(text, encoding='utf-8')
+        snapshot = load_financial(self.root).digest
+        accounts = yaml.safe_load(self.accounts.read_text(encoding='utf-8'))
+        accounts['ledger_snapshot'] = snapshot
+        for row in accounts['accounts']:
+            row['payment_scope'] = {'JPY' if row['account']=='Assets:Bank' else commodity: 'excluded'}
+        self.accounts.write_text(yaml.safe_dump(accounts, allow_unicode=True), encoding='utf-8')
+        self.snapshot = snapshot
+        self.write_ownership([], owners=[{'id':'savings','name':'储蓄','aliases':[]},
+                                         {'id':'travel','name':'旅游','aliases':[]}])
+
+    def test_foreign_single_inline_fund_preserves_native_units_with_zero_g(self):
+        for fund in ('储蓄', '-'):
+            with self.subTest(fund=fund):
+                self.foreign_legs(fund, fund)
+                before = {p:p.read_bytes() for p in (self.root,self.accounts,self.ownership)}
+                result = audit_h_transfers(self.root, CUTOVER, self.accounts, self.ownership)
+                event = result['events'][0]
+                self.assertEqual((event['shape'],event['status'],event['commodity']), ('foreign_preserve','CERTIFIED','JPY'))
+                self.assertEqual(event['net_allocations'], {})
+                self.assertIsNone(result['review_sha256'])
+                self.assertEqual(event['signed_from_units'], '-200')
+                self.assertEqual(event['signed_to_units'], '200')
+                self.assertTrue(all(p.read_bytes()==body for p,body in before.items()))
+                self.assertFalse(self.events.exists())
+
+    def test_foreign_missing_mixed_or_remapped_purposes_are_not_cny_allocations(self):
+        for source,target in [(None,'储蓄'),('储蓄',None),('储蓄','旅游'),
+                              ('储蓄100，旅游100','储蓄100，旅游100')]:
+            with self.subTest(source=source,target=target):
+                self.foreign_legs(source,target)
+                event = audit_h_transfers(self.root,CUTOVER,self.accounts,self.ownership)['events'][0]
+                self.assertNotEqual(event['status'],'CERTIFIED')
+                self.assertIsNone(event['net_allocations'])
+                self.assertEqual(event['reason_codes'],['H_TRANSFER_FOREIGN_PURPOSE_UNSUPPORTED'])
+
+    def test_foreign_price_annotation_is_not_a_plain_native_move(self):
+        self.foreign_legs(price=' @@ 10 CNY')
+        event = audit_h_transfers(self.root,CUTOVER,self.accounts,self.ownership)['events'][0]
+        self.assertEqual(event['reason_codes'],['H_TRANSFER_SHAPE_UNSUPPORTED'])
+        self.assertNotEqual(event['status'],'CERTIFIED')
+
+    def test_foreign_external_event_cannot_authorize_native_g_as_report_g(self):
+        self.foreign_legs(None,None)
+        candidate = audit_h_transfers(self.root,CUTOVER,self.accounts,self.ownership)['events'][0]
+        self.from_ref,self.to_ref = candidate['from_ref'],candidate['to_ref']
+        self.set_owner_legs('savings','savings')
+        self.assertEqual(audit_h_transfers(self.root,CUTOVER,self.accounts,self.ownership)['certified_events'], 0)
+        with self.assertRaises(BudgetError) as caught:
+            self.audit(self.declaration('savings','travel','reallocate'))
+        self.assertEqual(caught.exception.code,'H_TRANSFER_UNSUPPORTED')
+
     def test_wrong_source_owner_or_boundary_role_is_rejected(self):
         self.set_owner_legs("-", "-")
         document = self.declaration()

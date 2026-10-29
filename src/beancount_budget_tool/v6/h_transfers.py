@@ -105,12 +105,12 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
         else:
             from_leg, to_leg = entry.postings
         amount = exact(from_leg.units.number)
-        shape = ("simple_cash" if len(positives) == len(negatives) == 1 and
-                 from_leg.units.currency == to_leg.units.currency == report_currency and
+        simple = (len(positives) == len(negatives) == 1 and
+                 from_leg.units.currency == to_leg.units.currency and
                  amount == -exact(to_leg.units.number) and
                  all(p.cost is None and p.price is None and
-                     fin.raw_price(p)[0] == "none" for p in entry.postings)
-                 else "unsupported")
+                     fin.raw_price(p)[0] == "none" for p in entry.postings))
+        shape = ("simple_cash" if from_leg.units.currency == report_currency else "foreign_preserve") if simple else "unsupported"
         from_ref = facts.for_posting(from_leg).as_dict()
         key = _key(from_ref)
         require(key not in candidates, "SOURCE_REF_AMBIGUOUS", "H 转账来源重复", key)
@@ -241,6 +241,22 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
         candidate = candidates[key]
         claim = claims.get(key)
         auto_reason = None
+        if candidate["shape"] == "foreign_preserve" and claim is None:
+            legs = [h_claims.get(_key(candidate[ref])) for ref in ("from_ref", "to_ref")]
+            # Only an explicit single-purpose native move is value-free.
+            # A foreign allocation/remap would need report-currency valuation;
+            # never reuse the CNY allocation path with foreign native units.
+            if all(leg is not None and leg.get("origin") == "inline" and
+                   len(leg["slices"]) == 1 and leg["slices"][0]["role"] == "hold" and
+                   Fraction(leg["slices"][0]["signed_units"]) == Fraction(candidate[units])
+                   for leg, units in zip(legs, ("signed_from_units", "signed_to_units"))) and (
+                    legs[0]["slices"][0]["owner_id"] == legs[1]["slices"][0]["owner_id"]):
+                owner = legs[0]["slices"][0]["owner_id"]
+                claim = {"origin": "inferred", "reason": "双 H 同原币完整单用途行内 fund 直接证明用途保留",
+                         "slices": None,
+                         "from_owner_units": {owner: candidate["signed_from_units"]},
+                         "to_owner_units": {owner: candidate["signed_to_units"]},
+                         "net_allocations": {}}
         if (candidate["shape"] == "simple_cash" and claim is None and
                 "defaults" in owner_document):
             from_claim = h_claims.get(_key(candidate["from_ref"]))
@@ -283,7 +299,9 @@ def audit_h_transfers(root: Path, cutover: date, accounts: Path,
                                                 for owner, amount in sorted(target_units.items())},
                              "net_allocations": {owner: exact_text(amount)
                                                  for owner, amount in sorted(net.items()) if amount}}
-        if candidate["shape"] != "simple_cash":
+        if candidate["shape"] == "foreign_preserve" and claim is None:
+            state, codes = "UNSUPPORTED", ["H_TRANSFER_FOREIGN_PURPOSE_UNSUPPORTED"]
+        elif candidate["shape"] not in ("simple_cash", "foreign_preserve"):
             state, codes = "UNSUPPORTED", ["H_TRANSFER_SHAPE_UNSUPPORTED"]
         elif claim is None:
             state, codes = "NEEDS_REVIEW", [auto_reason or "H_TRANSFER_PENDING"]

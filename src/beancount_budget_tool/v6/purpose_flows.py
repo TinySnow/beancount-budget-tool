@@ -177,7 +177,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                 _key(event["to_ref"]) in used_h):
             continue  # independently certified by the FX protocol
         pending.append({"kind": "h_transfer", "ref": event["from_ref"],
-                        "reason": event["status"]})
+                        "reason": event["reason_codes"][0] if event["reason_codes"] else event["status"]})
 
     # Source refs do not contain a date. Use booked transaction dates for all
     # uncovered legs, including pad-generated postings.
