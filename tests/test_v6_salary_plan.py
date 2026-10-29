@@ -62,6 +62,10 @@ class SalaryPlanTests(unittest.TestCase):
         monthly=next(row for row in report['expense_targets']['categories'] if row['name']=='生活开销')
         self.assertEqual(monthly['subtree_spent'],'39')
         self.assertIn('发薪周期剩余额度 70',render_workflow_text(result))
+        text = render_workflow_text(result)
+        self.assertIn('发薪周期进度（截至月末 2023-07-31）', text)
+        self.assertIn('完整发薪周期：2023-07-08 至 2023-08-01', text)
+        self.assertIn('按 w 查看完整周期消费', text)
 
     def test_august_starts_new_cycle_including_all_of_next_payday(self):
         result=audit_simple(self.config)
@@ -71,6 +75,7 @@ class SalaryPlanTests(unittest.TestCase):
         self.assertEqual(cap['max_spendable'],'195')
         self.assertIsNone(cap['next_payday'])
         self.assertEqual(result['report']['salary_cycle']['report']['cycle_budget']['refunded'],'2')
+        self.assertIn('完整周期终点未定；跨月消费继续累计', render_workflow_text(result))
 
     def test_closed_saved_cycle_includes_august_first_excludes_next_payday(self):
         result=audit_configured_cycle(self.config,'2023-07-08')
@@ -79,6 +84,38 @@ class SalaryPlanTests(unittest.TestCase):
         self.assertEqual(result['next_payday'],'2023-08-02')
         self.assertEqual(result['report']['cycle_budget']['remaining'],'65')
         self.assertEqual({row['narration'] for row in result['report']['events']},{'payday purchase','July end','old cycle final day'})
+
+    def test_june_ninth_cycle_includes_july_fourteenth_but_not_fifteenth(self):
+        replacements = {'2023-07-01': '2023-06-01', '2023-07-07': '2023-06-08',
+                        '2023-07-08': '2023-06-09', '2023-07-31': '2023-06-30',
+                        '2023-08-01': '2023-07-01', '2023-08-02': '2023-07-15',
+                        '2023-08-30': '2023-07-30'}
+        import re
+        text = re.sub(r'2023-\d{2}-\d{2}', lambda match: replacements[match[0]],
+                      self.ledger.read_text(encoding='utf-8'))
+        text += ('\n2023-07-14 * "last day purchase"\n'
+                 '  Expenses:Food 11 CNY\n  Assets:Cash -11 CNY\n')
+        self.ledger.write_text(text, encoding='utf-8')
+        self.profile.update(cutover='2023-06-01', month='2023-06')
+        self.plans['months'] = {month: {'completeness_confirmed': True}
+                                for month in ('2023-06', '2023-07')}
+        self.plans['salary_cycles'] = {'2023-06-09': {'expense_targets': {'生活开销': '100'}},
+                                      '2023-07-15': {'expense_targets': {'生活开销': '200'}}}
+        self.write(self.config, self.profile); self.write(self.budgets, self.plans)
+        before = self.ledger.read_bytes()
+        browser = SimpleReportBrowser(self.config, '2023-06')
+        self.addCleanup(browser.close)
+        browser.select_saved_cycle('2023-06-09'); browser.refresh()
+        self.assertIsNone(browser.error)
+        result = browser.outcome
+        self.assertEqual(result['status'], 'CERTIFIED_SCOPED', result['review_items'])
+        self.assertEqual((result['from'], result['through'], result['next_payday']),
+                         ('2023-06-09', '2023-07-14', '2023-07-15'))
+        self.assertEqual(result['report']['cycle_budget']['net_spent'], '46')
+        self.assertEqual(result['report']['cycle_budget']['remaining'], '54')
+        self.assertEqual({row['date'] for row in result['report']['events']},
+                         {'2023-06-09', '2023-06-30', '2023-07-01', '2023-07-14'})
+        self.assertEqual(self.ledger.read_bytes(), before)
 
     def test_as_of_truncates_a_saved_cycle_and_late_cutoff_cannot_extend_it(self):
         early=audit_configured_cycle(self.config,'2023-07-08','2023-07-20')

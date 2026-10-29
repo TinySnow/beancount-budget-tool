@@ -424,9 +424,15 @@ def render_text(report: dict, *, columns: int = 76) -> str:
         lines[2:2] = [f"首个已配置发薪日：{report['salary_cycle']['first_payday']}；此前仅核对账务，不套用工资周期额度。", ""]
     if report.get("salary_cycle", {}).get("report"):
         cycle = report["salary_cycle"]
-        rows = [f"当前发薪周期：{cycle['from']} 起；本次统计至 {cycle['through']}。"
+        rows = [f"发薪周期进度（截至月末 {cycle['through']}）：{cycle['from']} 起。"
                 + (f"下次发薪日 {cycle['next_payday']} 归下一周期。" if cycle["next_payday"] else "下次发薪日尚未登记。")]
-        rows.append(f"周期额度（{currency}）")
+        if cycle['next_payday']:
+            from datetime import timedelta
+            end = (date.fromisoformat(cycle['next_payday']) - timedelta(days=1)).isoformat()
+            rows.append(f"完整发薪周期：{cycle['from']} 至 {end}；TUI 按 w 查看完整周期消费，跨月连续统计。")
+        else:
+            rows.append("下次发薪日尚未登记，完整周期终点未定；跨月消费继续累计，不在月初重置。")
+        rows.append(f"截至上述月末的周期额度与消费（{currency}）")
         rows += table(["类别", "额度", "净消费", "剩余", "状态"], [
             [row['category_name'], amount(row['target']) if row['target'] is not None else '-',
              amount(row['net_spent']), amount(row['remaining']) if row['remaining'] is not None else '-',

@@ -26,7 +26,7 @@ python -m beancount_budget_tool --config budget/simple/config.yml --month 2023-0
 
 TUI：`r` 重算，`m` 跳月，`n` 下一月，`Enter` 看完整来源，`?` 看帮助。明确的 `fund` 新用途自动识别；缺少金额、用途或证据时继续待审，不把计划变成现金。
 
-消费上限可按实际发薪周期：config.yml 设置 `expense_budget_basis: salary_cycle`，budgets.yml 的 `salary_cycles` 保存日期和额度。账务仍逐月核对，最多能花取当前周期剩余额度与已审可支付资金的较小值，额度不在月初重置。TUI `w` 直接选保存的周期，CLI 可用 `report --config config.yml --cycle current`。
+消费上限可按实际发薪周期：config.yml 设置 `expense_budget_basis: salary_cycle`，budgets.yml 的 `salary_cycles` 保存日期和额度。账务仍逐月核对，最多能花取当前周期剩余额度与已审可支付资金的较小值，额度不在月初重置。月报显示截至月末的周期进度；TUI `w` 直接选保存的周期，CLI 可用 `report --config config.yml --cycle current`。例如 6 月 9 日发薪、7 月 15 日再次发薪，选择 6 月 9 日周期会连续统计 6 月 9 日至 7 月 14 日消费；6 月月报的进度只统计至 6 月 30 日，保持与月末资金余额相同的截止日。
 
 ## 哪些文件不能删
 
