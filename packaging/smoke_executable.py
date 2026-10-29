@@ -227,6 +227,23 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             securities = document("--config", fx_config)
             assert securities["status"] == "CERTIFIED_SCOPED", securities
             assert fx_config.read_bytes() == original_fx_config
+        fx_text = fx_ledger.read_text(encoding="utf-8") + (
+            '\n2026-09-06 * "exact yen purchase"\n'
+            '  Assets:Foreign 550 JPY @@ 25.70 CNY\n    fund: "生活费"\n'
+            '  Assets:Cash -25.70 CNY\n    fund: "生活费"\n')
+        fx_ledger.write_text(fx_text, encoding="utf-8")
+        exact_fx = document("--config", fx_config)
+        assert exact_fx["status"] == "CERTIFIED_SCOPED", exact_fx
+        living = next(row for row in exact_fx["report"]["purpose_progress"]["owners"]
+                      if exact_fx["report"]["owner_names"][row["owner_id"]] == "生活费")
+        assert living["actual_g"] == "200", exact_fx
+        fx_ledger.write_text(fx_text.replace('  Assets:Foreign 550 JPY @@ 25.70 CNY\n    fund: "生活费"\n',
+                                           '  Assets:Foreign 550 JPY @@ 25.70 CNY\n'), encoding="utf-8")
+        missing_fund = document("--config", fx_config)
+        assert missing_fund["report"] is None, missing_fund
+        assert any(row["reason_code"] == "H_FX_PENDING" and "在 h_fx 中" not in row["detail"]
+                   for row in missing_fund["review_items"]), missing_fund
+        assert fx_config.read_bytes() == original_fx_config
         assert not (fx_dir / ".budget-state").exists()
         # Same source, portable path spelling, same complete audited report.
         profile = yaml.safe_load(config.read_text(encoding="utf-8"))

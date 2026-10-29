@@ -128,6 +128,56 @@ class HFXTests(unittest.TestCase):
         self.assertEqual((report["unsupported_events"], report["events"][0]["shape"]),
                          (1, "unsupported"))
 
+    def inline_funds(self, source='旅游', target='旅游', price='@@ 140 CNY'):
+        self.write_ledger(price)
+        text = self.root.read_text(encoding='utf-8')
+        if source is not None:
+            text = text.replace('  Assets:CNY -140 CNY\n', f'  Assets:CNY -140 CNY\n    fund: "{source}"\n')
+        if target is not None:
+            text = text.replace(f'  Assets:USD 20 USD {price}\n', f'  Assets:USD 20 USD {price}\n    fund: "{target}"\n')
+        self.root.write_text(text, encoding='utf-8')
+        snapshot = load_financial(self.root).digest
+        for path in (self.accounts, self.ownership):
+            doc = yaml.safe_load(path.read_text(encoding='utf-8'))
+            doc['ledger_snapshot'] = snapshot
+            if path == self.ownership:
+                doc['owners'].append({'id': 'savings', 'name': '储蓄', 'aliases': []})
+            path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding='utf-8')
+
+    def test_exact_total_and_explicit_same_funds_prove_fx_without_review_file(self):
+        for fund, owner in [('旅游', 'travel'), ('-', '-')]:
+            with self.subTest(fund=fund):
+                self.inline_funds(fund, fund)
+                before = {p: p.read_bytes() for p in (self.root, self.accounts, self.ownership)}
+                result = audit_h_fx(self.root, CUTOVER, self.accounts, self.ownership)
+                self.assertEqual(result['certified_events'], 1)
+                self.assertIsNone(result['review_sha256'])
+                event = result['events'][0]
+                self.assertEqual((event['owner_id'], event['quoted_total'], event['net_allocations']), (owner, '140', {}))
+                self.assertIn('直接证明', event['review_reason'])
+                self.assertTrue(all(p.read_bytes() == body for p, body in before.items()))
+                self.assertFalse(self.events.exists())
+
+    def test_missing_conflicting_or_multiple_inline_funds_are_not_implicitly_approved(self):
+        for source, target in [(None, '旅游'), ('旅游', None), ('旅游', '储蓄'),
+                               ('旅游70，储蓄70', '旅游10，储蓄10')]:
+            with self.subTest(source=source, target=target):
+                self.inline_funds(source, target)
+                result = audit_h_fx(self.root, CUTOVER, self.accounts, self.ownership)
+                self.assertEqual(result['certified_events'], 0)
+                self.assertEqual(result['events'][0]['reason_code'], 'H_FX_PENDING')
+        self.write_ledger('@@ 140 CNY')
+        self.set_legs()
+        self.assertEqual(audit_h_fx(self.root, CUTOVER, self.accounts, self.ownership)['certified_events'], 0)
+
+    def test_inline_evidence_does_not_relax_exact_total_or_cost_shape(self):
+        for price in ('@ 7 CNY', '{7 CNY}'):
+            with self.subTest(price=price):
+                self.inline_funds(price=price)
+                result = audit_h_fx(self.root, CUTOVER, self.accounts, self.ownership)
+                self.assertEqual(result['events'][0]['reason_code'], 'H_FX_SHAPE_UNSUPPORTED')
+                self.assertEqual(result['certified_events'], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

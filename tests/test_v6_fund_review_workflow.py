@@ -174,6 +174,11 @@ class FundReviewWorkflowTests(unittest.TestCase):
             config, ledger = self._config(Path(folder),
                 "自由资金100，储蓄200，旅游300", "自由资金100，储蓄200，旅游300",
                 include_fx=True)
+            # An unproven FX still exposes both sources. Complete same-fund
+            # inline evidence is now sufficient without a separate event file.
+            ledger.write_text(ledger.read_text(encoding="utf-8").replace(
+                '  Assets:Bank:USD 10 USD @@ 70 CNY\n    fund: "储蓄"\n',
+                '  Assets:Bank:USD 10 USD @@ 70 CNY\n'), encoding="utf-8")
             review = audit_review_queue(config, date(2026, 10, 1), date(2026, 10, 31))
             pending = [row for row in review["items"] if row["kind"] == "h_fx"]
             self.assertEqual(len(pending), 1)

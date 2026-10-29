@@ -44,6 +44,68 @@ class StatelessInputsTests(unittest.TestCase):
         self.assertEqual(self.manifest(), before)
         self.assertFalse((self.base / '.budget-state').exists())
 
+    def test_explicit_exact_total_fx_uses_ledger_only_and_loses_proof_after_fund_edit(self):
+        ledger = self.base / 'main.bean'
+        source = ledger.read_text(encoding='utf-8') + (
+            '\n2026-09-01 open Assets:JPY\n2026-09-04 * "buy yen"\n'
+            '  Assets:JPY 550 JPY @@ 25.70 CNY\n    fund: "生活费"\n'
+            '  Assets:Cash -25.70 CNY\n    fund: "生活费"\n')
+        ledger.write_text(source, encoding='utf-8')
+        doc = yaml.safe_load(self.config.read_text(encoding='utf-8'))
+        doc['account_groups'] = {'H': {'excluded': ['Assets:JPY']}}
+        _write(self.config, doc)
+        before = self.manifest()
+        result = audit_simple(self.config, include_transactions=True)
+        self.assertEqual(result['status'], 'CERTIFIED_SCOPED', result['review_items'])
+        report = result['report']
+        living = next(row for row in report['purpose_progress']['owners']
+                      if report['owner_names'][row['owner_id']] == '生活费')
+        self.assertEqual(living['actual_g'], '200')  # Exchange preserves purpose, adding no G.
+        self.assertEqual(report['max_spendable']['consumption_target_remaining'], '190')
+        self.assertEqual(self.manifest(), before)
+        browser = SimpleReportBrowser(self.config)
+        self.addCleanup(browser.close)
+        browser.refresh()
+        self.assertEqual(browser.outcome['status'], 'CERTIFIED_SCOPED')
+        ledger.write_text(source.replace('  Assets:JPY 550 JPY @@ 25.70 CNY\n    fund: "生活费"\n',
+                                         '  Assets:JPY 550 JPY @@ 25.70 CNY\n'), encoding='utf-8')
+        browser.refresh()
+        self.assertIsNone(browser.error)
+        self.assertIsNone(browser.outcome['report'])
+        item = next(row for row in browser.reviews() if row['reason_code'] == 'H_FX_PENDING')
+        self.assertIn('fund', item['detail'])
+        self.assertNotIn('在 h_fx 中', item['detail'])
+        self.assertFalse((self.base / '.budget-state').exists())
+
+    def fx_source(self):
+        ledger = self.base / 'main.bean'
+        source = ledger.read_text(encoding='utf-8') + (
+            '\n2026-09-01 open Assets:JPY\n2026-09-04 * "buy yen"\n'
+            '  Assets:JPY 550 JPY @@ 25.70 CNY\n    fund: "生活费"\n'
+            '  Assets:Cash -25.70 CNY\n    fund: "生活费"\n')
+        doc = yaml.safe_load(self.config.read_text(encoding='utf-8'))
+        doc['account_groups'] = {'H': {'excluded': ['Assets:JPY']}}
+        _write(self.config, doc)
+        return ledger, source
+
+    def test_fx_with_fee_cannot_use_the_two_leg_shortcut(self):
+        ledger, source = self.fx_source()
+        source = source.replace('  Assets:Cash -25.70 CNY\n    fund: "生活费"\n',
+                                '  Assets:Cash -26.70 CNY\n    fund: "生活费"\n  Expenses:Food 1 CNY\n')
+        ledger.write_text(source, encoding='utf-8')
+        result = audit_simple(self.config)
+        self.assertEqual(result['status'], 'IMPLEMENTATION_BLOCKED')
+        self.assertIsNone(result['report'])
+
+    def test_purchase_total_is_not_a_quote_for_later_foreign_consumption(self):
+        ledger, source = self.fx_source()
+        ledger.write_text(source + '\n2026-09-05 * "foreign expense"\n'
+            '  Expenses:Food 10 JPY\n  Assets:JPY -10 JPY\n    fund: "生活费"\n', encoding='utf-8')
+        result = audit_simple(self.config)
+        self.assertEqual(result['status'], 'NEEDS_REVIEW')
+        self.assertIsNone(result['report'])
+        self.assertTrue(any(row['reason_code'] == 'VALUATION_MISSING' for row in result['review_items']), result['review_items'])
+
     def test_poisoned_old_review_file_is_never_read_or_used(self):
         expected = audit_simple(self.config)
         old = self.base / '.budget-state/config/reviews.json.gz'

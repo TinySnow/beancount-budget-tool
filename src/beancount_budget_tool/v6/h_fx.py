@@ -159,8 +159,24 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
     for key in order:
         candidate = candidates[key]
         claim = claims.get(key)
+        inline_owner = None
+        if candidate["shape"] == "simple_buy" and claim is None:
+            # The ledger can state the complete preserve boundary itself.
+            # Never turn defaults, inferred ownership or external slices into
+            # an implicit FX approval: both booked legs must explicitly name
+            # the same single fund for their entire native quantities.
+            legs = [h_claims.get(_key(candidate[ref])) for ref in ("from_ref", "to_ref")]
+            if all(leg is not None and leg.get("origin") == "inline" and
+                   len(leg["slices"]) == 1 and leg["slices"][0]["role"] == "hold" and
+                   Fraction(leg["slices"][0]["signed_units"]) == Fraction(candidate[units])
+                   for leg, units in zip(legs, ("signed_from_units", "signed_to_units"))):
+                owners = [leg["slices"][0]["owner_id"] for leg in legs]
+                if owners[0] == owners[1]:
+                    inline_owner = owners[0]
         if candidate["shape"] != "simple_buy":
             status, code = "UNSUPPORTED", "H_FX_SHAPE_UNSUPPORTED"
+        elif inline_owner is not None:
+            status, code = "CERTIFIED", None
         elif claim is None:
             status, code = "NEEDS_REVIEW", "H_FX_PENDING"
         else:
@@ -179,8 +195,10 @@ def audit_h_fx(root: Path, cutover: date, accounts: Path, ownership: Path,
                         declarations, claim_locations[key])
                 status, code = "CERTIFIED", None
         events.append({**candidate, "status": status, "reason_code": code,
-                       "owner_id": claim["owner_id"] if status == "CERTIFIED" else None,
-                       "review_reason": claim["reason"] if claim else None,
+                       "owner_id": (inline_owner if inline_owner is not None else claim["owner_id"])
+                                   if status == "CERTIFIED" else None,
+                       "review_reason": ("原文精确总价与两条分录的同一单用途 fund 直接证明购汇保留用途"
+                                         if inline_owner is not None else claim["reason"] if claim else None),
                        "net_allocations": {} if status == "CERTIFIED" else None})
     return {"mode": "v6_simple_h_fx_audit", "cutover": cutover.isoformat(),
             "ledger_snapshot": fin.digest, "review_sha256": review_sha,
