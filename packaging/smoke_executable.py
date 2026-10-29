@@ -44,6 +44,28 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             return json.loads(run(*args, "--format", "json")[0])
 
         run("--version")
+        equity_dir = directory / "已有本金权益入账"
+        shutil.copytree(source / "simple", equity_dir)
+        equity_ledger = equity_dir / "main.bean"
+        equity_source = equity_ledger.read_text(encoding="utf-8") + (
+            '\n2026-09-01 open Equity:Init\n2026-09-09 * "old principal received"\n'
+            '  Assets:Cash 7894.17 CNY\n    fund: "额外储蓄"\n'
+            '  Equity:Init -7894.17 CNY\n')
+        equity_ledger.write_text(equity_source, encoding="utf-8")
+        received = document("--config", equity_dir / "config.yml", "--transactions")
+        assert received["status"] == "CERTIFIED_SCOPED", received
+        report = received["report"]
+        savings = next(key for key, name in report["owner_names"].items() if name == "额外储蓄")
+        assert next(row for row in report["purpose_progress"]["owners"] if row["owner_id"] == savings)["actual_g"] == "0", received
+        assert next(row for row in report["account_purposes"]["rows"] if row["owner_id"] == savings)["units"] == "789417/100", received
+        assert report["max_spendable"]["max_spendable"] == "190", received
+        event = next(row for row in report["transactions"]["rows"] if row["narration"] == "old principal received")
+        assert event["purpose_events"][0]["protocol"]["protocol"] == "explicit_equity_receipt_v1", event
+        assert event["net_allocations"] == {}, event
+        equity_ledger.write_text(equity_source.replace('    fund: "额外储蓄"\n', ''), encoding="utf-8")
+        missing_equity_fund = document("--config", equity_dir / "config.yml")
+        assert missing_equity_fund["report"] is None, missing_equity_fund
+        assert any(row["reason_code"] == "OWNERSHIP_UNREVIEWED" for row in missing_equity_fund["review_items"]), missing_equity_fund
         liabilities = directory / "负债自动清算"
         shutil.copytree(source / "liabilities", liabilities)
         automatic = document("--config", liabilities / "config.yml", "--transactions")

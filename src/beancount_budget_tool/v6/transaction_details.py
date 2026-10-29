@@ -240,6 +240,9 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
                          "不计个人收入、消费或正式划拨 G。")
     for event in record["purpose_events"]:
         protocol = event.get("protocol", {})
+        if event['kind'] == 'equity_receipt':
+            lines.append(f"权益资金入账：{amount_text(protocol['signed_units'])} {protocol['commodity']}，"
+                         "用途来自本条 fund；不计当期收入、消费或正式划拨 G，不反推历史余额。")
         if protocol.get("protocol") == "inline_income_allocation_v1":
             lines.append("收入到账按显式 fund 直接分配；计入用途目标，后续同用途搬移不重复计数。")
         if event['kind'] == 'h_bundle':

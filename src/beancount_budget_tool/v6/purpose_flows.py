@@ -19,7 +19,7 @@ from .h_fx import audit_h_fx
 from .h_gains import audit_h_income_gains
 from .h_transfers import audit_h_transfers, compile_h_redemption
 from .holdings import audit_h_holdings
-from .initialization import initial_pad_postings
+from .initialization import initial_pad_postings, explicit_equity_receipt
 from .k_events import audit_k_events
 from .obligations import audit_simple_obligations
 from .native_flows import native_asset_flow
@@ -192,6 +192,9 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
         if not isinstance(entry, data.Transaction) or not first <= entry.date <= last or any(
                 posting.account in pool_accounts for posting in entry.postings):
             continue
+        receipt = explicit_equity_receipt(fin, entry, facts, modes, claims)
+        if receipt is not None:
+            add("equity_receipt", receipt, [receipt["asset_ref"]], {}, source_refs=[receipt["equity_ref"]])
         redemption = compile_h_redemption(fin, entry, facts, modes, claims)
         if redemption is None:
             continue
