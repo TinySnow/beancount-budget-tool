@@ -68,11 +68,12 @@ class MonthlyReportTextTests(unittest.TestCase):
         }
         rendered = render_text(report)
         self.assertIn("实际可花：待审（EXTERNAL_SCOPE_PENDING）", rendered)
-        self.assertIn("实际 2339.58，差额 -339.58 CNY", rendered)
-        self.assertIn("实际 684.94，差额 15.06 CNY", rendered)
-        self.assertIn("生活费：实际净划拨 2000 CNY；本月不考核划拨目标", rendered)
+        rows = [line.split() for line in rendered.splitlines()]
+        self.assertIn(["生活费（含子类）", "2000", "2339.58", "-339.58", "超支"], rows)
+        self.assertIn(["savings", "700", "684.94", "15.06", "未达成"], rows)
+        self.assertIn(["生活费", "-", "2000", "-", "不考核"], rows)
         self.assertIn("待投资金 91733.825 CNY", rendered)
-        self.assertIn("emergency：实际 0，无目标", rendered)
+        self.assertIn(["emergency", "-", "0", "-", "无目标"], rows)
         self.assertIn("Assets:Bank：生活费 -100 CNY", rendered)
         self.assertIn("K 账面申赎及用途变动（非真实持仓；不可与 H 余额相加）", rendered)
         self.assertIn("Assets:Fund:CCB：账面期初 40479.58，本期变动 2000，期末 42479.58 CNY", rendered)

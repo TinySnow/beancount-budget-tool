@@ -149,8 +149,8 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
                           render_workflow_text(outcome))
             self.assertIn("警告：Assets:Bank 的 生活费 用途份额为 -10 CNY",
                           render_workflow_text(outcome))
-            self.assertIn("实际 10，差额 -10 CNY（支出 10，退款／冲回 0）",
-                          render_workflow_text(outcome))
+            self.assertIn(["餐饮（含子类）", "0", "10", "-10", "超支"],
+                          [line.split() for line in render_workflow_text(outcome).splitlines()])
             self.assertIn("十月日常：支出 10，退款／冲回 0，净额 10 CNY",
                           render_workflow_text(outcome))
 

@@ -89,7 +89,8 @@ class UnassessedExpenseTests(unittest.TestCase):
         self.assertIsNone(root["subtree_remaining"])
         text = render_workflow_text(outcome)
         self.assertIn("本月消费上限不考核", text)
-        self.assertIn("实际 10 CNY", text)
+        self.assertIn(["生活开销（含子类）", "-", "10", "-", "不考核"],
+                      [line.split() for line in text.splitlines()])
         self.assertNotIn("待审", text)
         self.assertNotIn("目标 0", text)
 

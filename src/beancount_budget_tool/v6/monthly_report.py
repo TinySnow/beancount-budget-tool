@@ -14,6 +14,7 @@ import sys
 from ..runtime_inputs import input_bytes, input_is_file
 from ..errors import BudgetError, require
 from ..exact import exact_text, amount_text
+from ..text_table import table
 from ..financial import booked_through, frozen_financial, load_financial, financial_session
 from ..yamlstrict import load_yaml, yaml_key_location
 from .actual_snapshot import audit_actual_snapshot
@@ -325,7 +326,7 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
             "pending_metrics": pending}
 
 
-def render_workflow_text(outcome: dict) -> str:
+def render_workflow_text(outcome: dict, *, columns: int = 76) -> str:
     if outcome.get("configuration_only"):
         return "\n".join([f"v6 {outcome['month']} 配置待审：NEEDS_REVIEW",
             *[f"{item['detail']} [{item['source']}]" for item in outcome["review_items"]],
@@ -381,7 +382,7 @@ def render_workflow_text(outcome: dict) -> str:
                 lines.append(f"    {account}：K 期初或申赎用途待审")
         lines.append("本次不签发完整月报；修正上述问题后重跑。")
         return "\n".join(lines)
-    rendered = render_text(outcome["report"])
+    rendered = render_text(outcome["report"], columns=columns)
     review = outcome["review_queue"]
     if not review["booked_transactions_in_range"]:
         latest = review["latest_booked_transaction_date"] or "无"
@@ -390,7 +391,7 @@ def render_workflow_text(outcome: dict) -> str:
     return rendered
 
 
-def render_text(report: dict) -> str:
+def render_text(report: dict, *, columns: int = 76) -> str:
     """Show only rows carrying an independently certified value."""
     amount = amount_text
 
@@ -415,7 +416,7 @@ def render_text(report: dict) -> str:
     else:
         headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
-             headline, "", ("自然月消费目标（与发薪周期额度分别显示）" if "salary_cycle" in report else "消费目标（目标 − 实际；负数为超支）")]
+             headline, "", (f"自然月消费目标（{currency}；与发薪周期额度分别显示）" if "salary_cycle" in report else f"消费目标（{currency}；差额=目标-实际，负数为超支）")]
     if actual.get("same_day_clearings"):
         lines[2:2] = [f"本月已审同日责任清算 {len(actual['same_day_clearings'])} 条：已确认付款与责任来源对应，"
                       "未确认实际日内先后；保留原顺序，按日末余额签发。", ""]
@@ -425,9 +426,12 @@ def render_text(report: dict) -> str:
         cycle = report["salary_cycle"]
         rows = [f"当前发薪周期：{cycle['from']} 起；本次统计至 {cycle['through']}。"
                 + (f"下次发薪日 {cycle['next_payday']} 归下一周期。" if cycle["next_payday"] else "下次发薪日尚未登记。")]
-        for row in cycle["report"]["cycle_targets"]:
-            rows.append(f"  {row['category_name']}：周期额度 {amount(row['target']) if row['target'] is not None else '不考核'}，"
-                        f"净消费 {amount(row['net_spent'])}，剩余 {amount(row['remaining']) if row['remaining'] is not None else '不计算'} {currency}")
+        rows.append(f"周期额度（{currency}）")
+        rows += table(["类别", "额度", "净消费", "剩余", "状态"], [
+            [row['category_name'], amount(row['target']) if row['target'] is not None else '-',
+             amount(row['net_spent']), amount(row['remaining']) if row['remaining'] is not None else '-',
+             '不考核' if row['target'] is None else '超支' if Fraction(row['remaining']) < 0 else '未超支']
+            for row in cycle["report"]["cycle_targets"]], numeric=(1, 2, 3), columns=columns)
         lines[2:2] = [*rows, ""]
     if actual["status"] == "CERTIFIED" and actual.get("clearing_receivables"):
         ruled_credit = any(row.get("origin") == "account_rule" for row in actual["clearing_receivables"])
@@ -464,16 +468,14 @@ def render_text(report: dict) -> str:
                 f"{amount(row['units'])} {currency}" +
                 ("（警告：可动用现金为负）" if Fraction(row["units"]) < 0 else "")
                 for row in actual["purpose_available"]), ""]
-    shown = 0
+    expense_rows, refund_details = [], []
     for row in expense["categories"]:
         if row.get("subtree_remaining_status") == "NOT_ASSESSED":
-            lines.append(f"  {row['name']}（含子类）：不考核消费上限，实际 {amount(row['subtree_spent'])} {currency}；不计算目标差额")
-            shown += 1
+            expense_rows.append([row['name'] + '（含子类）', '-', amount(row['subtree_spent']), '-', '不考核'])
             if row["direct_target"] is None:
                 continue
         elif row.get("direct_remaining_status") == "NOT_ASSESSED" and row["subtree_target_kind"] != "explicit":
-            lines.append(f"  {row['name']}：直接费用目标不考核，实际 {amount(row['direct_spent'])} {currency}；不计算直接目标差额")
-            shown += 1
+            expense_rows.append([row['name'] + '（直接）', '-', amount(row['direct_spent']), '-', '不考核'])
             continue
         if row["subtree_target_kind"] != "explicit" and row["direct_target"] is None:
             continue
@@ -484,16 +486,19 @@ def render_text(report: dict) -> str:
         refund_key = "subtree_refunded" if subtree else "direct_refunded"
         target_key = "subtree_target" if subtree else "direct_target"
         remain_key = "subtree_remaining" if subtree else "direct_remaining"
-        label = row["name"] + ("（含子类）" if subtree else "")
+        label = row["name"] + ("（含子类）" if subtree else "（直接）")
         if row[status_key] == "CERTIFIED":
-            detail = (f"（支出 {amount(row[gross_key])}，"
-                      f"退款／冲回 {amount(row[refund_key])}）") if row.get(gross_key) is not None else ""
-            lines.append(f"  {label}：目标 {amount(row[target_key])}，实际 {amount(row[amount_key])}，"
-                         f"差额 {amount(row[remain_key])} {currency}{detail}")
+            expense_rows.append([label, amount(row[target_key]), amount(row[amount_key]), amount(row[remain_key]),
+                                 '超支' if Fraction(row[remain_key]) < 0 else '未超支'])
+            if row.get(gross_key) is not None and Fraction(row[refund_key]):
+                refund_details.append(f"  {label}：支出 {amount(row[gross_key])}，退款／冲回 {amount(row[refund_key])} {currency}")
         else:
-            lines.append(f"  {label}：待审（目标 {row[target_key]}）")
-        shown += 1
-    if not shown:
+            expense_rows.append([label, amount(row[target_key]) if row[target_key] is not None else '待定',
+                                 '-', '-', '待审'])
+    if expense_rows:
+        lines += table(["类别", "目标", "净消费", "差额", "状态"], expense_rows, numeric=(1, 2, 3), columns=columns)
+        lines += refund_details
+    else:
         lines.append("  无已声明的消费目标")
     activity = report.get("liability_activity")
     if activity:
@@ -527,20 +532,24 @@ def render_text(report: dict) -> str:
                 label = position['account'] or '联合来源（未猜各账户分摊）：'+'、'.join(position['source_accounts'])
                 lines.append(f"    {label}：净流出 {amount(position['net_outflow'])} {row['commodity']}")
         lines.append("  刷卡在实际还款时计入；资产搬移、购汇和申赎不计入。此处汇总资金流向，余额和预算差额各按原口径计算。")
-    lines += ["", "用途划拨（目标 Q − 实际 G；负数为超额划拨）"]
+    lines += ["", f"用途划拨（{currency}；差额=目标Q-实际G，负数为超额划拨）"]
+    purpose_rows = []
     for row in purpose["owners"]:
         name = owner_names.get(row["owner_id"], row["owner_id"])
         if row["status"] == "CERTIFIED":
             completion = "已达成" if Fraction(row["remaining_q_minus_g"]) <= 0 else "未达成"
-            lines.append(f"  {name}：目标 {amount(row['target_q'])}，实际 {amount(row['actual_g'])}，差额 {amount(row['remaining_q_minus_g'])} {currency}；{completion}")
+            purpose_rows.append([name, amount(row['target_q']), amount(row['actual_g']),
+                                 amount(row['remaining_q_minus_g']), completion])
         elif row["status"] == "NOT_ASSESSED":
             value = amount(row["actual_g"]) if row["actual_g"] is not None else "待审"
-            lines.append(f"  {name}：实际净划拨 {value} {currency}；本月不考核划拨目标")
+            purpose_rows.append([name, '-', value, '-', '不考核'])
         elif row["status"] == "TARGET_MISSING":
-            lines.append(f"  {name}：实际 {amount(row['actual_g']) if row['actual_g'] is not None else '待审'}，无目标")
+            purpose_rows.append([name, '-', amount(row['actual_g']) if row['actual_g'] is not None else '待审', '-', '无目标'])
         else:
-            lines.append(f"  {name}：{row['status']}")
-    lines += ["", "证券资金池（账面成本口径）"]
+            purpose_rows.append([name, '-', '-', '-', row['status']])
+    lines += table(["用途", "目标 Q", "实际 G", "差额", "状态"], purpose_rows, numeric=(1, 2, 3), columns=columns)
+    if report["purpose_pools"]["pools"]:
+        lines += ["", "证券资金池（账面成本口径）"]
     for pool in report["purpose_pools"]["pools"]:
         lines.append(f"  {pool['id']}：{pool['protected_label']} {amount(pool['protected_nominal_principal'])}，"
                      f"{pool['remainder_label']} {amount(pool['remainder_book_cost'])} {currency}；市值未知")

@@ -63,7 +63,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
         rows = {report['owner_names'][row['owner_id']]: row for row in report['purpose_progress']['owners']}
         self.assertEqual(rows['储蓄']['actual_g'], '1000')
         self.assertEqual(rows['储蓄']['remaining_q_minus_g'], '0')
-        self.assertIn('储蓄：目标 1000，实际 1000，差额 0 CNY；已达成', render_workflow_text(value))
+        self.assertIn(['储蓄', '1000', '1000', '0', '已达成'], [line.split() for line in render_workflow_text(value).splitlines()])
         self.assertEqual(sum(int(row['actual_g']) for row in rows.values()), 0)
         moves = [row for row in report['transactions']['rows'] if row['narration'].startswith('move')]
         self.assertTrue(all(row['net_allocations'] == {} for row in moves))
@@ -71,7 +71,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
     def test_overfunded_goals_are_met_and_older_months_do_not_count_again(self):
         self.plans['months']['2024-01']['allocation_targets']['储蓄'] = '900'
         self.save()
-        self.assertIn('差额 -100 CNY；已达成', render_workflow_text(self.outcome()))
+        self.assertIn(['储蓄', '900', '1000', '-100', '已达成'], [line.split() for line in render_workflow_text(self.outcome()).splitlines()])
         self.assertTrue(all(row['actual_g'] == '0' for row in self.outcome('2024-02')['report']['purpose_progress']['owners']))
 
     def test_pool_internal_income_remains_a_gain_instead_of_a_new_allocation(self):
@@ -109,7 +109,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
         self.ledger.write_text(self.source + '2024-01-08 * "return salary"\n'
             '  Assets:Bank -10 CNY\n    fund: "储蓄"\n  Income:Salary 10 CNY\n', encoding='utf-8')
         value = self.outcome()
-        self.assertIn('储蓄：目标 1000，实际 990，差额 10 CNY；未达成', render_workflow_text(value))
+        self.assertIn(['储蓄', '1000', '990', '10', '未达成'], [line.split() for line in render_workflow_text(value).splitlines()])
 
     def test_grouped_accounts_and_scalar_salary_limits_match_full_configuration(self):
         self.profile['expense_budget_basis'] = 'salary_cycle'

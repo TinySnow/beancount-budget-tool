@@ -396,13 +396,31 @@ class ReportBrowser:
         self.newest_first = not self.newest_first
         self.selected = self.offset = 0
 
-    def report_lines(self) -> list[str]:
+    def report_lines(self, columns: int | None = None) -> list[str]:
+        lines = self.lines
+        if columns is not None and self.outcome is not None and not self.period:
+            from .monthly_report import render_workflow_text
+            if self.renderer is render_workflow_text:
+                # Rendering only: resizing must never trigger another audit.
+                lines = render_workflow_text(self.outcome, columns=columns).splitlines()
         if not self.query:
-            return self.lines
+            return lines
         query = self.query.casefold()
         # A filtered report must not hide deficit warnings or its headline.
-        return [line for index, line in enumerate(self.lines)
-                if index < 2 or "警告" in line or query in line.casefold()] or ["没有匹配行"]
+        # Keep matching numeric tables together: wrapped names and narrow-mode
+        # labelled values must not become detached from their headers/amounts.
+        keep = set()
+        start = 0
+        for end in range(len(lines) + 1):
+            if end < len(lines) and lines[end]:
+                continue
+            block = lines[start:end]
+            if any(line.startswith(("用途划拨", "消费目标", "自然月消费目标", "周期额度")) for line in block) and \
+                    query in "\n".join(block).casefold():
+                keep.update(range(start, end))
+            start = end + 1
+        return [line for index, line in enumerate(lines)
+                if index < 2 or index in keep or "警告" in line or query in line.casefold()] or ["没有匹配行"]
 
     def open_detail(self):
         items = self.items()
@@ -607,7 +625,7 @@ def _draw_browser(stdscr, browser: ReportBrowser):
             lines = (["没有匹配交易；筛选不改变上方交易总数和预算数字。"] if browser.view == "transactions" else
                      ["没有匹配待审项；筛选不改变上方待审总数与认证状态。"])
     else:
-        lines = browser.report_lines()
+        lines = browser.report_lines(columns=width - 1)
     if browser.has_transactions() and browser.view == "transactions" and not browser.help:
         warning_count = sum(line.lstrip().startswith("警告：") for line in browser.lines)
         if warning_count:
