@@ -1,6 +1,7 @@
 """Daily review: direct funding, compact inputs, navigation and live saves."""
 
 import curses
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -137,6 +138,68 @@ class MonthlyUsabilityTests(unittest.TestCase):
             audit_simple(self.config)
         self.assertEqual(caught.exception.code, 'SIMPLE_ACCOUNT_DUPLICATE')
         self.assertTrue(caught.exception.source.startswith(str(self.config) + ':'))
+
+    def foreign_income(self, account='Assets:Foreign', day='2024-01-08'):
+        self.ledger.write_text(self.source +
+            '2024-01-01 open Assets:Foreign\n' +
+            f'{day} price JPY 0.05 CNY\n' +
+            f'{day} * "foreign income"\n  {account} 100 JPY\n  Income:Salary -100 JPY\n', encoding='utf-8')
+
+    def test_foreign_only_group_does_not_invent_report_currency_or_approve_foreign_cash(self):
+        from beancount_budget_tool.v6.simple_config import build_runtime
+        self.foreign_income()
+        for group in ('payable', 'excluded'):
+            with self.subTest(group=group):
+                self.profile['account_groups']['H'] = {'payable': ['Assets:Cash', 'Assets:Bank'],
+                                                       **({} if group == 'payable' else {'excluded': []})}
+                self.profile['account_groups']['H'][group].append('Assets:Foreign')
+                self.profile.pop('accounts', None)
+                self.save()
+                result = audit_simple(self.config)
+                self.assertEqual(result['status'], 'NEEDS_REVIEW')
+                self.assertIsNone(result['report'])
+                self.assertTrue(any('Assets:Foreign / JPY' in item['detail']
+                                    for item in result['review_items']), result['review_items'])
+                self.profile['accounts'] = {'Assets:Foreign': {'payment_scope': {'JPY': 'excluded'}}}
+                self.save()
+                before = {p: p.read_bytes() for p in (self.config, self.budgets, self.ledger)}
+                with closing(build_runtime(self.config)) as runtime:
+                    accounts = yaml.safe_load((runtime.config.parent / 'accounts.yaml').read_text(encoding='utf-8'))
+                    row = next(row for row in accounts['accounts'] if row['account'] == 'Assets:Foreign')
+                    self.assertEqual(row['payment_scope'], {'JPY': 'excluded'})
+                self.outcome()
+                self.assertTrue(all(p.read_bytes() == body for p, body in before.items()))
+                self.assertFalse((self.base / '.budget-state').exists())
+
+    def test_new_foreign_currency_preserves_group_report_currency_and_explicit_exception(self):
+        from beancount_budget_tool.v6.simple_config import build_runtime
+        self.foreign_income('Assets:Cash')
+        result = audit_simple(self.config)
+        self.assertTrue(any('Assets:Cash / JPY' in item['detail'] for item in result['review_items']))
+        self.profile['accounts'] = {'Assets:Cash': {'payment_scope': {'JPY': 'excluded'}}}
+        self.save()
+        with closing(build_runtime(self.config)) as runtime:
+            accounts = yaml.safe_load((runtime.config.parent / 'accounts.yaml').read_text(encoding='utf-8'))
+            row = next(row for row in accounts['accounts'] if row['account'] == 'Assets:Cash')
+            self.assertEqual(row['payment_scope'], {'CNY': 'payable', 'JPY': 'excluded'})
+        self.outcome()
+
+    def test_future_foreign_scope_does_not_break_earlier_month_or_change_cash(self):
+        previous = self.outcome()['report']['max_spendable']
+        self.foreign_income('Assets:Cash', '2024-02-08')
+        self.profile['accounts'] = {'Assets:Cash': {'payment_scope': {'JPY': 'excluded'}}}
+        self.save()
+        self.assertEqual(self.outcome()['report']['max_spendable'], previous)
+        self.outcome('2024-02')
+
+    def test_unknown_currency_still_fails_and_open_currency_is_not_a_cash_fact(self):
+        self.ledger.write_text(self.source.replace('open Assets:Cash\n', 'open Assets:Cash CNY, JPY\n'), encoding='utf-8')
+        self.outcome()
+        self.profile['accounts'] = {'Assets:Cash': {'payment_scope': {'JPY': 'excluded'}}}
+        self.save()
+        with self.assertRaises(BudgetError) as caught:
+            audit_simple(self.config)
+        self.assertEqual(caught.exception.code, 'SETUP_ACCOUNT_INVALID')
 
     def test_group_opening_exception_and_unknown_account_stays_pending(self):
         self.profile['accounts'] = {'Assets:Cash': {'opening': {}}}

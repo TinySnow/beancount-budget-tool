@@ -236,10 +236,13 @@ def compile_inputs(doc: dict, source: Path, output: Path, *, location=None) -> t
                 pending((*keys, "semantics"), f"{account}：选择 H（真实余额）或 K（累计申赎）")
             scope = row["payment_scope"]
             require(type(scope) is dict and set(scope) == set(original["commodities"]),
-                    "SETUP_ACCOUNT_INVALID", "支付范围的币种须与当前账本一致", loc((*keys, "payment_scope")))
+                    "SETUP_ACCOUNT_INVALID", f"{account}：支付范围的币种须与当前账本一致（实际：{', '.join(original['commodities'])}）", loc((*keys, "payment_scope")))
             for commodity, value in scope.items():
                 if value not in ("payable", "excluded", "pending") or mode == "K" and value != "excluded":
-                    pending((*keys, "payment_scope", commodity), "选择 payable／excluded／pending；K 只能 excluded")
+                    choices = ("excluded／pending（外币不计入首页直接可支付）" if commodity != doc["report_currency"]
+                               else "payable／excluded／pending；K 只能 excluded")
+                    pending((*keys, "payment_scope", commodity),
+                            f"{account} / {commodity}：在 accounts 的 payment_scope 中选择 {choices}")
             if type(row["reason"]) is not str or not row["reason"].strip():
                 pending((*keys, "reason"), "填写账户语义、支付范围及期初判断依据")
             expected = {(c["commodity"], c["lot"]): c["signed_units"] for c in original["opening_coordinates"]

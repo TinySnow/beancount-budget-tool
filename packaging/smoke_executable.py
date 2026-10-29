@@ -191,6 +191,29 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert created["config"].endswith("config.yml"), created
         generated = document("--config", created["config"])
         assert generated["report"] is None and generated["review_items"], generated
+        # First foreign-currency posting in a grouped account: ask for its
+        # payment scope, never invent CNY or approve JPY as direct cash.
+        fx_dir = directory / "首次外币"
+        shutil.copytree(source / "simple", fx_dir)
+        fx_config = fx_dir / "config.yml"
+        fx_profile = yaml.safe_load(fx_config.read_text(encoding="utf-8"))
+        fx_profile.pop("accounts")
+        fx_profile["account_groups"] = {"H": {"payable": ["Assets:Cash", "Assets:Foreign"]}}
+        fx_config.write_text(yaml.safe_dump(fx_profile, allow_unicode=True), encoding="utf-8")
+        fx_ledger = fx_dir / "main.bean"
+        fx_ledger.write_text(fx_ledger.read_text(encoding="utf-8") +
+            '\n2026-09-01 open Assets:Foreign\n2026-09-04 price JPY 0.05 CNY\n'
+            '2026-09-04 * "foreign income"\n  Assets:Foreign 100 JPY\n  Income:Salary -100 JPY\n', encoding="utf-8")
+        pending_fx = document("--config", fx_config)
+        assert pending_fx["status"] == "NEEDS_REVIEW" and pending_fx["report"] is None, pending_fx
+        assert any("Assets:Foreign / JPY" in row["detail"] for row in pending_fx["review_items"]), pending_fx
+        fx_profile["accounts"] = {"Assets:Foreign": {"payment_scope": {"JPY": "excluded"}}}
+        fx_config.write_text(yaml.safe_dump(fx_profile, allow_unicode=True), encoding="utf-8")
+        fx_inputs = {p: p.read_bytes() for p in fx_dir.iterdir() if p.is_file()}
+        approved_fx = document("--config", fx_config)
+        assert approved_fx["status"] == "CERTIFIED_SCOPED", approved_fx
+        assert all(p.read_bytes() == body for p, body in fx_inputs.items())
+        assert not (fx_dir / ".budget-state").exists()
         # Same source, portable path spelling, same complete audited report.
         profile = yaml.safe_load(config.read_text(encoding="utf-8"))
         profile["ledger"], profile["budgets"] = ".\\main.bean", ".\\budgets.yml"

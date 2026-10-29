@@ -56,7 +56,7 @@ def _unchanged(inputs: dict):
             "INPUT_CHANGED", "配置、预算或审阅记录在计算期间改变；请重算")
 
 
-def _grouped_accounts(doc: dict, config: Path) -> tuple[dict, dict]:
+def _grouped_accounts(doc: dict, config: Path, commodities: dict[str, set[str]]) -> tuple[dict, dict]:
     """Expand explicit account lists; never classify by account name or prefix."""
     groups = doc.get("account_groups", {})
     require_yaml(type(groups) is dict and set(groups) <= {"H", "K"},
@@ -73,7 +73,10 @@ def _grouped_accounts(doc: dict, config: Path) -> tuple[dict, dict]:
             require_yaml(type(name) is str and bool(name) and name == name.strip(),
                          "SIMPLE_ACCOUNT_INVALID", "账户名须为非空字符串", config, (*keys, index))
             require_yaml(name not in accounts, "SIMPLE_ACCOUNT_DUPLICATE", "账户不能重复列入多个组", config, (*keys, index))
-            accounts[name] = {"semantics": semantics, "payment_scope": {doc["report_currency"]: scope}}
+            # A group decides only the report currency. Do not invent a CNY
+            # posting for an account whose actual inventory is JPY-only.
+            payment = {doc["report_currency"]: scope} if doc["report_currency"] in commodities.get(name, set()) else {}
+            accounts[name] = {"semantics": semantics, "payment_scope": payment}
             locations[name] = (*keys, index)
     for name, settings in doc.get("accounts", {}).items():
         require_yaml(type(settings) is dict, "SIMPLE_ACCOUNT_INVALID", "账户设置须为映射", config, ("accounts", name))
@@ -320,7 +323,13 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
             filled["expense_targets"].setdefault(name, "not_assessed")
     if "income_category" in doc["defaults"]:
         filled["expense_targets"].setdefault(doc["defaults"]["income_category"], "not_assessed")
-    declared_accounts, account_locations = _grouped_accounts(doc, config)
+    current_commodities = {row["account"]: set(row["payment_scope"]) for row in filled["accounts"]}
+    known_commodities = {}
+    for entry in fin.entries:
+        if isinstance(entry, data.Transaction):
+            for posting in entry.postings:
+                known_commodities.setdefault(posting.account, set()).add(posting.units.currency)
+    declared_accounts, account_locations = _grouped_accounts(doc, config, current_commodities)
     for row in filled["accounts"]:
         name = row["account"]
         declared = declared_accounts.get(name, doc.get("account_defaults", {}))
@@ -329,7 +338,11 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
         row["semantics"] = declared.get("semantics")
         require_yaml(type(declared.get("payment_scope", {})) is dict, "SIMPLE_ACCOUNT_INVALID",
                      "payment_scope 须为币种到 payable／excluded／pending 的映射", config, ("accounts", name, "payment_scope"))
-        row["payment_scope"].update(declared.get("payment_scope", {}))
+        # A single public config serves older months too. Declarations for
+        # actual later postings must not add those currencies to past cash.
+        # Unknown currencies remain visible to the compiler's strict check.
+        row["payment_scope"].update({commodity: scope for commodity, scope in declared.get("payment_scope", {}).items()
+            if commodity in current_commodities[name] or commodity not in known_commodities.get(name, set())})
         row["reason"] = f"使用者在 {config.name} 中声明账户属性"
         opening = declared.get("opening", {})
         require_yaml(type(opening) in (dict, list), "SIMPLE_ACCOUNT_INVALID", "opening 须为币种用途映射或完整坐标列表", config, ("accounts", name, "opening"))
