@@ -247,12 +247,19 @@ class Runtime:
     def rewrite_sources(self, result):
         """Apply this runtime's public names to an already owned result tree."""
         if self.config:
-            for row in result.get("months", []):
-                if (row.get("config") or "").startswith(str(self.config.parent)):
-                    row["config"] = str(self.source)
+            def public_config(node):
+                if isinstance(node, dict):
+                    value = node.get('config')
+                    if isinstance(value, str) and Path(value).is_relative_to(self.config.parent):
+                        node['config'] = str(self.source)
+                    for value in node.values():
+                        public_config(value)
+                elif isinstance(node, list):
+                    for value in node:
+                        public_config(value)
+
+            public_config(result)
             for item in result.get("review_items", []):
-                if (item.get("config") or "").startswith(str(self.config.parent)):
-                    item["config"] = str(self.source)
                 if item.get("reason_code") == "EXTERNAL_SCOPE_PENDING":
                     item["detail"] = "核对本月末账单后，在 budgets.yml 对应月份填写 completeness_confirmed: true 并重算；下一月须单独配置。"
                     item["source"] = yaml_path_location(self.budgets, ("months", item.get("month", result.get("month", self.month)), "completeness_confirmed"))

@@ -32,6 +32,7 @@ class NativeIntegrationTests(unittest.TestCase):
     def test_browser_month_period_and_saved_cycle_keep_native_report_and_details(self):
         self.edit('budgets.yml', lambda doc: doc.update(salary_cycles={
             '2025-01-01': '100', '2025-02-02': '200'}))
+        self.edit('config.yml', lambda doc: doc.update(expense_budget_basis='salary_cycle'))
         browser = SimpleReportBrowser(self.config)
         self.addCleanup(browser.close)
         browser.refresh()
@@ -40,14 +41,18 @@ class NativeIntegrationTests(unittest.TestCase):
         self.assertTrue(browser.has_transactions())
         self.assertTrue(any(row['narration'] == 'Synthetic foreign purchase' for row in browser.transactions()))
         self.assertEqual(browser.outcome, audit_simple(self.config, include_transactions=True))
+        self.assertEqual(browser.outcome['report']['salary_cycle']['config'], str(self.config.resolve()))
         browser.period, browser.period_range = True, ('2025-01', '2025-02')
         browser.refresh()
         self.assertIsNone(browser.error)
         self.assertEqual(browser.outcome, audit_simple_period(self.config, '2025-01', '2025-02'))
+        for month in browser.outcome['report']['monthly_reports']:
+            self.assertEqual(month['salary_cycle']['config'], str(self.config.resolve()))
         browser.select_saved_cycle('2025-01-01')
         browser.refresh()
         self.assertIsNone(browser.error)
         self.assertEqual(browser.outcome['status'], 'CERTIFIED_NATIVE_SCOPED')
+        self.assertEqual(browser.outcome['config'], str(self.config.resolve()))
         self.assertEqual(browser.outcome['through'], '2025-02-01')
         self.assertEqual(browser.outcome['report']['cycle_budget']['net_spent'], '5')
         self.assertEqual(browser.outcome['report']['multicurrency']['native_expenses'][-1]['net'], '550')

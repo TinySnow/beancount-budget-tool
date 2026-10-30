@@ -67,6 +67,7 @@ def check(executable: Path, *, onedir: bool = False) -> None:
                       '--next-payday', '2025-02-01', '--cycle-budget', '100')
         cycle = document(*cycle_args)
         assert cycle['status'] == 'CERTIFIED_NATIVE_SCOPED', cycle
+        assert cycle['config'] == str(multi_config.resolve()), cycle
         assert cycle['report']['cycle_budget']['remaining'] == '100', cycle
         multi_ledger = multicurrency / 'main.bean'
         multi_source = multi_ledger.read_text(encoding='utf-8')
