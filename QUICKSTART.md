@@ -133,6 +133,21 @@ TUI 按 `w` 可从已保存的发薪日选完整周期，不再重填额度。�
 
 `budget` 决定费用／收入分类，`fund` 决定资产里的钱属于哪个用途。普通消费省略 `fund` 仅在现有默认规则可确定、且交易前同一账户／币种／批次没有混合或未决归属时处理。混合用途的收支、现金退款和付款不能只靠默认用途；请在资产分录写明 `fund`，否则返回带源行的 `H_OWNER_PENDING`。已证明的 H→H 搬移和原用途返还仍可使用；单／零用途的默认政策本轮沿用现状。
 
+归属不明确时，先查看只读证据：
+
+```bash
+beancount-budget-tool doctor --config budget/simple/config.yml
+beancount-budget-tool attribution --config budget/simple/config.yml --reason H_OWNER_PENDING
+beancount-budget-tool attribution --config budget/simple/config.yml --account 'Assets:Bank' --all --format csv
+beancount-budget-tool explain cash --config budget/simple/config.yml
+beancount-budget-tool explain expense --config budget/simple/config.yml --category '生活开销'
+beancount-budget-tool explain purpose --config budget/simple/config.yml --owner '电子产品'
+```
+
+`lint` 或 `doctor --static-only` 明确标注重放未运行；静态检查通过不代表库存、责任或月报已签发。归属工作台默认从 cutover 重放到所选月末，展示每笔发生前的同账户／币种／批次用途余额；前序未决显示“未知”，不会当成零，也不会用月末或未来交易回填。`--since`／`--through` 按日期筛选，`--amount` 是带符号原币精确金额，`--commodity`／`--lot` 限定坐标；筛选不会消除原待审。JSON保留完整待审上下文，CSV只导出当前匹配证据，不替你批准或修改分录。
+
+`explain` 只拆已审月报的原值：可支付现金展示支付账户库存和责任／预留上下文，消费按原币与类别拆到源分录，用途余额把H、K和证券池分开。现金库存不等于最终可支付余额，其他用途不并入默认用途上限；收入不混入同名消费类别。月报未签发时不展示局部金额。TUI `D`、`l`、`E` 打开相同只读工具，月报 `Enter` 也可选数字解释；区间／周期先 `Esc` 返回月报，避免错用单月数值。
+
 一笔到账混有自己的收入和代收款时，负债腿不要写 `fund`。例如收到 480 元，其中自己的收入 240 元、另有 240 元待转交：
 
 ```beancount

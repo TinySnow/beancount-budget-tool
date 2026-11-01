@@ -497,6 +497,7 @@ class ReportBrowser:
 
 
 HELP = [
+    'D：只读预检（静态／重放分层）；l：归属工作台；E：已审数字解释。',
     "u：累计用途余额，从 cutover 到当前月；先看期末用途可支付余额，不累加月末库存；可跨年。",
     "i：K 申赎流水；v：tracking 专题流水。按原币列示来源；watch 下保存后在流水内自动重算。",
     "z：精简／全部科目。精简仍保留当前余额、有效目标、负余额与待审；不改变 JSON 数据或认证。",
@@ -703,16 +704,16 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         styles.append((_COLORS.get("red", 0) if browser.error else style))
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         _put(stdscr, row, line, styles[browser.offset + row - 3])
-    footer = ("Esc/c 月报 u 累计余额 i K流水 v 专题 z 全部 p 范围 w 周期 r 重算 ? 帮助" if browser.period else
-              "u 累计余额 i K流水 v 专题 z 全部 h 科目流水 w 周期 p 区间 m 跳月 r 重算 ? 帮助")
+    footer = ("Esc/c 月报 l 归属 E 解释 D 预检 u 累计 i K流水 v 专题 r 重算 ? 帮助" if browser.period else
+              "l 归属 E 解释 D 预检 u 累计 i K流水 v 专题 h 科目流水 r 重算 ? 帮助")
     if listing and browser.view == "reviews":
-        footer = "↑↓ 选项 Enter 详情 e 修改指引 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
+        footer = "↑↓ 选项 Enter 详情 l 归属 D 预检 e 修改指引 r 重算 / 筛选 ? 帮助 q 退出"
     elif listing and browser.view == "transactions":
         footer = "o 正/倒序 空格/PgDn 下页 b/PgUp 上页 g/G 首尾 / 筛选 Enter 详情 t 报告"
     elif browser.detail:
         footer = "空格/PgDn 下页 b/PgUp 上页 g/G 首尾 ↑↓ 滚动 Esc 返回"
     if browser.error:
-        footer = ("h 报错前流水 " if browser.error.diagnostic else "") + "[ ] 上/下月 m 跳月 r 重算 ↑↓ 滚动 ? 帮助 q 退出"
+        footer = ("h 报错前流水 " if browser.error.diagnostic else "") + "[ ] 上/下月 m 跳月 l 归属 D 预检 r 重算 ↑↓ 滚动 ? 帮助 q 退出"
     if getattr(browser, "watch", False):
         footer = "自动监测保存 · " + footer
     _put(stdscr, height - 1, footer, curses.A_REVERSE)
@@ -1191,6 +1192,55 @@ def _activity_message(stdscr, browser, kind):
              poll=watcher.changed if watcher else None)
 
 
+def _diagnostics_message(stdscr, browser, kind):
+    """Read-only diagnostic queries remain available on a pending month."""
+    from .diagnostics import doctor, attribution, explain, render_text
+    if not hasattr(browser, 'user_config'):
+        _message(stdscr, '只读诊断', ['请使用 config.yml + budgets.yml 两文件入口打开诊断工具。'])
+        return
+    if kind == 'explain' and browser.period:
+        _message(stdscr, '已审数字解释', ['当前为周期／区间／累计视图。请按 Esc 返回月报，再解释该月数字，避免把单月结果当成整段结果。'])
+        return
+    config = browser.user_config
+    month = (browser.period_range[1] if browser.period and browser.period_range else browser.selected_month)
+    options = {}
+    if kind == 'attribution':
+        query = _read_field(stdscr, '只读归属工作台',
+            ['按账户／用途／来源／原因检索；空值显示全部待审。筛选不改变待审总数。'], '检索：')
+        if query is None: return
+        show = _read_field(stdscr, '只读归属工作台', ['显示全部有据及待审分录？y=全部；空值=仅待审。'], '全部(y/空)：')
+        if show is None: return
+        options = {'text': query.strip() or None, 'all_rows': show.lower() == 'y'}
+    elif kind == 'explain':
+        metric = _read_field(stdscr, '已审数字解释',
+            ['cash 可支付现金；expense 消费；purpose 用途余额；max 最多能花。未签发时不展示局部数字。'], '类型：', 'cash')
+        if metric is None: return
+        metric = metric.strip()
+        options = {'metric': metric}
+        if metric in {'purpose', 'expense'}:
+            field = _read_field(stdscr, '已审数字解释',
+                ['用途名称／ID（用途余额必填）' if metric == 'purpose' else '消费类别名称／ID（空值为全部）'], '名称或ID：')
+            if field is None: return
+            options['owner' if metric == 'purpose' else 'category'] = field.strip() or None
+    watcher = None
+    if getattr(browser, 'watch', False):
+        from .input_watch import InputWatch
+        watcher = InputWatch([config])
+
+    def reload():
+        browser.refresh()
+        try:
+            result = {'doctor': doctor, 'attribution': attribution, 'explain': explain}[kind](config, month, **options)
+            lines = render_text(result).splitlines()
+        except (BudgetError, OSError, UnicodeError) as exc:
+            lines = ['本次查询失败；旧诊断与解释已清除。', str(exc)]
+        if watcher: watcher.accept()
+        return {'doctor': '只读预检', 'attribution': '只读归属工作台', 'explain': '已审数字解释'}[kind], lines
+
+    title, lines = reload()
+    _message(stdscr, title, lines, refresh=reload, poll=watcher.changed if watcher else None)
+
+
 def _report_browser(stdscr, browser: ReportBrowser):
     try:
         curses.curs_set(0)
@@ -1251,6 +1301,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             reload()
         elif key == 'z':
             browser.show_all = not browser.show_all
+        elif key in ('D', 'l', 'E'):
+            _diagnostics_message(stdscr, browser, {'D': 'doctor', 'l': 'attribution', 'E': 'explain'}[key])
         elif key in ('i', 'v'):
             _activity_message(stdscr, browser, 'k' if key == 'i' else 'tracking')
         elif key == "p":
@@ -1294,6 +1346,9 @@ def _report_browser(stdscr, browser: ReportBrowser):
         elif key in ("\n", "\r", curses.KEY_ENTER):
             if browser.help:
                 browser.help, browser.offset = False, 0
+            elif (hasattr(browser, 'user_config') and browser.view == 'report' and not browser.detail and
+                  not browser.period and browser.outcome and browser.outcome.get('report') is not None):
+                _diagnostics_message(stdscr, browser, 'explain')
             else:
                 browser.open_detail()
         elif key in (curses.KEY_UP, "k", curses.KEY_DOWN, "j", curses.KEY_PPAGE,

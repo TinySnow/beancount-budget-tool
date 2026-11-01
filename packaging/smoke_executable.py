@@ -67,6 +67,33 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert repaired["status"] == "CERTIFIED_SCOPED", repaired
         assert repaired["report"]["actual_spendable"]["actual_spendable"] == "185", repaired
         assert not (mixed / ".budget-state").exists()
+        static = document('doctor', '--config', mixed_config, '--static-only')
+        assert static['checks']['static']['state'] == 'passed' and static['checks']['replay']['state'] == 'not_run', static
+        checked = document('doctor', '--config', mixed_config)
+        assert checked['checks']['replay']['state'] == 'passed' and checked['report'] is None, checked
+        lint = document('lint', '--config', mixed_config)
+        assert lint['checks']['replay']['state'] == 'not_run', lint
+        cash_detail = document('explain', 'cash', '--config', mixed_config)
+        assert cash_detail['explanation']['selected_available_cash'] == '185', cash_detail
+        assert cash_detail['report'] is None, cash_detail
+        expense_detail = document('explain', 'expense', '--category', '生活开销', '--config', mixed_config)
+        assert expense_detail['explanation']['native_expenses'], expense_detail
+        purpose_detail = document('explain', 'purpose', '--owner', '自由资金', '--config', mixed_config)
+        assert purpose_detail['explanation']['purpose']['h_native_balances'][0]['units'] == '300', purpose_detail
+        max_detail = document('explain', 'max', '--config', mixed_config)
+        assert max_detail['explanation']['max_spendable']['max_spendable'] == '185', max_detail
+        valid_mixed = mixed_ledger.read_text(encoding='utf-8')
+        mixed_ledger.write_text(valid_mixed+'\n2026-09-05 * "new ambiguous fund"\n'
+            '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding='utf-8')
+        workspace = document('attribution', '--config', mixed_config, '--reason', 'H_OWNER_PENDING')
+        assert workspace['status'] == 'DIAGNOSTIC_ONLY' and workspace['report'] is None, workspace
+        assert len(workspace['rows']) == 1 and workspace['rows'][0]['before_state'] == 'complete', workspace
+        assert set(workspace['rows'][0]['before'].values()) == {'185', '300'}, workspace
+        blocked_explanation = document('explain', 'cash', '--config', mixed_config)
+        assert blocked_explanation['status'] == 'NEEDS_REVIEW' and blocked_explanation['explanation'] is None, blocked_explanation
+        csv_evidence = run('attribution', '--config', mixed_config, '--format', 'csv')[0]
+        assert 'DIAGNOSTIC_ONLY' in csv_evidence and 'H_OWNER_PENDING' in csv_evidence, csv_evidence
+        mixed_ledger.write_text(valid_mixed, encoding='utf-8')
         multicurrency = directory / "多币种收支"
         shutil.copytree(source / "multicurrency", multicurrency)
         multi_config = multicurrency / "config.yml"

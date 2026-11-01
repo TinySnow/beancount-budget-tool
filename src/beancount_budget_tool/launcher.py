@@ -16,6 +16,10 @@ COMMANDS = {
     "audit": ("beancount_budget_tool.v6.cli", "分项审计"),
     "history": ("beancount_budget_tool.v6.account_queries", "追查会计科目内预算用途的变动与余额"),
     "snapshot": ("beancount_budget_tool.v6.account_queries", "查看指定日日末的预算用途分布"),
+    "doctor": ("beancount_budget_tool.v6.diagnostics", "只读预检：区分静态检查与重放审计"),
+    "lint": ("beancount_budget_tool.v6.diagnostics", "仅静态检查，不重放余额"),
+    "attribution": ("beancount_budget_tool.v6.diagnostics", "只读归属工作台与交易前用途证据"),
+    "explain": ("beancount_budget_tool.v6.diagnostics", "解释已审现金、消费、用途余额与上限"),
 }
 
 
@@ -50,5 +54,5 @@ def main(argv=None) -> int:
         return 2
     command = args.pop(0) if args[0] in COMMANDS else "monthly"
     module = import_module(COMMANDS[command][0])
-    entry = getattr(module, command + "_main" if command in {"history", "snapshot"} else "main")
+    entry = getattr(module, command + "_main" if command in {"history", "snapshot", "doctor", "lint", "attribution", "explain"} else "main")
     return entry(args) or 0

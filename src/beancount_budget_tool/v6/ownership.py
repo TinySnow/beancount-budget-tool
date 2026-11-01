@@ -314,7 +314,7 @@ def _ownership_inputs(root: Path, cutover: date, accounts: Path,
 @shared_audit
 def audit_ownership(root: Path, cutover: date, accounts: Path,
                     declarations: Path | None = None,
-                    opening: Path | None = None) -> dict:
+                    opening: Path | None = None, *, include_evidence: bool = False) -> dict:
     """Validate H ownership slices and identify unknown H/K/account domains."""
     fin = load_financial(root)
     facts = FactIndex(fin)
@@ -336,6 +336,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     responsibilities = None
     credit_income_receipts, h_bundles = [], []
     pending_reasons: dict[str, str] = {}
+    evidence, default_keys = {}, set()
     if defaults is not None:
         initial_pads = initial_pad_postings(fin, cutover)
         # A nonzero cutover balance can serve as an inferred transfer source
@@ -385,10 +386,32 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             coordinates = {key: (p.account, p.units.currency, _lot(p))
                            for key, p in leg_keys.items()}
             missing_keys = [key for key in leg_keys if key not in compiled_by_key]
+            if include_evidence:
+                # Capture before the entire transaction, not after an earlier
+                # posting in the same virtual reallocation has been applied.
+                transaction_ref = facts.for_transaction(entry).as_dict()
+                text = (fin.line(entry.meta['filename'], entry.meta['lineno']) if 'generated_kind' in transaction_ref
+                        else fin.transaction_text(entry.meta['filename'], entry.meta['lineno']))
+                for key, posting in leg_keys.items():
+                    coordinate = coordinates[key]
+                    known = coordinate not in unknown_coordinates
+                    evidence[key] = {**h_candidates[key], 'date': entry.date.isoformat(),
+                        'lot': coordinate[2], 'source': _source(posting.meta or entry.meta),
+                        'transaction_source': _source(entry.meta),
+                        'transaction_ref': transaction_ref, 'source_text': text,
+                        'payee': entry.payee, 'narration': entry.narration,
+                        'labels': {k: v for k, v in (posting.meta or {}).items() if k in {'fund', 'budget'}},
+                        'budget_labels': [{'account': p.account, 'budget': p.meta['budget']}
+                                          for p in entry.postings if 'budget' in (p.meta or {})],
+                        'before': {owner: exact_text(units) for owner, units in
+                                   running.get(coordinate, {}).items()} if known else None,
+                        'before_state': 'complete' if known else 'pending'}
 
             def inferred(key: str, owner_parts: list[tuple[str, Fraction]], reason: str,
                          *, uses_default: bool = False) -> None:
                 if uses_default:
+                    if include_evidence:
+                        default_keys.add(key)
                     coordinate = coordinates[key]
                     # Inspect only the state before this transaction. A
                     # configured fallback cannot choose between funds already
@@ -641,7 +664,22 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     missing = [{**h_candidates[key],
                 **({"reason_code": pending_reasons[key]} if key in pending_reasons else {})}
                for key in order if key not in compiled_by_key]
+    if include_evidence:
+        for key in order:
+            row = compiled_by_key.get(key)
+            if key not in evidence:
+                posting, _ = facts.table.postings[key]
+                evidence[key] = {**h_candidates[key], 'lot': _lot(posting),
+                    'source': _source(posting.meta or {}), 'before': None,
+                    'before_state': 'not_run', 'labels': {
+                        k: v for k, v in (posting.meta or {}).items() if k in {'fund', 'budget'}}}
+            evidence[key].update(evidence=(row['origin'] if row and row['origin'] != 'inferred' else
+                'default' if row and key in default_keys else 'protocol' if row else 'pending'),
+                review_reason=row.get('review_reason') if row else None,
+                slices=[dict(part) for part in row['slices']] if row else [],
+                reason_code=None if row else pending_reasons.get(key, 'OWNERSHIP_UNREVIEWED'))
     return {"mode": "v6_ownership_audit_only", "cutover": cutover.isoformat(),
+            **({'purpose_evidence': list(evidence.values()), 'owner_names': owner_names} if include_evidence else {}),
             **({"credit_income_receipts": credit_income_receipts} if credit_income_receipts else {}),
             **({"h_bundles": h_bundles} if h_bundles else {}),
             "ledger_snapshot": fin.digest,
