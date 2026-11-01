@@ -125,7 +125,7 @@ class LiabilityRuleTests(unittest.TestCase):
     def test_principal_plus_interest_split_by_postings(self):
         self.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "due_on": "2026-09-30"}}
         report = self.run_ledger('2026-09-01 * "loan"\n  Assets:Bank 1000 CNY\n  Liabilities:Loan -1000 CNY\n'
-            '2026-09-20 * "repay"\n  Assets:Bank -1010 CNY\n  Liabilities:Loan 1000 CNY\n    budget: "生活费"\n  Expenses:Interest 10 CNY\n')
+            '2026-09-20 * "repay"\n  Assets:Bank -1010 CNY\n    fund: "生活费"\n  Liabilities:Loan 1000 CNY\n    budget: "生活费"\n  Expenses:Interest 10 CNY\n')
         self.assertEqual(self.spent(report), 10)
         self.assertEqual(self.outflows(report)["expenses_paid"], "10")
         self.assertEqual(self.outflows(report)["debt_payments"], "1000")
@@ -151,8 +151,8 @@ class LiabilityRuleTests(unittest.TestCase):
 
     def test_many_payables_settle_as_declared_pool_without_matching_equal_receipts(self):
         self.doc["liabilities"] = {"Liabilities:Colleague": {"role": "payable"}}
-        transactions = ''.join(f'2026-09-02 * "receipt {i}"\n  Assets:Bank 260 CNY\n  Liabilities:Colleague -260 CNY\n' for i in range(2))
-        transactions += '2026-09-03 * "forward"\n  Assets:Bank -520 CNY\n  Liabilities:Colleague 520 CNY\n'
+        transactions = ''.join(f'2026-09-02 * "receipt {i}"\n  Assets:Bank 260 CNY\n    fund: "自由资金"\n  Liabilities:Colleague -260 CNY\n' for i in range(2))
+        transactions += '2026-09-03 * "forward"\n  Assets:Bank -520 CNY\n    fund: "生活费"\n  Liabilities:Colleague 520 CNY\n'
         report = self.run_ledger(transactions)
         self.assertEqual(self.spent(report), 0)
         self.assertEqual(report["actual_spendable"]["booked_debts"], [])

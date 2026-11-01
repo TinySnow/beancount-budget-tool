@@ -126,6 +126,21 @@ def audit_salary_cycle(config: Path, payday: str, next_payday: str,
             if has_foreign(spending['multicurrency']):
                 result['native_report'] = spending['multicurrency']
             issues = list(expense["review_items"])
+            if native_only and not has_foreign(spending['multicurrency']):
+                # The CNY consumption view must not bypass the mixed-purpose
+                # source guard. This adds no month-end completeness/goal gate.
+                from .ownership import audit_ownership
+                from .review_diagnostics import posting_sources, review_item
+                owned = audit_ownership(paths['ledger'], cutover, paths['accounts'],
+                                        paths['ownership'], paths['opening'])
+                locations = posting_sources(fin)
+                for row in owned['missing_h_ownership']:
+                    if row.get('reason_code') == 'H_OWNER_PENDING':
+                        entry, _ = sources[_key(row['ref'])]
+                        issues.append(review_item('H_OWNER_PENDING', locations[_key(row['ref'])],
+                            kind='asset_ownership', date=entry.date.isoformat(), ref=row['ref'],
+                            account=row['account'], commodity=row['commodity'],
+                            signed_units=row['signed_units']))
             if native_only and has_foreign(spending['multicurrency']):
                 from .review_queue import audit_review_queue
                 from .actual_snapshot import audit_actual_snapshot

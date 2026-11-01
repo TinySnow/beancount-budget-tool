@@ -36,10 +36,10 @@ class ReviewDecisionsTests(unittest.TestCase):
             '  Assets:Cash -20 CNY\n'
             '  Assets:Bank 20 CNY\n'
             '2026-09-03 * "food"\n'
-            '  Assets:Cash -10 CNY\n'
+            '  Assets:Cash -10 CNY\n    fund: "生活费"\n'
             '  Expenses:Food 10 CNY\n'
             '2026-09-04 * "salary"\n'
-            '  Assets:Cash 5 CNY\n'
+            '  Assets:Cash 5 CNY\n    fund: "自由资金"\n'
             '  Income:Salary -5 CNY\n', encoding="utf-8")
         setup = Path(create_setup(self.ledger, "2026-09", self.base / "setup",
                                   income_purpose="自由资金", expense_purpose="生活费",
@@ -170,7 +170,7 @@ class ReviewDecisionsTests(unittest.TestCase):
         self.create()
         self.approve()
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + '2026-09-05 * "new food"\n'
-                              '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")
+                              '  Assets:Cash -1 CNY\n    fund: "生活费"\n  Expenses:Food 1 CNY\n', encoding="utf-8")
         result = apply_review(self.sheet)
         self.assertEqual(len(result["accepted"]), 4)
         self.assertEqual(result["workflow"]["status"], "NEEDS_REVIEW")
@@ -243,7 +243,7 @@ class ReviewDecisionsTests(unittest.TestCase):
         self.approve()
         september = Path(apply_review(self.sheet)["config"])
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + '2026-10-03 * "October food"\n'
-                              '  Assets:Cash -3 CNY\n  Expenses:Food 3 CNY\n', encoding="utf-8")
+                              '  Assets:Cash -3 CNY\n    fund: "生活费"\n  Expenses:Food 3 CNY\n', encoding="utf-8")
         october_folder = self.base / "october"
         october_folder.mkdir()
         settings = yaml.safe_load(september.read_text(encoding="utf-8"))

@@ -538,7 +538,7 @@ class NativeFlowTests(unittest.TestCase):
             '  Assets:Cash 8 CNY\n  Assets:Bank 4 CNY\n'
             '2026-09-03 * "income returned"\n'
             '  Income:Salary 5 CNY\n  Income:Bonus 7 CNY\n'
-            '  Assets:Cash -8 CNY\n  Assets:Bank -4 CNY\n')
+            '  Assets:Cash -8 CNY\n    fund: "自由资金"\n  Assets:Bank -4 CNY\n    fund: "自由资金"\n')
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "150")
         self.assertEqual(report["default_outflows"]["totals"][0]["net_outflow"], "0")
         for row in report["transactions"]["rows"]:
@@ -550,7 +550,7 @@ class NativeFlowTests(unittest.TestCase):
         report = self.report('2026-09-02 * "first receipt"\n'
             '  Income:Salary -5 CNY\n  Income:Bonus -5 CNY\n  Assets:Cash 10 CNY\n'
             '2026-09-02 * "second receipt"\n'
-            '  Income:Salary -5 CNY\n  Income:Bonus -5 CNY\n  Assets:Cash 10 CNY\n')
+            '  Income:Salary -5 CNY\n  Income:Bonus -5 CNY\n  Assets:Cash 10 CNY\n    fund: "自由资金"\n')
         groups = [row["postings"][0]["benefit_source"]["evidence_group"] for row in report["transactions"]["rows"]]
         self.assertNotEqual(groups[0]["transaction_ref"], groups[1]["transaction_ref"])
 

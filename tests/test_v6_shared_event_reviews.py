@@ -199,7 +199,8 @@ class SharedEventReviewTests(unittest.TestCase):
             debt = audit_simple_obligations(self.root, CUTOVER, self.path("obligations"))
             self.assertEqual(debt["events"], [])
             self.assertEqual(debt["obligations"], [])
-            owned = audit_ownership(self.root, CUTOVER, self.path("accounts"), self.path("ownership"))
+            owned = audit_ownership(self.root, CUTOVER, self.path("accounts"), self.path("ownership"),
+                                    self.path("opening"))
             self.assertEqual(owned["claimed_h_postings"], 2)
             for name, audit in self.auditors().items():
                 with self.subTest(name=name):

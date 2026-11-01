@@ -178,7 +178,7 @@ class TransferOrderTests(unittest.TestCase):
         self.root.write_text(self.root.read_text(encoding="utf-8").replace(
             '2026-09-02 * "partial transfer"',
             '2026-09-01 * "investment loss"\n'
-            '  Assets:Mixed -120 CNY\n'
+            '  Assets:Mixed -120 CNY\n    fund: "投资"\n'
             '  Expenses:Loss 120 CNY\n'
             '2026-09-02 * "partial transfer"'), encoding="utf-8")
         report = self.owned()

@@ -38,7 +38,7 @@ TRANSACTIONS = (
     '  Assets:Cash -50 CNY\n    fund: "生活费20,储蓄30"\n'
     '2026-09-03 * "refund"\n'
     '  Expenses:Food -5 CNY\n'
-    '  Assets:Cash 5 CNY\n'
+    '  Assets:Cash 5 CNY\n    fund: "生活费"\n'
     '2026-09-04 * "card purchase"\n'
     '  Expenses:Food 100 CNY\n'
     '  Liabilities:Card -100 CNY\n'

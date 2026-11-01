@@ -25,7 +25,7 @@ ACTIVITY = ('2026-09-24 * "allocate"\n'
             '  Assets:Cash -20 CNY\n'
             '2026-09-25 * "food"\n'
             '  Expenses:Food 5 CNY\n'
-            '  Assets:Cash -5 CNY\n'
+            '  Assets:Cash -5 CNY\n    fund: "生活费"\n'
             '2026-09-23 * "move"\n'
             '  Assets:Cash -10 CNY\n'
             '  Assets:Bank 10 CNY\n')

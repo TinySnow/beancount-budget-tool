@@ -37,7 +37,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
             '  Assets:Cash 100 CNY\n    fund: "自由资金"\n'
             '2024-01-06 * "book subscribe"\n  Assets:Bank -50 CNY\n    fund: "储蓄"\n'
             '  Assets:Book 50 CNY\n    fund: "储蓄"\n'
-            '2024-01-07 * "food"\n  Expenses:Food 10 CNY\n  Assets:Cash -10 CNY\n')
+            '2024-01-07 * "food"\n  Expenses:Food 10 CNY\n  Assets:Cash -10 CNY\n    fund: "生活费"\n')
         self.ledger.write_text(self.source, encoding='utf-8')
         self.profile = {'schema': 1, 'ledger': 'main.bean', 'budgets': 'budgets.yml',
             'cutover': '2024-01-01', 'month': '2024-01', 'report_currency': 'CNY',

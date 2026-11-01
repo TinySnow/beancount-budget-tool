@@ -202,8 +202,12 @@ class PublicAcceptanceTests(unittest.TestCase):
         draft = create_review(self.configs["2026-10"], self.base / "review")
         worksheet = Path(draft["worksheet"])
         document = yaml.safe_load(worksheet.read_text(encoding="utf-8"))
-        self.assertEqual(len(document["rows"]), 1)
-        document["rows"][0].update(decision="自由资金", reason="虚构例 2 从自由资金正式划入储蓄", approved=True)
+        self.assertEqual(len(document["rows"]), 2)
+        # Until the transfer source is resolved, its later unlabelled spend
+        # cannot use a default from an unknown coordinate either.
+        for row in document["rows"]:
+            row.update(decision="自由资金" if row["account"] == "Assets:Bank:Daily" else "生活费",
+                       reason="explicit purpose in this synthetic scenario", approved=True)
         self.runner["save"](worksheet, document)
         reviewed = apply_review(worksheet)
         self.assertEqual(reviewed["workflow"]["status"], "CERTIFIED_SCOPED", reviewed.get("report_error"))
@@ -227,8 +231,8 @@ class PublicAcceptanceTests(unittest.TestCase):
         # freshly exported row. No candidate is rebound merely because it matches.
         ownership = reviewed_config.parent / "ownership.yaml"
         document = yaml.safe_load(ownership.read_text(encoding="utf-8"))
-        self.assertEqual(len(document["claims"]), 1)
-        document["claims"] = []
+        self.assertEqual(len(document["claims"]), 2)
+        document["claims"] = document["claims"][1:]  # Keep the unrelated valid food claim.
         self.runner["save"](ownership, document)
         fresh = create_review(reviewed_config, self.base / "re-review")
         worksheet = Path(fresh["worksheet"])

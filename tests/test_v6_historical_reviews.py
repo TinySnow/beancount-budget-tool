@@ -90,6 +90,13 @@ class HistoricalReviewTests(unittest.TestCase):
                 {"id": f"owner{index}", "owner_id": row["slices"][0]["owner_id"],
                  "role": "hold", "signed_units": row["slices"][0]["signed_units"]}]}
             for index, row in enumerate(owned["ownership"])]
+        # The future food leg is now correctly ambiguous in the mixed
+        # coordinate. This fixture explicitly reviews its known living purpose.
+        owners["claims"] += [
+            {"claim": row["ref"], "reason": "explicit future food purpose", "slices": [
+                {"id": f"future-owner{index}", "owner_id": "living", "role": "hold",
+                 "signed_units": row["signed_units"]}]}
+            for index, row in enumerate(owned["missing_h_ownership"])]
         self.save(self.ownership, owners)
 
     def test_current_decisions_do_not_construct_future_reference_maps(self):

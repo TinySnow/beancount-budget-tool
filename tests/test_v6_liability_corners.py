@@ -48,7 +48,7 @@ class LiabilityCornerTests(unittest.TestCase):
         c.doc["accounts"]["Assets:Bank"]["opening"]["CNY"] = {"生活费": "9900", "储蓄": "100"}
         report = c.run_ledger('2026-09-02 * "prepay from saving"\n  Assets:Bank -50 CNY\n    fund: "储蓄"\n  Liabilities:Card 50 CNY\n'
             '2026-09-03 * "buy with cash and credit"\n  Expenses:Food 100 CNY\n'
-            '  Assets:Bank -50 CNY\n  Liabilities:Card -50 CNY\n')
+            '  Assets:Bank -50 CNY\n    fund: "生活费"\n  Liabilities:Card -50 CNY\n')
         self.assertEqual(c.spent(report), 100)
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "9850")
         self.assertEqual(c.outflows(report)["expenses_paid"], "50")
@@ -60,7 +60,7 @@ class LiabilityCornerTests(unittest.TestCase):
         c.doc["liabilities"]["Liabilities:Colleague"] = {"role": "credit_card"}
         report = c.run_ledger('2026-09-02 * "joint mixed prepay"\n  Assets:Bank -100 CNY\n    fund: "生活费60,储蓄40"\n'
             '  Liabilities:Card 50 CNY\n  Liabilities:Colleague 50 CNY\n'
-            '2026-09-03 * "purchase not return"\n  Expenses:Food 100 CNY\n  Assets:Bank -50 CNY\n  Liabilities:Card -50 CNY\n')
+            '2026-09-03 * "purchase not return"\n  Expenses:Food 100 CNY\n  Assets:Bank -50 CNY\n    fund: "生活费"\n  Liabilities:Card -50 CNY\n')
         self.assertEqual(c.spent(report), 100)
         self.assertEqual(report["actual_spendable"]["actual_spendable"], "9790")
         self.assertEqual(c.outflows(report)["expenses_paid"], "50")
@@ -126,7 +126,7 @@ class LiabilityCornerTests(unittest.TestCase):
         c = self.case
         c.doc["liabilities"] = {"Liabilities:Loan": {"role": "loan", "due_on": "2026-10-02"}}
         transactions = '2026-09-02 * "borrow"\n  Assets:Bank 1000 CNY\n  Liabilities:Loan -1000 CNY\n'
-        transactions += '2026-10-05 * "partial repayment"\n  Assets:Bank -200 CNY\n  Liabilities:Loan 200 CNY\n'
+        transactions += '2026-10-05 * "partial repayment"\n  Assets:Bank -200 CNY\n    fund: "生活费"\n  Liabilities:Loan 200 CNY\n'
         september = c.run_ledger(transactions)
         october = c.run_ledger(transactions, "2026-10")
         november = c.run_ledger(transactions, "2026-11")

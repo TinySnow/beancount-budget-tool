@@ -144,6 +144,7 @@ class IntervalBrowserTests(unittest.TestCase):
         ledger.write_text(ledger.read_text(encoding="utf-8") +
                           '\n2026-12-10 * "new December food"\n'
                           '  Assets:Bank:Daily -10 CNY\n'
+                          '    fund: "生活费"\n'
                           '  Expenses:Daily 10 CNY\n', encoding="utf-8")
         # New default category/purpose facts must be recomputed from the ledger.
         browser.refresh()

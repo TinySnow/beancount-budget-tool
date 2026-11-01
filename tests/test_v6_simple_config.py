@@ -258,7 +258,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
             result = audit_review_queue(*args, **kwargs)
             self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
                 '\n2026-09-21 * "new expense"\n'
-                '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")
+                '  Assets:Cash -1 CNY\n    fund: "待支出资金"\n  Expenses:Food 1 CNY\n', encoding="utf-8")
             return result
         with patch("beancount_budget_tool.v6.monthly_report.audit_review_queue", side_effect=change_after_review):
             browser.refresh()
@@ -279,7 +279,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
         self.assertEqual(load.call_count, 1)
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
             '\n2026-09-21 * "new expense"\n'
-            '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")
+            '  Assets:Cash -1 CNY\n    fund: "待支出资金"\n  Expenses:Food 1 CNY\n', encoding="utf-8")
         second = audit_simple(self.config, include_transactions=True)
         self.assertEqual(second["status"], "CERTIFIED_SCOPED")
         self.assertEqual(second["report"]["max_spendable"]["max_spendable"], "189")
@@ -292,7 +292,7 @@ print(json.dumps({"status": result["status"], "commands": [name for name in sys.
             result = audit_review_queue(*args, **kwargs)
             self.ledger.write_text(self.ledger.read_text(encoding="utf-8") +
                 '\n2026-09-21 * "new expense"\n'
-                '  Assets:Cash -1 CNY\n  Expenses:Food 1 CNY\n', encoding="utf-8")
+                '  Assets:Cash -1 CNY\n    fund: "待支出资金"\n  Expenses:Food 1 CNY\n', encoding="utf-8")
             return result
         with patch("beancount_budget_tool.v6.monthly_report.audit_review_queue", side_effect=change_after_review):
             with self.assertRaises(BudgetError) as error:

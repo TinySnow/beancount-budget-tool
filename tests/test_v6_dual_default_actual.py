@@ -46,6 +46,7 @@ class DualDefaultActualTests(unittest.TestCase):
                 '2026-10-05 * "生活费超支"\n'
                 '  Expenses:Food 2100 CNY\n'
                 '  Assets:Bank:Daily -2100 CNY\n'
+                '    fund: "生活费"\n'
                 '2026-10-06 * "预算外入账"\n'
                 '  Assets:Bank:Daily 30 CNY\n'
                 '    fund: "-"\n'

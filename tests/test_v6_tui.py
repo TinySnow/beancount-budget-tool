@@ -286,7 +286,7 @@ class LiveReportBrowserTests(unittest.TestCase):
 
     def test_switch_prepared_month_configs_uses_each_cutoff_and_evidence(self):
         self.ledger.write_text(self.ledger.read_text(encoding="utf-8") + '2026-10-03 * "October food"\n'
-                              '  Assets:Cash -20 CNY\n  Expenses:Food 20 CNY\n', encoding="utf-8")
+                              '  Assets:Cash -20 CNY\n    fund: "待支出资金"\n  Expenses:Food 20 CNY\n', encoding="utf-8")
         draft = create_next_month(self.config, self.base / "october")
         sheet = Path(draft["worksheet"])
         document = yaml.safe_load(sheet.read_text(encoding="utf-8"))

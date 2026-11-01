@@ -21,6 +21,7 @@ SOURCE = '''2026-09-02 * "income without fund"
   Income:Gain -500 CNY
 2026-09-03 * "consumption"
   Assets:Bank -150 CNY
+    fund: "生活费"
   Expenses:Fee 150 CNY
 2026-09-04 * "failed transfer"
   budget-order: 2

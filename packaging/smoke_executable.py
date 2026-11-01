@@ -44,6 +44,29 @@ def check(executable: Path, *, onedir: bool = False) -> None:
             return json.loads(run(*args, "--format", "json")[0])
 
         run("--version")
+        # Defaults cannot select a fund already mixed with another purpose.
+        # Check all public report views, then prove an explicit repair works.
+        mixed = directory / "混合用途归属"
+        shutil.copytree(source / "simple", mixed)
+        mixed_config, mixed_ledger = mixed / "config.yml", mixed / "main.bean"
+        mixed_source = mixed_ledger.read_text(encoding="utf-8")
+        mixed_ledger.write_text(mixed_source + '\n2026-09-04 * "ambiguous fund"\n'
+            '  Assets:Cash -5 CNY\n  Expenses:Food 5 CNY\n', encoding="utf-8")
+        views = [("--config", mixed_config),
+                 ("report", "--config", mixed_config, "--from", "2026-09", "--through", "2026-09"),
+                 ("report", "--config", mixed_config, "--payday", "2026-09-01",
+                  "--next-payday", "2026-10-01", "--cycle-budget", "200")]
+        for args in views:
+            pending = document(*args)
+            assert pending["status"] == "NEEDS_REVIEW" and pending["report"] is None, pending
+            rows = [row for row in pending["review_items"] if row["reason_code"] == "H_OWNER_PENDING"]
+            assert rows and all(row.get("source") for row in rows), pending
+        mixed_ledger.write_text(mixed_source + '\n2026-09-04 * "explicit fund"\n'
+            '  Assets:Cash -5 CNY\n    fund: "生活费"\n  Expenses:Food 5 CNY\n', encoding="utf-8")
+        repaired = document("--config", mixed_config)
+        assert repaired["status"] == "CERTIFIED_SCOPED", repaired
+        assert repaired["report"]["actual_spendable"]["actual_spendable"] == "185", repaired
+        assert not (mixed / ".budget-state").exists()
         multicurrency = directory / "多币种收支"
         shutil.copytree(source / "multicurrency", multicurrency)
         multi_config = multicurrency / "config.yml"

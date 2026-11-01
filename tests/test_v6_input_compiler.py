@@ -37,7 +37,7 @@ class InputCompilerTests(unittest.TestCase):
             '  Assets:Cash -200 CNY\n'
             '2026-09-04 * "food"\n'
             '  Expenses:Food 10 CNY\n    budget: "生活开销.餐饮"\n'
-            '  Assets:Cash -10 CNY\n'
+            '  Assets:Cash -10 CNY\n    fund: "生活费"\n'
             '2026-09-05 * "move"\n'
             '  Assets:Cash -20 CNY\n    fund: "生活费"\n'
             '  Assets:Bank 20 CNY\n    fund: "生活费"\n'

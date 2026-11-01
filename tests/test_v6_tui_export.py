@@ -135,7 +135,7 @@ class ReportExportTests(unittest.TestCase):
             ledger = self.demo["ledger"]
             ledger.write_text(ledger.read_text(encoding="utf-8") +
                               '\n2026-10-20 * "new food saved during form"\n'
-                              '  Assets:Bank:Daily -10 CNY\n  Expenses:Daily 10 CNY\n', encoding="utf-8")
+                              '  Assets:Bank:Daily -10 CNY\n    fund: "生活费"\n  Expenses:Daily 10 CNY\n', encoding="utf-8")
             return str(path)
         with patch("beancount_budget_tool.v6.tui._read_field", side_effect=form), \
              patch("beancount_budget_tool.v6.tui._message"), \

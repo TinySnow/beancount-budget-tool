@@ -1,7 +1,8 @@
 """Source-bound ownership-intent audit for real H asset postings.
 
-This stage validates each posting's declared owner and intent kind. It does
-not replay owner inventory or infer a budget transfer from account names.
+This stage validates each posting's declared owner and intent kind. Prior
+owner vectors constrain default attribution and prove supported H transfers;
+account names alone never prove a budget transfer.
 K book-flow postings are deliberately outside this claim domain.
 """
 
@@ -385,7 +386,17 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                            for key, p in leg_keys.items()}
             missing_keys = [key for key in leg_keys if key not in compiled_by_key]
 
-            def inferred(key: str, owner_parts: list[tuple[str, Fraction]], reason: str) -> None:
+            def inferred(key: str, owner_parts: list[tuple[str, Fraction]], reason: str,
+                         *, uses_default: bool = False) -> None:
+                if uses_default:
+                    coordinate = coordinates[key]
+                    # Inspect only the state before this transaction. A
+                    # configured fallback cannot choose between funds already
+                    # mixed here, nor repair an earlier unresolved posting.
+                    if (coordinate in unknown_coordinates or
+                            sum(bool(amount) for amount in running.get(coordinate, {}).values()) > 1):
+                        pending_reasons[key] = 'H_OWNER_PENDING'
+                        return
                 posting, _ = facts.table.postings[key]
                 record = h_candidates[key]
                 stem = "inferred:" + sha256(key.encode()).hexdigest()
@@ -416,8 +427,18 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                     parts = credit_owners.receipt_parts(entry, leg_keys[key]) if returning else cash_owner_parts(
                         fin, entry, rule_flow, liability_rules, default, leg_keys[key], responsibilities)
                     if parts is not None:
+                        # Restoring a proved receivable/prepayment is source
+                        # evidence. Borrowing/income and ordinary cash payments
+                        # still contain a default and must pass the guard.
+                        debts = [p for p in entry.postings if p.account in liability_rules]
+                        proved_return = bool(returning and not credit_owners.income_return(entry) or
+                            rule_flow == 'receipt' and debts and
+                            all(liability_rules[p.account]['role'] == 'receivable' for p in debts) and
+                            not any(p.account.split(':', 1)[0] == fin.options['name_income']
+                                    for p in entry.postings))
                         inferred(key, parts, "退回已证明的预付资金用途" if returning else
-                                 "config 负债账户规则的现金用途；借入资金沿默认收入用途")
+                                 "config 负债账户规则的现金用途；借入资金沿默认收入用途",
+                                 uses_default=not proved_return)
                     elif returning:
                         pending_reasons[key] = ("LIABILITY_CREDIT_PURPOSE_PENDING" if credit_owners.pure_return(entry) else
                                                 "LIABILITY_CREDIT_MIXED_UNSUPPORTED")
@@ -427,15 +448,16 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 for key in missing_keys:
                     signed = exact(leg_keys[key].units.number)
                     if fin.options["name_income"] in roots:
-                        inferred(key, [(defaults["income_owner_id"], signed)], "默认收入用途")
+                        inferred(key, [(defaults["income_owner_id"], signed)], "默认收入用途", uses_default=True)
                     elif fin.options["name_expenses"] in roots:
-                        inferred(key, [(defaults["expense_owner_id"], signed)], "默认支出用途")
+                        inferred(key, [(defaults["expense_owner_id"], signed)], "默认支出用途", uses_default=True)
                     elif (payment is not None or len(entry.postings) == 2 and signed < 0 and
                           fin.options["name_liabilities"] in roots and all(
                               p.cost is None and p.price is None and fin.raw_price(p)[0] == "none" and
                               p.units.currency == leg_keys[key].units.currency for p in entry.postings) and
                           sum((exact(p.units.number) for p in entry.postings), Fraction(0)) == 0):
-                        inferred(key, [(defaults["expense_owner_id"], signed)], "负债付款使用默认支出用途；责任另审")
+                        inferred(key, [(defaults["expense_owner_id"], signed)], "负债付款使用默认支出用途；责任另审",
+                                 uses_default=True)
             elif (len(entry.postings) == len(h_legs) == 2 and
                   all(p.account.split(":", 1)[0] == assets for p in h_legs)):
                 positive = [p for p in h_legs if exact(p.units.number) > 0]
@@ -517,7 +539,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                         sum((exact(leg_keys[key].units.number) for key in missing), Fraction(0)) == -bundle.expense_total):
                     for key in missing:
                         inferred(key, [(defaults['expense_owner_id'], exact(leg_keys[key].units.number))],
-                                 '同用途转账已逐用途守恒；剩余消费／退款沿默认支出用途')
+                                 '同用途转账已逐用途守恒；剩余消费／退款沿默认支出用途', uses_default=True)
             bundle_event = compile_h_bundle(bundle, entry, facts, compiled_by_key, account_audit['report_currency']) if bundle else None
             if bundle_event is not None:
                 h_bundles.append(bundle_event)
@@ -528,7 +550,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
                 if credit_issue is not None:
                     for key in leg_keys:
                         compiled_by_key.pop(key, None)
-                        pending_reasons[key] = credit_issue
+                        pending_reasons.setdefault(key, credit_issue)
                 elif credit_owners.last_income_receipt is not None:
                     credit_income_receipts.append({"protocol": "native_credit_income_receipt_v1",
                         "transaction_ref": facts.for_transaction(entry).as_dict(),

@@ -10,9 +10,10 @@ import re
 
 from ..errors import require
 from ..exact import exact_text
-from ..financial import shared_audit
+from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml
 from .accounts import audit_accounts
+from .facts import future_transactions
 
 
 NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
@@ -60,6 +61,7 @@ def audit_opening(root: Path, cutover: date, accounts: Path,
 
     h_claimed: dict[tuple[str, str, str], Fraction] = defaultdict(Fraction)
     k_claimed: set[tuple[str, str, str]] = set()
+    future_k = None
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "h_holdings", "k_openings"}
@@ -104,13 +106,26 @@ def audit_opening(root: Path, cutover: date, accounts: Path,
                     "OPENING_CLAIM_INVALID", "K 坐标字段必须是非空字符串", str(declarations))
             key = (item["account"], item["commodity"], item["lot"])
             source = str(key)
-            require(key in expected_k, "OPENING_COORDINATE_INVALID",
-                    "K 期初确认未对应账面累计坐标", source)
             require(key not in k_claimed, "OPENING_DUPLICATE_CLAIM",
                     "K 期初坐标重复确认", source)
             require(type(item["reason"]) is str and bool(item["reason"].strip()),
                     "OPENING_REASON_MISSING", "K 期初账面累计须有人工作出依据", source)
-            require(_units(item["signed_units"], source) == expected_k[key],
+            amount = _units(item["signed_units"], source)
+            if key not in expected_k:
+                if future_k is None:
+                    future_k = {(p.account, p.units.currency, f"{p.units.currency}/no-cost")
+                                for entry in future_transactions(load_financial(root), cutover)
+                                for p in entry.postings
+                                if p.account not in rows and
+                                account_audit.get('declared_semantics', {}).get(p.account) == 'K'}
+                # A shared compiler may acknowledge a later K account's zero
+                # opening. Validate its actual future source, never import its
+                # later transactions or invent a current opening coordinate.
+                require(key in future_k and amount == 0, "OPENING_COORDINATE_INVALID",
+                        "K 期初确认未对应账面累计坐标", source)
+                k_claimed.add(key)
+                continue
+            require(amount == expected_k[key],
                     "K_OPENING_MISMATCH", "K 期初确认数与 booked 累计不一致", source)
             k_claimed.add(key)
 

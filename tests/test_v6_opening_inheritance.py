@@ -34,7 +34,8 @@ class OpeningInheritanceTests(unittest.TestCase):
         total = sum(int(amount) for _, amount in slices)
         expense = (f'2026-10-01 * "expense"\n'
                    f'  Expenses:Food {debit_living} CNY\n'
-                   f'  Assets:Bank:A -{debit_living} CNY\n') if debit_living else ''
+                   f'  Assets:Bank:A -{debit_living} CNY\n'
+                   '    fund: "生活费"\n') if debit_living else ''
         from_fund = f'    fund: "{transfer_owner}"\n' if transfer_owner else ''
         to_fund = f'    fund: "{transfer_owner}"\n' if transfer_owner else ''
         root.write_text(

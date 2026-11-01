@@ -171,7 +171,8 @@ class MonthWorkflowEndToEndTests(unittest.TestCase):
             owned = audit_ownership(ledger, date(2026, 10, 1), base / "accounts.yaml",
                                     base / "ownership.yaml", base / "opening.yaml")
             owners = yaml.safe_load((base / "ownership.yaml").read_text(encoding="utf-8"))
-            owners["claims"] = [{"claim": owned["ownership"][-1]["ref"],
+            future_owner = (owned["missing_h_ownership"] or owned["ownership"])[-1]
+            owners["claims"] = [{"claim": future_owner["ref"],
                                  "reason": "November review", "slices": [
                                      {"id": "november-payment", "owner_id": "living",
                                       "role": "hold", "signed_units": "-3"}]}]

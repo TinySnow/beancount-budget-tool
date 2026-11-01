@@ -16,3 +16,4 @@ option "operating_currency" "CNY"
   Expenses:Food 10 CNY
     budget: "生活开销.餐饮"
   Assets:Cash -10 CNY
+    fund: "生活费"
