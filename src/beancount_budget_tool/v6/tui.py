@@ -46,6 +46,23 @@ def _erase_screen(stdscr):
         stdscr.clearok(True)
 
 
+def _resize_screen(stdscr):
+    """Resynchronize curses and invalidate physical cells after a resize."""
+    try:
+        curses.update_lines_cols()
+        if sys.platform == 'win32':
+            curses.resize_term(0, 0)
+    except curses.error:
+        pass
+    for method in ('clear', 'touchwin', 'redrawwin'):
+        if hasattr(stdscr, method):
+            try:
+                getattr(stdscr, method)()
+            except curses.error:
+                pass
+    _erase_screen(stdscr)
+
+
 def _draw(stdscr, lines: list[str], offset: int) -> int:
     height, width = stdscr.getmaxyx()
     _erase_screen(stdscr)
@@ -214,6 +231,8 @@ class ReportBrowser:
         self.selected = 0
         self.offset = 0
         self.newest_first = True
+        self.show_all = False
+        self.cumulative = False
         self.clear()
 
     @property
@@ -277,6 +296,8 @@ class ReportBrowser:
         require(len(matches) == 1, "TUI_MONTH_DUPLICATE", f"{month} 有多份配置；请保留该月最新入口")
         self.index = matches[0]
         self.period = False
+        self.salary_cycle = None
+        self.cumulative = False
         self.filter("")
         self.clear()
 
@@ -286,14 +307,29 @@ class ReportBrowser:
             return False
         self.index = target
         self.period = False
+        self.salary_cycle = None
+        self.cumulative = False
         self.clear()
         return True
 
     def toggle_period(self):
+        # c toggles the last query; Esc uses return_month() to leave its scope.
         self.period = not self.period
         self.view = "report"
         self.filter("")
         self.clear()
+
+    def return_month(self):
+        self.period = False
+        self.salary_cycle = None
+        self.cumulative = False
+        self.view = 'report'
+        self.filter('')
+        self.clear()
+
+    def select_cumulative(self):
+        self.select_period()
+        self.cumulative = True
 
     def select_period(self, since: str | None = None, through: str | None = None):
         """Remember only query bounds; configuration paths are selected afresh."""
@@ -304,6 +340,7 @@ class ReportBrowser:
             bounds = (_month(since), _month(through))
             require(bounds[0] <= bounds[1], "PERIOD_RANGE_INVALID", "起始月份不能晚于结束月份")
         self.period_range, self.period, self.view = bounds, True, "report"
+        self.cumulative = False
         self.salary_cycle = None
         self.filter("")
         self.clear()
@@ -313,6 +350,7 @@ class ReportBrowser:
         from .salary_cycle import cycle_bounds
         cycle_bounds(payday, next_payday, budget)
         self.salary_cycle = (payday, next_payday, budget, category)
+        self.cumulative = False
         self.period, self.view = True, "report"
         self.filter("")
         self.clear()
@@ -352,6 +390,8 @@ class ReportBrowser:
             return False
         self.index = self.configs.index(target)
         self.period = False
+        self.salary_cycle = None
+        self.cumulative = False
         self.filter("")
         self.clear()
         return True
@@ -405,11 +445,18 @@ class ReportBrowser:
 
     def report_lines(self, columns: int | None = None) -> list[str]:
         lines = self.lines
+        if self.outcome is not None and self.period and self.salary_cycle is None:
+            if self.cumulative:
+                from .purpose_summary import render_cumulative
+                lines = render_cumulative(self.outcome, columns=columns or 76, show_all=self.show_all).splitlines()
+            else:
+                from .period_report import render_text
+                lines = render_text(self.outcome, columns=columns or 76, show_all=self.show_all).splitlines()
         if columns is not None and self.outcome is not None and not self.period:
             from .monthly_report import render_workflow_text
             if self.renderer is render_workflow_text:
                 # Rendering only: resizing must never trigger another audit.
-                lines = render_workflow_text(self.outcome, columns=columns).splitlines()
+                lines = render_workflow_text(self.outcome, columns=columns, show_all=self.show_all).splitlines()
         if not self.query:
             return lines
         query = self.query.casefold()
@@ -437,7 +484,7 @@ class ReportBrowser:
             self.offset = 0
 
     def title(self) -> str:
-        scope = ("工资周期 " if self.salary_cycle is not None else "区间 ") if self.period else ""
+        scope = ("工资周期 " if self.salary_cycle is not None else "累计用途 " if self.cumulative else "区间 ") if self.period else ""
         if self.error:
             state = "计算失败（无可用月报）"
         elif self.outcome:
@@ -450,6 +497,9 @@ class ReportBrowser:
 
 
 HELP = [
+    "u：累计用途余额，从 cutover 到当前月；先看期末用途可支付余额，不累加月末库存；可跨年。",
+    "i：K 申赎流水；v：tracking 专题流水。按原币列示来源；watch 下保存后在流水内自动重算。",
+    "z：精简／全部科目。精简仍保留当前余额、有效目标、负余额与待审；不改变 JSON 数据或认证。",
     "按键帮助", "r：读取当前账本与配置，重新运行全部月报审计；计算期间旧结果清除。",
     "[ / ]：按命令提供的顺序切换配置，每次重新审计，不复用其他月份的声明或数字。",
     "m：月报中输入 YYYY-MM 直接跳到已载入的月份；每次重新审计。区间待审中仍转到所选待审月份。",
@@ -469,7 +519,7 @@ HELP = [
     "h：追查完整会计科目内某预算用途的历史，显示每笔增减、交易后余额、原因和原行；可留空预算看全部。",
     "用途透支报错时也可按 h：仅查失败交易前的 H 账户诊断流水；不要求签出整月，不放行失败交易。",
     "d：输入 YYYY-MM-DD，查看该日日末的用途分布；两种查询都要求该日所在月份当前能签出月报。",
-    "查询不使用截止日之后的交易／还款，不签发当天最多能花；弹窗是本次静态查询，Esc 返回后再次打开会重算。",
+    "查询不使用截止日之后的交易／还款，不签发当天最多能花；流水可按 r 重查，watch 下保存后自动重查相同范围。",
     "↑↓ 或 j/k：滚动文本；在待审列表选择项目。空格／PgDn 下翻整页，b／PgUp 上翻整页，g/G 或 Home/End 到首尾。",
     "Enter：打开所选待审／交易详情；交易显示逐腿原币、分类、用途、责任及原始账本内容。",
     "待审项分行显示：日期与本笔金额、文件名与行号、账户、原因。Enter 查看完整路径；详情可用 ↑↓／PgUp／PgDn 滚动。",
@@ -477,7 +527,7 @@ HELP = [
     "f：显示本月 budgets.yml 月末完整性配置指引；程序不代写、不批准、不保存隐藏状态。",
     "月末核对只声明截止日及以前的事实，不保证未来没有负债；其他待审仍须处理。存在漏记责任／在途付款时请取消。",
     "所有决定来自账本和两份 YAML；缺少明确依据时保持待审，不创建独立批准记录。",
-    "Esc：关闭详情／帮助，或清除筛选；无这些状态时退出。q 退出。? 打开帮助。",
+    "Esc：关闭详情／帮助，或清除筛选；在周期／区间／累计中返回月报，月报无其他状态时退出。q 退出。? 打开帮助。",
     "筛选只改变显示，不改变计算、认证状态或待审总数。警告不会随报告筛选隐藏。",
 ]
 
@@ -559,6 +609,10 @@ def _draw_browser(stdscr, browser: ReportBrowser):
                      "m 跳到任意 cutover 后月份；n 直接进入下一月；r 重读两份配置与账本，不用手工编译。",
                      "[ / ] 上一月／下一月；月份切换保留原 cutover，不重置资金余额。",
                      "w 输入两次工资日及可选额度；p 选择区间；c 返回月报或上次查询。",
+                     "u 查看 cutover 至当前月的累计用途余额；先看期末可支付余额，历史划拨另列，不累加月末快照。",
+                     "i 查看 K 申赎流水；v 查看 tracking 专题流水；z 切换精简／全部科目。",
+                     "周期／累计／区间内 Esc 返回月报；m 也可直接跳月。缩放终端自动重新排版与清屏。",
+                     "流水内 r 重新查询；--watch 下保存账本或配置后自动重查，失败时清除旧数字。",
                      "↑↓ 选项目；Enter 看完整来源和原因；Esc 返回；/ 筛选；q 退出。",
                      "e 查看修改指引；分类与用途请在账本写 budget／fund，或修改两份 YAML 后按 r。",
                      "f 查看月末填写指引；在 budgets.yml 对应月份明确配置 completeness_confirmed，不保存内部批准。",
@@ -649,8 +703,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         styles.append((_COLORS.get("red", 0) if browser.error else style))
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         _put(stdscr, row, line, styles[browser.offset + row - 3])
-    footer = ("w 工资周期 p 范围 x 导出 c 月报 m 转该月 r 重算 / 筛选 Enter 详情 ? 帮助 q 退出" if browser.period else
-              "h 科目流水 d 日末分布 w 工资周期 p 区间 m 跳月 n 下一月 f 月末配置 x 导出 r 重算 ? 帮助 q 退出")
+    footer = ("Esc/c 月报 u 累计余额 i K流水 v 专题 z 全部 p 范围 w 周期 r 重算 ? 帮助" if browser.period else
+              "u 累计余额 i K流水 v 专题 z 全部 h 科目流水 w 周期 p 区间 m 跳月 r 重算 ? 帮助")
     if listing and browser.view == "reviews":
         footer = "↑↓ 选项 Enter 详情 e 修改指引 [ ] 上/下月 m 跳月 r 重算 / 筛选 ? 帮助 q 退出"
     elif listing and browser.view == "transactions":
@@ -670,6 +724,8 @@ def _read_key(stdscr):
         value = stdscr.get_wch() if hasattr(stdscr, "get_wch") else stdscr.getch()
     except curses.error:
         return -1  # get_wch raises on a timed poll, including inside dialogs.
+    if value == curses.KEY_RESIZE:
+        _resize_screen(stdscr)
     return chr(value) if type(value) is int and 0 <= value < 256 else value
 
 
@@ -759,7 +815,8 @@ def _order_label(newest_first: bool) -> str:
     return "倒序（最新在上）" if newest_first else "正序（最早在上）"
 
 
-def _message(stdscr, title: str, lines: list[str], *, reorder: Callable | None = None):
+def _message(stdscr, title: str, lines: list[str], *, reorder: Callable | None = None,
+             refresh: Callable | None = None, poll: Callable | None = None):
     """A read-only notice; never present an input box that discards text."""
     offset = 0
     while True:
@@ -772,10 +829,19 @@ def _message(stdscr, title: str, lines: list[str], *, reorder: Callable | None =
         if height >= 3:
             for row, line in enumerate(wrapped[offset:offset + page], 1):
                 _put(stdscr, row, line)
-        footer = ("o 正/倒序 " if reorder else "") + "空格/PgDn 下页 b/PgUp 上页 g/G 首尾 Enter 或 Esc 返回"
+        footer = ("自动监测保存 · r 重算 " if poll else "") + ("o 正/倒序 " if reorder else "") + "空格/PgDn 下页 b/PgUp 上页 g/G 首尾 Enter 或 Esc 返回"
         _put(stdscr, max(0, height - 1), footer)
         stdscr.refresh()
         key = _read_key(stdscr)
+        if refresh and (key == 'r' or poll is not None and poll()):
+            lines = ['正在重新核对，旧流水已清除。']
+            _erase_screen(stdscr)
+            _put(stdscr, 0, title)
+            _put(stdscr, 1, lines[0])
+            stdscr.refresh()
+            title, lines = refresh()
+            offset = 0
+            continue
         if key in ("\n", "\r", curses.KEY_ENTER, "\x1b"):
             return
         if reorder and key in ("o", "O"):
@@ -795,11 +861,16 @@ def _message(stdscr, title: str, lines: list[str], *, reorder: Callable | None =
             offset = len(wrapped)
 
 
-def _history_message(stdscr, browser, title: str, result: dict, renderer: Callable):
+def _history_message(stdscr, browser, title: str, result: dict, renderer: Callable, *, refresh=None):
     """Reorder complete events, preserving each event's source and audited balance."""
+    failure = None
     def display():
+        if failure is not None:
+            return title, ['本次流水重算失败；旧数字已清除。', str(failure)]
         key = "history" if "history" in result else "report"
         report = result[key]
+        if report is None:
+            return title, renderer(result).splitlines()
         newest_first = getattr(browser, "newest_first", True)
         view = {**result, key: {**report, "events": list(reversed(report["events"]))
                               if newest_first else list(report["events"])}}
@@ -811,7 +882,24 @@ def _history_message(stdscr, browser, title: str, result: dict, renderer: Callab
         return display()
 
     label, lines = display()
-    _message(stdscr, label, lines, reorder=reorder)
+    watcher = None
+    if refresh and getattr(browser, 'watch', False):
+        from .input_watch import InputWatch
+        watcher = InputWatch([getattr(browser, 'user_config', None) or browser.config])
+
+    def reload():
+        nonlocal result, failure
+        if watcher:
+            watcher.accept()
+        result, failure = None, None
+        try:
+            result = refresh()
+        except (BudgetError, OSError, UnicodeError) as exc:
+            failure = exc
+        return display()
+
+    _message(stdscr, label, lines, reorder=reorder,
+             refresh=reload if refresh else None, poll=watcher.changed if watcher else None)
 
 
 def _edit_review(stdscr, browser: ReportBrowser):
@@ -985,7 +1073,8 @@ def _inspect_account(stdscr, browser: ReportBrowser, *, history=False):
             return
         result = query(config, day.strip(), account=value, purpose=budget.strip() or None)
         if result['report'] is not None:
-            _history_message(stdscr, browser, '科目用途历史', result, render_text)
+            _history_message(stdscr, browser, '科目用途历史', result, render_text,
+                             refresh=lambda: query(config, day.strip(), account=value, purpose=budget.strip() or None))
         else:
             _message(stdscr, '科目用途历史', render_text(result).splitlines())
     except (BudgetError, OSError, UnicodeError) as exc:
@@ -1009,7 +1098,8 @@ def _inspect_failed_history(stdscr, browser):
         if purpose is None:
             return
         result = query(config, month, error.source, purpose=purpose.strip() or None, anchor=error.diagnostic)
-        _history_message(stdscr, browser, '报错前用途流水（诊断，未签发）', result, render_text)
+        _history_message(stdscr, browser, '报错前用途流水（诊断，未签发）', result, render_text,
+                         refresh=lambda: query(config, month, error.source, purpose=purpose.strip() or None, anchor=error.diagnostic))
     except (BudgetError, OSError, UnicodeError) as exc:
         _message(stdscr, '未生成诊断流水', [str(exc)])
 
@@ -1054,6 +1144,51 @@ def _select_salary_cycle(stdscr, browser: ReportBrowser):
         browser.refresh()
     except (BudgetError, OSError, UnicodeError) as exc:
         _message(stdscr, "未切换工资周期", [str(exc), "请核对真实工资日、额度及周期末月份配置。"])
+
+
+def _activity_message(stdscr, browser, kind):
+    """Use the current audited scope; never present an unaudited partial list."""
+    if browser.salary_cycle is not None and browser.period:
+        _message(stdscr, '返回月报查看流水', ['当前是消费周期视图；按 Esc/c 返回月报，再按 i 或 v 查看资金／专题流水。'])
+        return
+    from .activity_views import render_k_flows, render_tracking_flows
+    watcher = None
+    if getattr(browser, 'watch', False):
+        from .input_watch import InputWatch
+        watcher = InputWatch([getattr(browser, 'user_config', None) or browser.config])
+
+    def display():
+        title = ('K 申赎流水' if kind == 'k' else '专题流水') + ' · ' + _order_label(browser.newest_first)
+        if browser.error:
+            return title, ['本次重算失败，旧流水已清除。', str(browser.error)]
+        if not browser.outcome or browser.outcome.get('report') is None:
+            return title, ['当前范围尚未通过审核，不显示局部正式流水。', *browser.lines]
+        report = browser.outcome['report']
+        events = report.get('k_flows', []) if kind == 'k' else (
+            report.get('tracking_events', []) if browser.period else report.get('tracking', {}).get('events', []))
+        ordered = list(reversed(events)) if browser.newest_first else list(events)
+        names = (report.get('owner_names') or
+                 (report.get('monthly_reports') or [{}])[-1].get('owner_names', {}))
+        columns = max(8, stdscr.getmaxyx()[1] - 1)
+        lines = (render_k_flows(ordered, names, columns=columns) if kind == 'k' else
+                 render_tracking_flows(ordered, columns=columns))
+        if not lines:
+            lines = ['当前已审核范围无 K 申赎流水。' if kind == 'k' else '当前已审核范围无 tracking 专题流水。']
+        return title, lines
+
+    def reorder():
+        browser.newest_first = not browser.newest_first
+        return display()
+
+    def reload():
+        if watcher:
+            watcher.accept()
+        browser.refresh()
+        return display()
+
+    title, lines = display()
+    _message(stdscr, title, lines, reorder=reorder, refresh=reload,
+             poll=watcher.changed if watcher else None)
 
 
 def _report_browser(stdscr, browser: ReportBrowser):
@@ -1101,6 +1236,9 @@ def _report_browser(stdscr, browser: ReportBrowser):
                 browser.detail, browser.help, browser.offset = None, False, 0
             elif browser.query:
                 browser.filter("")
+            elif browser.period:
+                browser.return_month()
+                reload()
             else:
                 return
         elif key == "r":
@@ -1108,6 +1246,13 @@ def _report_browser(stdscr, browser: ReportBrowser):
         elif key == "c":
             browser.toggle_period()
             reload()
+        elif key == 'u':
+            browser.select_cumulative()
+            reload()
+        elif key == 'z':
+            browser.show_all = not browser.show_all
+        elif key in ('i', 'v'):
+            _activity_message(stdscr, browser, 'k' if key == 'i' else 'tracking')
         elif key == "p":
             _select_period(stdscr, browser)
         elif key == "w":
@@ -1120,6 +1265,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             if browser.period:
                 if browser.open_review_month():
                     reload()
+                else:
+                    _jump_month(stdscr, browser)
             else:
                 _jump_month(stdscr, browser)
         elif key in ("[", "]", curses.KEY_LEFT, curses.KEY_RIGHT):

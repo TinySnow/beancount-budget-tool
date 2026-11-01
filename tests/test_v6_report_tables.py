@@ -31,7 +31,7 @@ class ReportTableTests(unittest.TestCase):
                  target_q=target, actual_g=value, remaining_q_minus_g=None if target is None else '0')
             for name, target, value in sample]
         original = deepcopy(report)
-        text = render_text(report)
+        text = render_text(report, show_all=True)
         section = text.split('用途划拨', 1)[1].split('\n\n', 1)[0]
         rows = [line.split() for line in section.splitlines()]
         for name, target, value in sample:
@@ -74,6 +74,14 @@ class ReportTableTests(unittest.TestCase):
         for value in ('留存资金贷款', '-8818.53', '不考核', '待定用途', '1/3', '-1/3', '无目标', '目标 Q：0'):
             self.assertIn(value, text)
         self.assertTrue(all(cell_width(line) <= 28 for line in rendered))
+
+    def test_narrow_flow_sources_wrap_without_losing_the_path_or_numeric_precision(self):
+        source = '/账本资料/一条很长的来源目录/' * 5 + 'main.bean:123'
+        rendered = table(['日期', '金额', '来源'], [['2026-01-01', '-12345.6789', source]],
+                         numeric=(1,), columns=30)
+        self.assertTrue(all(cell_width(line) <= 30 for line in rendered))
+        self.assertIn('-12345.6789', '\n'.join(rendered))
+        self.assertIn(source, ''.join(line.strip() for line in rendered))
 
     def test_refunds_unassessed_and_missing_targets_keep_separate_meanings(self):
         report = deepcopy(self.outcome['report'])

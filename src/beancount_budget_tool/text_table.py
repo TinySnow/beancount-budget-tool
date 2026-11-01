@@ -36,10 +36,14 @@ def table(headers, rows, *, numeric=(), columns=76) -> list[str]:
         lines = []
         for row in rows:
             lines.extend("  " + line for line in wrap_cell(row[0], max(2, columns - 2)))
-            for header, value in zip(headers[1:], row[1:]):
+            for i, (header, value) in enumerate(zip(headers[1:], row[1:]), 1):
                 label = f"    {header}："
                 if cell_width(label + value) > columns:
-                    lines.extend([label.rstrip(), "    " + value])
+                    lines.append(label.rstrip())
+                    # Long source paths and account names remain readable in
+                    # narrow flow views; exact numeric cells stay unbroken.
+                    chunks = [value] if i in numeric else wrap_cell(value, max(2, columns - 4))
+                    lines.extend("    " + chunk for chunk in chunks)
                 else:
                     lines.append(label + value)
         return lines

@@ -420,6 +420,13 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         cumulative = document("report", "--config", config, "--from", "2026-09", "--through", "2026-10")
         assert cumulative["status"] == "CERTIFIED_SCOPED", cumulative
         assert cumulative["report"]["closing"]["max_spendable"]["max_spendable"] == "190", cumulative
+        summary = cumulative['report']['cumulative']
+        assert summary['as_of'] == cumulative['report']['closing']['as_of'], summary
+        living = next(row for row in summary['purposes'] if 'expense_default' in row['default_roles'] and row['commodity'] == 'CNY')
+        assert living['available_cash'] == '190', living
+        assert 'k_flows' in cumulative['report'] and 'tracking_events' in cumulative['report'], cumulative
+        cumulative_text = run('report', '--config', config, '--from', '2026-09', '--through', '2026-10', '--format', 'text')[0]
+        assert '累计用途余额' in cumulative_text and '可支付余额' in cumulative_text, cumulative_text
         run("report", "--config", config, "--from", "2026-09", "--through", "2026-10", "--format", "csv", "--output", "report.csv")
         assert (directory / "report.csv").read_bytes().startswith(b"\xef\xbb\xbf")
         _, collision = run("report", "--config", config, "--format", "csv", "--output", "report.csv", code=2)

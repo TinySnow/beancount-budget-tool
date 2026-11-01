@@ -309,7 +309,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
 
     def test_h_account_balances_precede_k_book_details(self):
         text = render_workflow_text(self.outcome())
-        self.assertLess(text.index('其他 H 资产账户'), text.index('K 账面申赎'))
+        self.assertLess(text.index('其他 H 资产账户'), text.index('K 本月账面申赎'))
 
     def test_unsignable_next_month_can_return_after_a_runtime_failure(self):
         browser = SimpleReportBrowser(self.config, '2024-01')

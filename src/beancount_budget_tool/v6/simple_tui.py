@@ -76,6 +76,9 @@ class SimpleReportBrowser(ReportBrowser):
             from .salary_cycle import render_text
             return render_text
         if self.period:
+            if self.cumulative:
+                from .purpose_summary import render_cumulative
+                return render_cumulative
             from .period_report import render_text
             return render_text
         return self.renderer
@@ -84,6 +87,7 @@ class SimpleReportBrowser(ReportBrowser):
         month = _month(month)
         require(month >= load_yaml(self.user_config)["cutover"][:7], "MONTH_INVALID", "月份不得早于 cutover", str(self.user_config))
         self.selected_month, self.period = month, False
+        self.cumulative = False
         self.visited_months.add(month)
         self.saved_cycle = None
         self.salary_cycle = None
@@ -145,6 +149,7 @@ class SimpleReportBrowser(ReportBrowser):
         choices, _ = self.configured_cycle_choices()
         require(start in dict(choices), "SALARY_CYCLE_UNKNOWN", "发薪日尚未在 budgets.yml 登记", str(self.user_config))
         self.saved_cycle = start
+        self.cumulative = False
         from datetime import timedelta
         cutoff = self._saved_cutoff(start)
         self.salary_cycle = (start, (cutoff + timedelta(days=1)).isoformat(), None, None)
@@ -164,6 +169,15 @@ class SimpleReportBrowser(ReportBrowser):
     def select_period(self, *args):
         self.saved_cycle = None
         return super().select_period(*args)
+
+    def return_month(self):
+        self.saved_cycle = None
+        return super().return_month()
+
+    def select_cumulative(self):
+        self.saved_cycle = None
+        self.select_period(load_yaml(self.user_config)['cutover'][:7], self.selected_month)
+        self.cumulative = True
 
     def select_salary_cycle(self, *args):
         self.saved_cycle = None

@@ -33,6 +33,7 @@ from .review_queue import audit_review_queue, render_text as render_review_queue
 from .review_diagnostics import posting_sources, annotate_source_items
 from .targets import _month, audit_monthly_expense_targets
 from .tracking import audit_monthly_tracking
+from .purpose_summary import active_owners, expense_active
 
 
 REQUIRED = {"schema", "ledger", "cutover", "month", "report_currency",
@@ -168,7 +169,14 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False, na
         purpose = audit_monthly_purpose_progress(
             root, cutover, month, accounts, opening, ownership, path("purpose_plans"),
             currency, path("h_transfers"), path("k_events"), h_fx, path("purpose_pools"),
-            obligations, include_evidence=include_transactions)
+            obligations, include_evidence=True)
+        # Presence is independent of net change: a purpose used and emptied
+        # this month must remain visible even if its G and closing stock are 0.
+        purpose_evidence = purpose['_transaction_evidence']
+        active_owner_ids = sorted({part['owner_id'] for row in purpose_evidence['ownership']
+                                   for part in row['slices']})
+        if not include_transactions:
+            purpose.pop('_transaction_evidence')
         pool = audit_purpose_pools(root, cutover, as_of, path("purpose_pools"))
         k_book = audit_k_book_purposes(root, cutover, as_of, accounts, opening,
                                        ownership, path("k_events"))
@@ -216,10 +224,12 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False, na
     else:
         max_spendable = summarize_max_spendable(actual, expense)
     activity = activity_report(audit_simple_obligations(root, cutover, obligations, as_of), month)
+    from .activity_views import k_flows
     return {**details, **({"liability_activity": activity} if activity is not None else {}),
             "mode": "v6_reviewed_month", "month": month, "as_of": as_of.isoformat(),
             "report_currency": currency, "ledger_snapshot": actual["ledger_snapshot"],
             "owner_names": owner_names,
+            "active_owner_ids": active_owner_ids,
             "actual_spendable": actual,
             "max_spendable": max_spendable,
             "expense_targets": expense,
@@ -227,6 +237,7 @@ def audit_reviewed_month(config: Path, *, include_transactions: bool = False, na
             "default_outflows": outflows,
             "purpose_pools": pool,
             "k_book_purposes": k_book,
+            "k_flows": k_flows(k_book, month),
             "account_purposes": account_purposes,
             "purpose_balances": purpose_balances,
             "tracking": tracking,
@@ -338,7 +349,7 @@ def _audit_month_workflow_bounded(config: Path, document: dict, month: str,
             "pending_metrics": pending}
 
 
-def render_workflow_text(outcome: dict, *, columns: int = 76) -> str:
+def render_workflow_text(outcome: dict, *, columns: int = 76, show_all: bool = False) -> str:
     if outcome.get("configuration_only"):
         return "\n".join([f"v6 {outcome['month']} 配置待审：NEEDS_REVIEW",
             *[f"{item['detail']} [{item['source']}]" for item in outcome["review_items"]],
@@ -400,7 +411,7 @@ def render_workflow_text(outcome: dict, *, columns: int = 76) -> str:
                 lines.append(f"    {account}：K 期初或申赎用途待审")
         lines.append("本次不签发完整月报；修正上述问题后重跑。")
         return "\n".join(lines)
-    rendered = render_text(outcome["report"], columns=columns)
+    rendered = render_text(outcome["report"], columns=columns, show_all=show_all)
     review = outcome["review_queue"]
     if not review["booked_transactions_in_range"]:
         latest = review["latest_booked_transaction_date"] or "无"
@@ -409,7 +420,7 @@ def render_workflow_text(outcome: dict, *, columns: int = 76) -> str:
     return rendered
 
 
-def render_text(report: dict, *, columns: int = 76) -> str:
+def render_text(report: dict, *, columns: int = 76, show_all: bool = False) -> str:
     """Show only rows carrying an independently certified value."""
     amount = amount_text
 
@@ -419,6 +430,7 @@ def render_text(report: dict, *, columns: int = 76) -> str:
     expense = report["expense_targets"]
     purpose = report["purpose_progress"]
     owner_names = report.get("owner_names", {})
+    visible_owners = active_owners(report)
     expense_owner = report.get("default_outflows", {}).get("owner_id")
     cash_label = (f"{owner_names.get(expense_owner, expense_owner)}可支付现金"
                   if expense_owner is not None else "非专款可支付现金")
@@ -509,6 +521,8 @@ def render_text(report: dict, *, columns: int = 76) -> str:
             for row in actual["purpose_available"]), ""]
     expense_rows, refund_details = [], []
     for row in expense["categories"]:
+        if not show_all and not expense_active(row):
+            continue
         if row.get("subtree_remaining_status") == "NOT_ASSESSED":
             expense_rows.append([row['name'] + '（含子类）', '-', amount(row['subtree_spent']), '-', '不考核'])
             if row["direct_target"] is None:
@@ -574,6 +588,8 @@ def render_text(report: dict, *, columns: int = 76) -> str:
     lines += ["", f"用途划拨（{currency}；差额=目标Q-实际G，负数为超额划拨）"]
     purpose_rows = []
     for row in purpose["owners"]:
+        if not show_all and row['owner_id'] not in visible_owners:
+            continue
         name = owner_names.get(row["owner_id"], row["owner_id"])
         if row["status"] == "CERTIFIED":
             completion = "已达成" if Fraction(row["remaining_q_minus_g"]) <= 0 else "未达成"
@@ -613,17 +629,10 @@ def render_text(report: dict, *, columns: int = 76) -> str:
         if not report["account_purposes"]["rows"]:
             lines.append("  无已审的非证券池 H 余额")
     if report.get("k_book_purposes", {}).get("rows"):
-        lines += ["", "K 账面申赎及用途变动（非真实持仓；不可与 H 余额相加）"]
-        for row in report["k_book_purposes"]["rows"]:
-            lines.append(f"  {row['account']}：账面期初 {amount(row['booked_opening'])}，"
-                         f"本期变动 {amount(row['booked_change'])}，"
-                         f"期末 {amount(row['booked_end'])} {row['commodity']}；"
-                         "真实份额与可赎回额未知")
-            for part in row["purpose_changes"]:
-                name = owner_names.get(part["owner_id"], part["owner_id"])
-                lines.append(f"    cutover 后已审 {name} 申赎净变动 "
-                             f"{amount(part['signed_change'])} {row['commodity']}")
-        zero_records = report["k_book_purposes"].get("zero_value_records", [])
+        from .activity_views import render_k_summary
+        lines += ['', *render_k_summary(report['k_book_purposes'], owner_names,
+                                        month=report['month'], columns=columns, show_all=show_all)]
+        zero_records = report['k_book_purposes'].get('zero_value_records', [])
         if zero_records:
             lines.append(f"  截至报告日保留 {len(zero_records)} 条 K 零金额记录；不改变预算、现金或 G，"
                          "实际份额与价值未记录，不能把 0 元当作价值为零。")
@@ -634,6 +643,8 @@ def render_text(report: dict, *, columns: int = 76) -> str:
                                        if balances["outside_budget"] else [])
         roles = {"income_default": "默认收入用途", "expense_default": "默认支出用途"}
         for row in rows:
+            if not show_all and row['owner_id'] not in visible_owners and row['owner_id'] != '-':
+                continue
             suffix = f"（{'、'.join(roles[role] for role in row['default_roles'])}）" if row["default_roles"] else ""
             lines.append(f"  {row['name']}{suffix}：")
             if row["has_negative_h_position"]:
@@ -661,7 +672,9 @@ def render_text(report: dict, *, columns: int = 76) -> str:
                          f"净额 {amount(row['net'])} {row['commodity']}")
     lines += ["", actual["note"], report["note"]]
     lines[2:2] = [f"口径：最多能花 = min（{cash_label}，对应目标／发薪周期剩余额度）；其他用途余额单列，不并入。",
-                  "现金余额随账本延续；自然月目标按月独立，剩余额度不自动追加到下月目标。", ""]
+                  "现金余额随账本延续；自然月目标按月独立，剩余额度不自动追加到下月目标。",
+                  ("显示全部科目；TUI z 切换精简显示。" if show_all else
+                   "仅显示本月活动、有效目标或现有余额的科目；TUI z 显示全部，u 看累计用途余额，i K申赎流水，v 专题流水。"), ""]
     return "\n".join(lines)
 
 

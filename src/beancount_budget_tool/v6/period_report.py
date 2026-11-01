@@ -23,6 +23,7 @@ from .monthly_report import (
 from .review_diagnostics import IMPLEMENTATION_LIMITS
 from .input_compiler import config_metadata as _metadata, default_config
 from .targets import _month
+from .purpose_summary import summarize as summarize_cumulative, render_summary, active_owners, expense_active
 
 
 SCALARS = {"schema", "cutover", "month", "report_currency"}
@@ -213,6 +214,9 @@ def _combine_months(ordered, months, reports, reviews, snapshots, warnings, *, n
         **({'multicurrency': native} if native is not None else {}),
         "report_currency": last["report_currency"], "ledger_snapshot": next(iter(snapshots)),
         "monthly_reports": reports, "warnings": warnings,
+        "cumulative": summarize_cumulative(reports, ordered[0], ordered[-1]),
+        "k_flows": [event for report in reports for event in report.get('k_flows', [])],
+        "tracking_events": [event for report in reports for event in report.get('tracking', {}).get('events', [])],
         "expense_totals": expense_total, "expenses": expenses, "purpose_allocations": purpose_rows,
         "tracking": _sum_rows(reports, "tracking", "topics", ("topic", "commodity"), ("spent", "returned", "net")),
         "default_outflows": (_sum_rows(reports, "default_outflows", "totals", ("commodity",), outflow_metrics)
@@ -225,7 +229,7 @@ def _combine_months(ordered, months, reports, reviews, snapshots, warnings, *, n
     return result
 
 
-def render_text(outcome: dict) -> str:
+def render_text(outcome: dict, *, columns=76, show_all=False) -> str:
     lines = [f"v6 区间报表 {outcome['from']} 至 {outcome['through']}：{outcome['status']}"]
     if outcome["report"] is None:
         lines.extend(f"{row['month']}：{row['status']} [{row['config']}]" for row in outcome["months"])
@@ -236,6 +240,9 @@ def render_text(outcome: dict) -> str:
         lines.extend(native_text(outcome.get('native_report')))
         return "\n".join(lines)
     report = outcome["report"]
+    if report.get('cumulative'):
+        lines += render_summary(report['cumulative'], columns=columns, show_all=show_all)
+        lines += ['', '区间收支与逐月目标（余额不相加）：']
     from .multicurrency import render_text as native_text
     lines.extend(native_text(report.get('multicurrency')))
     currency = report["report_currency"]
@@ -274,11 +281,15 @@ def render_text(outcome: dict) -> str:
                 lines.append(f"    {row['category_name']}：周期额度 {_fmt(row['target']) if row['target'] is not None else '不考核'}，"
                              f"净消费 {_fmt(row['net_spent'])}，剩余 {_fmt(row['remaining']) if row['remaining'] is not None else '不计算'} {currency}")
         for row in month["expense_targets"]["categories"]:
+            if not show_all and not expense_active(row):
+                continue
             if row["subtree_target"] is not None:
                 lines.append(f"  {month['month']} {row['name']}：目标 {_fmt(row['subtree_target'])}，消费 {_fmt(row['subtree_spent'])}，差额 {_fmt(row['subtree_remaining'])} {currency}")
             elif row["subtree_remaining_status"] == "NOT_ASSESSED":
                 lines.append(f"  {month['month']} {row['name']}：不考核目标，消费 {_fmt(row['subtree_spent'])} {currency}；差额不计算")
         for row in month["purpose_progress"]["owners"]:
+            if not show_all and row['owner_id'] not in active_owners(month):
+                continue
             target = _fmt(row["target_q"]) if row["target_q"] is not None else "不考核"
             remaining = _fmt(row["remaining_q_minus_g"]) if row["remaining_q_minus_g"] is not None else "不考核"
             lines.append(f"  {month['month']} {month['owner_names'][row['owner_id']]}：Q {target}，G {_fmt(row['actual_g'])}，Q−G {remaining}")
@@ -286,6 +297,8 @@ def render_text(outcome: dict) -> str:
     lines.append(f"期末用途分布（{report['closing']['as_of']}，各口径分别展示）：")
     balances = report["closing"]["purpose_balances"]
     for purpose in [*balances["purposes"], *([balances["outside_budget"]] if balances["outside_budget"] else [])]:
+        if not show_all and purpose['owner_id'] not in active_owners(report['monthly_reports'][-1]) and purpose['owner_id'] != '-':
+            continue
         if not any(purpose[key] for key in ("h_native_balances", "pool_book_cost_balances", "k_book_purpose_changes")):
             lines.append(f"  {purpose['name']}：无余额或已审用途变动记录")
         for key, label, metric in (("h_native_balances", "H 原币余额", "units"),
@@ -336,6 +349,19 @@ def csv_rows(outcome: dict) -> list[dict]:
         return rows
     report, period = outcome["report"], outcome["from"] + ".." + outcome["through"]
     currency = report["report_currency"]
+    for row in report.get('cumulative', {}).get('purposes', []):
+        for metric in ('h_units', 'available_cash', 'pool_book_cost', 'k_book_change', 'target_q', 'actual_g'):
+            add('closing', report['closing']['as_of'], 'purpose_cumulative', metric, row[metric],
+                id=row['owner_id'], name=row['name'], commodity=row['commodity'],
+                status=outcome['status'] if row[metric] is not None else 'NOT_ASSESSED',
+                detail='期末库存不累加；Q/G为所选期间流量；K/证券池不视为现金。')
+    for event in report.get('k_flows', []):
+        add('period', event['date'], 'k_flow', 'signed_k_units', event['signed_k_units'],
+            account=event['k_account'], commodity=event['commodity'], source=event.get('source'),
+            detail=event.get('direction', event.get('kind', '')))
+    for event in report.get('tracking_events', []):
+        add('period', event['date'], 'tracking_flow', 'signed_units', event['signed_units'],
+            name=event['topic'], account=event['account'], commodity=event['commodity'], source=event['source'])
     for month, source in zip(report["monthly_reports"], outcome["months"]):
         label, config = month["month"], source["config"]
         for row in month.get("liability_activity", {}).get("budget_totals", []):

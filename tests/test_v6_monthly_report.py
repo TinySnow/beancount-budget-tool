@@ -75,10 +75,17 @@ class MonthlyReportTextTests(unittest.TestCase):
         self.assertIn("待投资金 91733.825 CNY", rendered)
         self.assertIn(["emergency", "-", "0", "-", "无目标"], rows)
         self.assertIn("Assets:Bank：生活费 -100 CNY", rendered)
-        self.assertIn("K 账面申赎及用途变动（非真实持仓；不可与 H 余额相加）", rendered)
-        self.assertIn("Assets:Fund:CCB：账面期初 40479.58，本期变动 2000，期末 42479.58 CNY", rendered)
-        self.assertIn("cutover 后已审 保险 申赎净变动 200 CNY", rendered)
-        self.assertIn("cutover 后已审 旅游 申赎净变动 900 CNY", rendered)
+        # A historical K account with no monthly events stays in the full view.
+        self.assertNotIn('Assets:Fund:CCB', rendered)
+        report['k_book_purposes']['rows'][0].update(unreviewed_change='0', pending_event_count=0,
+                                                 status='CERTIFIED_BOOK_FLOW')
+        all_text = render_text(report, show_all=True)
+        self.assertIn('K 账面申赎汇总', all_text)
+        self.assertIn('Assets:Fund:CCB', all_text)
+        self.assertIn('40479.58', all_text)
+        self.assertIn('42479.58', all_text)
+        self.assertIn('保险 200', all_text)
+        self.assertIn('旅游 900', all_text)
         self.assertNotIn("可支付现金：None", rendered)
         report['default_outflows'] = {'owner_id': 'travel'}
         self.assertIn('旅游可支付现金（默认支出用途）：待审', render_text(report))
