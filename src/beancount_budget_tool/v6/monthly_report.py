@@ -497,10 +497,15 @@ def render_text(report: dict, *, columns: int = 76) -> str:
              if row["obligation_id"] in coverage else "")
             for row in actual["booked_debts"]), ""]
     if actual["status"] == "CERTIFIED" and actual.get("purpose_available"):
+        # Period JSON/CSV collect warning lines from this text. Preserve the
+        # existing warning scope and wording for outstanding-debt reports;
+        # newly displayed balances do not introduce additional warnings.
+        negative_notice = ("（警告：可动用现金为负）" if actual.get("booked_debts")
+                           else "（余额为负，需核对）")
         lines[2:2] = [f"其他用途可支付余额（不并入{cash_label}与上限；已扣债务预留与未覆盖责任）", *(
             f"  {owner_names.get(row['owner_id'], row['owner_id'])}："
             f"{amount(row['units'])} {currency}" +
-            ("（警告：可支付余额为负）" if Fraction(row["units"]) < 0 else "")
+            (negative_notice if Fraction(row["units"]) < 0 else "")
             for row in actual["purpose_available"]), ""]
     expense_rows, refund_details = [], []
     for row in expense["categories"]:

@@ -108,6 +108,36 @@ class PeriodReportTests(unittest.TestCase):
         self.assertEqual(_months("2026-12", "2027-02"), ["2026-12", "2027-01", "2027-02"])
         self.assertEqual(_months("9999-12", "9999-12"), ["9999-12"])
 
+    def test_other_purpose_display_preserves_existing_json_and_csv_warning_scope(self):
+        for has_debt in (False, True):
+            with self.subTest(has_debt=has_debt):
+                outcome = deepcopy(self.demo['outcomes']['2026-10'])
+                actual = outcome['report']['actual_spendable']
+                if not has_debt:
+                    actual['booked_debts'] = []
+                actual['purpose_available'] = []
+                with patch('beancount_budget_tool.v6.period_report.audit_month_workflow',
+                           return_value=outcome):
+                    baseline = audit_period(self.configs[:1])
+                    actual['purpose_available'] = [{'owner_id': 'other', 'units': '-1'}]
+                    result = audit_period(self.configs[:1])
+                from beancount_budget_tool.v6.monthly_report import render_workflow_text
+                self.assertIn('other：-1 CNY', render_workflow_text(outcome))
+                before = baseline['report']['warnings']
+                after = json.loads(json.dumps(result))['report']['warnings']
+                before_csv = [row for row in csv_rows(baseline) if row['section'] == 'warning']
+                after_csv = [row for row in csv_rows(result) if row['section'] == 'warning']
+                if has_debt:
+                    detail = '  other：-1 CNY（警告：可动用现金为负）'
+                    self.assertEqual([row for row in after if row not in before],
+                                     [{'month': '2026-10', 'detail': detail}])
+                    self.assertEqual(len(after), len(before) + 1)
+                    self.assertEqual([row['detail'] for row in after_csv if row not in before_csv],
+                                     [detail])
+                else:
+                    self.assertEqual(after, before)
+                    self.assertEqual(after_csv, before_csv)
+
     def test_missing_duplicate_months_or_invalid_range_cannot_look_like_zero(self):
         cases = [([], None, None, "PERIOD_CONFIG_REQUIRED"),
                  ([self.configs[0], self.configs[2]], None, None, "PERIOD_MONTHS_INCOMPLETE"),
