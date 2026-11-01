@@ -91,7 +91,7 @@ def summarize_max_spendable(actual: dict, expense: dict) -> dict:
         return {"status": "NOT_ASSESSED", "category_id": category_id,
                 "category_name": category["name"], "max_spendable": None,
                 "reason_codes": ["SPENDABLE_CAP_NOT_ASSESSED"],
-                "note": "本月明确不考核消费上限，不计算最多能花；用途现金可支付另行审计。"}
+                "note": "本月明确不考核消费上限，不计算最多能花；默认支出用途可支付现金另行审计。"}
     if category["subtree_target_kind"] != "explicit":
         return {"status": "NEEDS_REVIEW", "category_id": category_id,
                 "max_spendable": None, "reason_codes": ["SPENDABLE_CAP_TARGET_MISSING"]}
@@ -109,7 +109,7 @@ def summarize_max_spendable(actual: dict, expense: dict) -> dict:
             "consumption_target_remaining": exact_text(remaining),
             "max_spendable": exact_text(min(payable, remaining)),
             "reason_codes": [],
-            "note": "最多能花取已审可支付能力与指定消费目标子树差额的较小值；负数表示超支或资金缺口"}
+            "note": "最多能花取默认支出用途可支付现金与指定消费目标子树剩余额度的较小值；其他用途余额不并入，负数表示超支或资金缺口"}
 
 
 def audit_reviewed_month(config: Path, *, include_transactions: bool = False, native_only: bool = False) -> dict:
@@ -354,7 +354,9 @@ def render_workflow_text(outcome: dict, *, columns: int = 76) -> str:
             lines = [f"v6 {outcome['month']} {state}：{outcome['status']}"]
             for item in outcome["review_items"]:
                 label = "程序实现缺口" if item["reason_kind"] == "implementation_limit" else "待审"
-                lines.append(f"  {'、'.join(item['metrics'])}／{label}（{item['reason_code']}）："
+                metric_names = ['默认支出用途可支付现金' if name == '实际可花' else name
+                                for name in item['metrics']]
+                lines.append(f"  {'、'.join(metric_names)}／{label}（{item['reason_code']}）："
                              f"{item['detail']} [{item['source']}]")
                 context = item.get("account", "")
                 if item.get("obligation_id"):
@@ -383,7 +385,8 @@ def render_workflow_text(outcome: dict, *, columns: int = 76) -> str:
         lines = [f"v6 {outcome['month']} 月报待审：以下指标尚未认证"]
         for item in outcome["pending_metrics"]:
             reasons = ", ".join(item["reason_codes"]) or item["status"]
-            lines.append(f"  {item['metric']}：{reasons} [{item['source']}]")
+            name = '默认支出用途可支付现金' if item['metric'] == '实际可花' else item['metric']
+            lines.append(f"  {name}：{reasons} [{item['source']}]")
             if item.get("missing_target_ids"):
                 lines.append(f"    缺少目标：{', '.join(item['missing_target_ids'])}")
             for event in item.get("pending_events", []):
@@ -416,20 +419,24 @@ def render_text(report: dict, *, columns: int = 76) -> str:
     expense = report["expense_targets"]
     purpose = report["purpose_progress"]
     owner_names = report.get("owner_names", {})
+    expense_owner = report.get("default_outflows", {}).get("owner_id")
+    cash_label = (f"{owner_names.get(expense_owner, expense_owner)}可支付现金"
+                  if expense_owner is not None else "非专款可支付现金")
+    cash_name = cash_label + ("（默认支出用途）" if expense_owner is not None else "")
     if capped["status"] == "CERTIFIED":
         headline = (f"最多能花：{amount(capped['max_spendable'])} {currency}"
                     f"（{capped['category_name']}{'发薪周期剩余额度' if capped.get('basis') == 'salary_cycle' else '消费目标差'} {amount(capped['consumption_target_remaining'])}；"
-                    f"用途现金可支付 {amount(capped['payable_after_obligations'])}）")
+                    f"{cash_name} {amount(capped['payable_after_obligations'])}）")
     elif capped["status"] == "NEEDS_REVIEW":
         headline = f"最多能花：待审（{', '.join(capped['reason_codes'])}）"
     elif actual["status"] == "CERTIFIED":
-        headline = (f"用途现金可支付：{amount(actual['actual_spendable'])} {currency}；"
+        headline = (f"{cash_name}：{amount(actual['actual_spendable'])} {currency}；"
                     + (("本周期消费上限不考核，不计算『最多能花』" if capped.get("basis") == "salary_cycle" else "本月消费上限不考核，不计算『最多能花』") if capped["status"] == "NOT_ASSESSED" else
                        "未配置消费目标上限，不签发『最多能花』"))
         if "SALARY_CYCLE_NOT_STARTED" in capped.get("reason_codes", []):
-            headline = f"用途现金可支付：{amount(actual['actual_spendable'])} {currency}；工资周期目标尚未生效，不计算『最多能花』"
+            headline = f"{cash_name}：{amount(actual['actual_spendable'])} {currency}；工资周期目标尚未生效，不计算『最多能花』"
     else:
-        headline = f"实际可花：待审（{', '.join(actual['reason_codes'])}）"
+        headline = f"{cash_name}：待审（{', '.join(actual['reason_codes'])}）"
     lines = [f"v6 已审月报：{report['month']}（截至 {report['as_of']} 日末）",
              headline, "", (f"自然月消费目标（{currency}；与发薪周期额度分别显示）" if "salary_cycle" in report else f"消费目标（{currency}；差额=目标-实际，负数为超支）")]
     if report.get('multicurrency'):
@@ -452,6 +459,7 @@ def render_text(report: dict, *, columns: int = 76) -> str:
             rows.append(f"完整发薪周期：{cycle['from']} 至 {end}；TUI 按 w 查看完整周期消费，跨月连续统计。")
         else:
             rows.append("下次发薪日尚未登记，完整周期终点未定；跨月消费继续累计，不在月初重置。")
+        rows.append("同一发薪周期跨自然月累计；新发薪周期使用新目标，不自动承接旧周期剩余额度。")
         rows.append(f"截至上述月末的周期额度与消费（{currency}）")
         rows += table(["类别", "额度", "净消费", "剩余", "状态"], [
             [row['category_name'], amount(row['target']) if row['target'] is not None else '-',
@@ -461,7 +469,7 @@ def render_text(report: dict, *, columns: int = 76) -> str:
         lines[2:2] = [*rows, ""]
     if actual["status"] == "CERTIFIED" and actual.get("clearing_receivables"):
         ruled_credit = any(row.get("origin") == "account_rule" for row in actual["clearing_receivables"])
-        lines[2:2] = ["应收／预付余额（原币；不计入可支付现金）" if ruled_credit else "待报销代垫（应收原币；未到账，不计入可花现金）", *(
+        lines[2:2] = [f"应收／预付余额（原币；不计入{cash_label}）" if ruled_credit else f"待报销代垫（应收原币；未到账，不计入{cash_label}）", *(
             f"  {row['account'] if row.get('origin') == 'account_rule' else row['clearing_id']}："
             f"{'待收／预付' if row.get('origin') == 'account_rule' else '待收'} {amount(row['remaining_native'])} "
             + (f"（{report['owner_names'][row['owner_id']]}） " if row.get("responsibility_protocol") else "") +
@@ -474,7 +482,7 @@ def render_text(report: dict, *, columns: int = 76) -> str:
         has_loan = any("debt_kind" in row for row in actual["booked_debts"])
         by_budget = any(row.get("responsibility_protocol") for row in actual["booked_debts"])
         lines[2:2] = ["未清已记责任（消费全额；贷款按到期范围计入）" if has_loan else
-                     "未清已记责任（未覆盖部分占用实际可花）" if by_budget else "未清已记消费责任（未覆盖部分占用实际可花）", *(
+                     "未清已记责任（未覆盖部分扣减上述可支付现金）" if by_budget else "未清已记消费责任（未覆盖部分扣减上述可支付现金）", *(
             f"  {row['account'] if row.get('origin') == 'account_rule' else row['obligation_id']}：{amount(row['remaining_native'])} "
             + (f"（{report['owner_names'][row['owner_id']]}） " if row.get("responsibility_protocol") else "") +
             f"{row['commodity']}" + ("" if row.get("origin") == "account_rule" else f"，{row['account']}") +
@@ -488,12 +496,12 @@ def render_text(report: dict, *, columns: int = 76) -> str:
              + (f" {currency}（覆盖与未覆盖均按锁定清偿金额）" if row["commodity"] != currency else "")
              if row["obligation_id"] in coverage else "")
             for row in actual["booked_debts"]), ""]
-        if actual.get("purpose_available"):
-            lines[2:2] = ["其他用途可动用现金（支付范围内；已扣债务预留与未覆盖责任）", *(
-                f"  {owner_names.get(row['owner_id'], row['owner_id'])}："
-                f"{amount(row['units'])} {currency}" +
-                ("（警告：可动用现金为负）" if Fraction(row["units"]) < 0 else "")
-                for row in actual["purpose_available"]), ""]
+    if actual["status"] == "CERTIFIED" and actual.get("purpose_available"):
+        lines[2:2] = [f"其他用途可支付余额（不并入{cash_label}与上限；已扣债务预留与未覆盖责任）", *(
+            f"  {owner_names.get(row['owner_id'], row['owner_id'])}："
+            f"{amount(row['units'])} {currency}" +
+            ("（警告：可支付余额为负）" if Fraction(row["units"]) < 0 else "")
+            for row in actual["purpose_available"]), ""]
     expense_rows, refund_details = [], []
     for row in expense["categories"]:
         if row.get("subtree_remaining_status") == "NOT_ASSESSED":
@@ -539,7 +547,7 @@ def render_text(report: dict, *, columns: int = 76) -> str:
         for account, role in managed:
             lines.append(f"  自动清算账户：{account}（{role}；单一用途清算池）")
     if actual.get("future_loan_principal"):
-        lines += ["", "未来到期贷款本金（已记负债；本月未到期部分不扣本月实际可花）"]
+        lines += ["", "未来到期贷款本金（已记负债；本月未到期部分不扣上述可支付现金）"]
         for row in actual["future_loan_principal"]:
             lines.append(f"  {row['account']}：{amount(row['remaining_native'])} {row['commodity']}，到期 {row['due_on']}")
     outflows = report.get("default_outflows", {})
@@ -647,6 +655,8 @@ def render_text(report: dict, *, columns: int = 76) -> str:
                          f"退款／冲回 {amount(row['returned'])}，"
                          f"净额 {amount(row['net'])} {row['commodity']}")
     lines += ["", actual["note"], report["note"]]
+    lines[2:2] = [f"口径：最多能花 = min（{cash_label}，对应目标／发薪周期剩余额度）；其他用途余额单列，不并入。",
+                  "现金余额随账本延续；自然月目标按月独立，剩余额度不自动追加到下月目标。", ""]
     return "\n".join(lines)
 
 

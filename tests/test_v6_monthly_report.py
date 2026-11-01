@@ -67,7 +67,7 @@ class MonthlyReportTextTests(unittest.TestCase):
             "note": "历史快照"
         }
         rendered = render_text(report)
-        self.assertIn("实际可花：待审（EXTERNAL_SCOPE_PENDING）", rendered)
+        self.assertIn("非专款可支付现金：待审（EXTERNAL_SCOPE_PENDING）", rendered)
         rows = [line.split() for line in rendered.splitlines()]
         self.assertIn(["生活费（含子类）", "2000", "2339.58", "-339.58", "超支"], rows)
         self.assertIn(["savings", "700", "684.94", "15.06", "未达成"], rows)
@@ -79,7 +79,10 @@ class MonthlyReportTextTests(unittest.TestCase):
         self.assertIn("Assets:Fund:CCB：账面期初 40479.58，本期变动 2000，期末 42479.58 CNY", rendered)
         self.assertIn("cutover 后已审 保险 申赎净变动 200 CNY", rendered)
         self.assertIn("cutover 后已审 旅游 申赎净变动 900 CNY", rendered)
-        self.assertNotIn("实际可花：None", rendered)
+        self.assertNotIn("可支付现金：None", rendered)
+        report['default_outflows'] = {'owner_id': 'travel'}
+        self.assertIn('旅游可支付现金（默认支出用途）：待审', render_text(report))
+        self.assertNotIn('生活费可支付现金', render_text(report))
 
     def test_workflow_keeps_pending_metric_out_of_signed_text(self):
         with TemporaryDirectory() as folder:

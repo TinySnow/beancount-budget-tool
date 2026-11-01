@@ -26,7 +26,9 @@ python -m beancount_budget_tool --config budget/simple/config.yml --month 2023-0
 
 TUI：`r` 重算，`m` 跳月，`n` 下一月，`Enter` 看完整来源，`?` 看帮助。明确的 `fund` 新用途自动识别；缺少金额、用途或证据时继续待审，不把计划变成现金。
 
-消费上限可按实际发薪周期：config.yml 设置 `expense_budget_basis: salary_cycle`，budgets.yml 的 `salary_cycles` 保存日期和额度。账务仍逐月核对，最多能花取当前周期剩余额度与已审可支付资金的较小值，额度不在月初重置。月报显示截至月末的周期进度；TUI `w` 直接选保存的周期，CLI 可用 `report --config config.yml --cycle current`。例如 6 月 9 日发薪、7 月 15 日再次发薪，选择 6 月 9 日周期会连续统计 6 月 9 日至 7 月 14 日消费；6 月月报的进度只统计至 6 月 30 日，保持与月末资金余额相同的截止日。
+月报的“生活费可支付现金（默认支出用途）”只指配置中 `defaults.expense_purpose` 对应的用途，显示名称随配置变化。它是支付范围内该用途的现金，经债务预留、未覆盖责任等核对后的金额，不是全部 H 资产或全部用途余额的合计。其他用途可支付余额单列，不并入该用途现金与上限。**最多能花 = min（默认支出用途可支付现金，对应目标／发薪周期剩余额度）**。
+
+消费上限可按实际发薪周期：config.yml 设置 `expense_budget_basis: salary_cycle`，budgets.yml 的 `salary_cycles` 保存日期和额度。同一周期跨自然月连续累计，额度不在月初重置；新发薪周期使用新目标，不自动承接旧周期剩余额度。自然月目标则按月独立，实际现金余额始终随账本延续。月报显示截至月末的周期进度；TUI `w` 直接选保存的周期，CLI 可用 `report --config config.yml --cycle current`。例如 6 月 9 日发薪、7 月 15 日再次发薪，选择 6 月 9 日周期会连续统计 6 月 9 日至 7 月 14 日消费；6 月月报的进度只统计至 6 月 30 日，保持与月末资金余额相同的截止日。
 
 多币种收支按原币并列：例如 550 JPY 消费与 5 CNY 消费分别累计，不要求汇率或 `price`，不自动折成人民币。原币完整且相关资金审核通过时显示 `CERTIFIED_NATIVE_SCOPED`。人民币目标和最多能花只包含原生人民币消费，外币预算／剩额显示 `-`；外币资产不因此变成人民币可支付资金。月报、区间、薪资周期及文本／TUI／JSON／CSV使用相同原币数据，见[合成示例](examples/v6/multicurrency/README.md)。
 

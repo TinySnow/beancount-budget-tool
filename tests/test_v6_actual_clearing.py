@@ -250,7 +250,7 @@ class ClearingSnapshotTests(unittest.TestCase):
         self.assertTrue(all(row["actual_g"] == "0" for row in report["purpose_progress"]["owners"]))
         self.assertEqual(report["expense_targets"]["categories"][0]["subtree_spent"], "0")
         text = render_workflow_text(september)
-        self.assertIn("待报销代垫（应收原币；未到账，不计入可花现金）", text)
+        self.assertIn("待报销代垫（应收原币；未到账，不计入生活费可支付现金）", text)
         self.assertIn("employer-phone：待收 300 CNY", text)
         self.assertIn(str(self.ledger.resolve()) + ":10", text)
         october = audit_month_workflow(self.config("2026-10"))

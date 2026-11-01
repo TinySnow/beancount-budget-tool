@@ -239,7 +239,7 @@ def render_text(outcome: dict) -> str:
     from .multicurrency import render_text as native_text
     lines.extend(native_text(report.get('multicurrency')))
     currency = report["report_currency"]
-    lines.append(f"月份 | 消费原支出 | 退款 | 净消费 | 月末实际可花 | 月末最多能花（{currency}）")
+    lines.append(f"月份 | 消费原支出 | 退款 | 净消费 | 月末默认支出用途可支付现金 | 月末最多能花（{currency}）")
     for row in report["monthly_reports"]:
         totals = [sum((Fraction(c[key]) for c in row["expense_targets"]["categories"]), Fraction(0))
                   for key in EXPENSE_METRICS[:3]]

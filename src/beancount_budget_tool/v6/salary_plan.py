@@ -167,7 +167,7 @@ def cap(actual, cycle):
     if cycle["status"] == "NOT_STARTED":
         return {"status": "NOT_ASSESSED", "basis": "salary_cycle", "max_spendable": None,
                 "first_payday": cycle["first_payday"], "reason_codes": ["SALARY_CYCLE_NOT_STARTED"],
-                "note": "首个已配置发薪周期尚未开始；仅核对账务及已审可支付资金，不签发周期剩额或最多能花。"}
+                "note": "首个已配置发薪周期尚未开始；仅核对账务及默认支出用途可支付现金，不签发周期剩额或最多能花。"}
     if cycle["report"] is None:
         return {"status": "NEEDS_REVIEW", "basis": "salary_cycle", "max_spendable": None,
                 "reason_codes": sorted({row["reason_code"] for row in cycle["review_items"]})}
@@ -181,7 +181,7 @@ def cap(actual, cycle):
     payable, remaining = Fraction(actual["actual_spendable"]), Fraction(row["remaining"])
     return {**base, "status": "CERTIFIED", "payable_after_obligations": exact_text(payable),
             "consumption_target_remaining": exact_text(remaining), "max_spendable": exact_text(min(payable, remaining)),
-            "reason_codes": [], "note": "最多能花取已审可支付能力与当前发薪周期剩余额度的较小值；不采用自然月消费目标差。"}
+            "reason_codes": [], "note": "最多能花取默认支出用途可支付现金与当前发薪周期剩余额度的较小值；其他用途余额不并入，不采用自然月消费目标差。"}
 
 
 def audit_configured_cycle(config, start=None, as_of=None):

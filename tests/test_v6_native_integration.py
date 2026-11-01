@@ -13,6 +13,7 @@ import yaml
 from beancount_budget_tool.v6.simple_config import audit_simple, audit_simple_period
 from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
 from beancount_budget_tool.v6.period_report import _single_month_period, render_csv
+from beancount_budget_tool.v6.monthly_report import render_workflow_text
 
 
 class NativeIntegrationTests(unittest.TestCase):
@@ -42,6 +43,10 @@ class NativeIntegrationTests(unittest.TestCase):
         self.assertTrue(any(row['narration'] == 'Synthetic foreign purchase' for row in browser.transactions()))
         self.assertEqual(browser.outcome, audit_simple(self.config, include_transactions=True))
         self.assertEqual(browser.outcome['report']['salary_cycle']['config'], str(self.config.resolve()))
+        text = render_workflow_text(browser.outcome)
+        self.assertIn('生活费可支付现金（默认支出用途） 1000', text)
+        self.assertIn('最多能花 = min（', text)
+        self.assertIn('新发薪周期使用新目标，不自动承接旧周期剩余额度', text)
         browser.period, browser.period_range = True, ('2025-01', '2025-02')
         browser.refresh()
         self.assertIsNone(browser.error)
@@ -75,6 +80,16 @@ class NativeIntegrationTests(unittest.TestCase):
         self.assertEqual(result['status'], 'CERTIFIED_NATIVE_SCOPED')
         self.assertEqual(result['report']['max_spendable']['max_spendable'], '100')
         self.assertEqual(result['report']['multicurrency']['native_expenses'][0]['net'], '550')
+        # Display the declared purpose name, independently of the expense category.
+        report = result['report']
+        owner = report['default_outflows']['owner_id']
+        report['owner_names'][owner] = '日常开销'
+        report['actual_spendable']['purpose_available'] = [{'owner_id': 'other', 'units': '42.41'}]
+        text = render_workflow_text(result)
+        self.assertIn('日常开销可支付现金（默认支出用途） 1000', text)
+        self.assertNotIn('生活费可支付现金', text)
+        self.assertIn('其他用途可支付余额（不并入日常开销可支付现金', text)
+        self.assertIn('other：42.41 CNY', text)
 
     def test_not_assessed_cny_goal_does_not_suppress_native_report(self):
         self.edit('budgets.yml', lambda doc: doc['defaults']['expense_targets'].update(生活开销='not_assessed'))

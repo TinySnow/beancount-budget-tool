@@ -63,6 +63,8 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert {(row["currency"], row["net"]) for row in native} == {("JPY", "550"), ("CNY", "5")}, native
         native_text = run("--config", multi_config, "--format", "text")[0]
         assert "550" in native_text and "JPY" in native_text and '缺价' not in native_text, native_text
+        assert '生活费可支付现金（默认支出用途） 1000' in native_text, native_text
+        assert '最多能花 = min（生活费可支付现金' in native_text, native_text
         cycle_args = ('report', '--config', multi_config, '--payday', '2025-01-01',
                       '--next-payday', '2025-02-01', '--cycle-budget', '100')
         cycle = document(*cycle_args)
