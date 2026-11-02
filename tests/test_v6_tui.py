@@ -26,6 +26,7 @@ class FakeScreen:
         self.size = size
         self.rows = []
         self.frames = []
+        self._timeout_ms = -1
 
     def getmaxyx(self):
         return self.size
@@ -46,7 +47,15 @@ class FakeScreen:
         return next(self.keys)
 
     def get_wch(self):
+        # Scripted keys describe actions after a query has finished. Busy
+        # progress polls have no queued input; explicit cancel tests override
+        # this method to send keys while the worker is active.
+        if self._timeout_ms == 100:
+            raise curses.error('no input during query')
         return next(self.keys)
+
+    def timeout(self, milliseconds):
+        self._timeout_ms = milliseconds
 
 
 class TuiTests(unittest.TestCase):

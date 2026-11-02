@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from beancount_budget_tool.v6 import tui
 from beancount_budget_tool.v6.simple_tui import SimpleReportBrowser
@@ -71,9 +71,11 @@ class DiagnosticsTuiTests(unittest.TestCase):
         screen = SaveScreen(keys=(-1,-1,'\x1b'), size=(30,140))
         self.browser.watch = True
         with patch.object(tui, '_read_field', return_value='cash'), \
-             patch('beancount_budget_tool.v6.input_watch.time.monotonic', side_effect=[0,1,2,3,4,5]):
+             patch('beancount_budget_tool.v6.input_watch.time', Mock(monotonic=Mock(side_effect=[0,1,2,3,4,5]))):
             tui._diagnostics_message(screen, self.browser, 'explain')
-        first = '\n'.join(t for _,_,t in screen.frames[0])
+        # Slow runners may show progress before the first complete number.
+        first = next('\n'.join(t for _,_,t in frame) for frame in screen.frames
+                     if '190 CNY' in '\n'.join(t for _,_,t in frame))
         last = '\n'.join(t for _,_,t in screen.frames[-1])
         self.assertIn('190 CNY', first)
         self.assertIn('当前未签发', last)

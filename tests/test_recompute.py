@@ -47,25 +47,25 @@ class RecomputeTests(unittest.TestCase):
         compute = lambda: calls.append(1) or {'ok': True}
         self.cache.run(self.config, (), compute)
         stamp = self.ledger.stat()
-        old = self.ledger.read_text()
-        self.assertIn('Food', old)
-        self.ledger.write_text(old.replace('Food', 'Meal'))
+        old = self.ledger.read_bytes()
+        self.assertIn(b'Food', old)
+        self.ledger.write_bytes(old.replace(b'Food', b'Meal'))
         os.utime(self.ledger, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
         self.cache.run(self.config, (), compute)
         budgets = self.base/'budgets.yml'
-        budgets.write_text(budgets.read_text()+'\n# saved\n')
+        budgets.write_text(budgets.read_text(encoding='utf-8')+'\n# saved\n', encoding='utf-8')
         self.cache.run(self.config, (), compute)
         self.assertEqual(len(calls), 3)
 
     def test_include_glob_addition_removal_and_deletion_are_not_cache_hits(self):
-        self.ledger.write_text(self.ledger.read_text()+'\ninclude "part-*.bean"\n')
+        self.ledger.write_text(self.ledger.read_text(encoding='utf-8')+'\ninclude "part-*.bean"\n', encoding='utf-8')
         first = self.base/'part-one.bean'
-        first.write_text('; one\n')
+        first.write_text('; one\n', encoding='utf-8')
         calls = []
         compute = lambda: calls.append(1) or {}
         self.cache.run(self.config, (), compute)
         second = self.base/'part-two.bean'
-        second.write_text('; two\n')
+        second.write_text('; two\n', encoding='utf-8')
         self.cache.run(self.config, (), compute)
         second.unlink()
         self.cache.run(self.config, (), compute)
@@ -76,7 +76,7 @@ class RecomputeTests(unittest.TestCase):
 
     def test_racing_save_discards_result_and_does_not_cache_failure(self):
         def race():
-            self.ledger.write_text(self.ledger.read_text()+'\n; racing save\n')
+            self.ledger.write_text(self.ledger.read_text(encoding='utf-8')+'\n; racing save\n', encoding='utf-8')
             return {'stale': 190}
         with self.assertRaises(BudgetError) as caught:
             self.cache.run(self.config, (), race)
@@ -100,10 +100,10 @@ class RecomputeTests(unittest.TestCase):
             self.assertEqual(compile.call_count, 1)
             self.assertEqual(browser.outcome, expected)
             self.assertTrue(browser.recompute_cache.last_hit)
-            self.ledger.write_text(self.ledger.read_text()+'''\n2026-09-07 * "ambiguous"
+            self.ledger.write_text(self.ledger.read_text(encoding='utf-8')+'''\n2026-09-07 * "ambiguous"
   Assets:Cash -1 CNY
   Expenses:Food 1 CNY
-''')
+''', encoding='utf-8')
             browser.refresh()
             self.assertEqual(compile.call_count, 2)
         self.assertEqual(browser.outcome['status'], 'NEEDS_REVIEW')
@@ -119,7 +119,7 @@ class RecomputeTests(unittest.TestCase):
         def change_at_final_verify(fin, *args, **kwargs):
             checks.append(1)
             if len(checks) == 2:
-                self.ledger.write_text(self.ledger.read_text()+'\n; saved during verified hit\n')
+                self.ledger.write_text(self.ledger.read_text(encoding='utf-8')+'\n; saved during verified hit\n', encoding='utf-8')
             return verify(fin, *args, **kwargs)
         with patch.object(financial, '_verify_financial', side_effect=change_at_final_verify):
             browser.refresh()

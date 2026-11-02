@@ -146,6 +146,8 @@ class CrossYearPurposeTests(unittest.TestCase):
         screen = FakeScreen(size=(40, 120))
         keys = iter((-1, -1, '\x1b'))
         def key():
+            if screen._timeout_ms == 100:
+                raise curses.error('no input during query')
             value = next(keys)
             if path.read_text(encoding='utf-8').count('500 CNY'):
                 path.write_text(path.read_text(encoding='utf-8').replace('500 CNY', '550 CNY'), encoding='utf-8')
@@ -153,7 +155,7 @@ class CrossYearPurposeTests(unittest.TestCase):
         screen.get_wch = key
         browser = SimpleNamespace(watch=True, user_config=self.config, newest_first=True)
         clock = count()
-        with patch('beancount_budget_tool.v6.input_watch.time.monotonic', side_effect=lambda: next(clock)):
+        with patch('beancount_budget_tool.v6.input_watch.time', Mock(monotonic=Mock(side_effect=lambda: next(clock)))):
             tui._history_message(screen, browser, '电子产品流水', initial, render_text, refresh=loader)
         final = '\n'.join(text for _, _, text in screen.frames[-1])
         self.assertIn('550', final)
@@ -176,7 +178,7 @@ class CrossYearPurposeTests(unittest.TestCase):
             return value
         screen.get_wch = key
         clock = count()
-        with patch('beancount_budget_tool.v6.input_watch.time.monotonic', side_effect=lambda: next(clock)):
+        with patch('beancount_budget_tool.v6.input_watch.time', Mock(monotonic=Mock(side_effect=lambda: next(clock)))):
             tui._activity_message(screen, browser, 'tracking')
         final = '\n'.join(text for _, _, text in screen.frames[-1])
         self.assertEqual(browser.outcome['status'], 'NEEDS_REVIEW')

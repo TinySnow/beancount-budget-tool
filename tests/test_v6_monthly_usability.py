@@ -5,7 +5,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import yaml
 
@@ -342,9 +342,9 @@ class MonthlyUsabilityTests(unittest.TestCase):
         ledger, source = self.ledger, self.source
         class Screen(FakeScreen):
             step = 0
-            def timeout(self, _milliseconds):
-                pass
             def get_wch(self):
+                if self._timeout_ms == 100:
+                    raise curses.error('no input during query')
                 self.step += 1
                 if self.step == 1:
                     ledger.write_text(source + 'invalid ledger syntax', encoding='utf-8')
@@ -355,7 +355,7 @@ class MonthlyUsabilityTests(unittest.TestCase):
                 raise curses.error('no input')
         with patch.object(browser, 'refresh', side_effect=refresh), \
              patch('beancount_budget_tool.v6.tui.curses.curs_set'), \
-             patch('beancount_budget_tool.v6.input_watch.time.monotonic', side_effect=range(1, 20)):
+             patch('beancount_budget_tool.v6.input_watch.time', Mock(monotonic=Mock(side_effect=range(1, 20)))):
             _report_browser(Screen(size=(20, 90)), browser)
         self.assertEqual(statuses, ['CERTIFIED_SCOPED', 'LOADER_ERROR', 'CERTIFIED_SCOPED'])
 
@@ -396,7 +396,7 @@ class InputWatchTests(unittest.TestCase):
         self.watch = InputWatch([self.config])
 
     def change(self):
-        with patch('beancount_budget_tool.v6.input_watch.time.monotonic', side_effect=(1, 2)):
+        with patch('beancount_budget_tool.v6.input_watch.time', Mock(monotonic=Mock(side_effect=(1, 2)))):
             self.assertFalse(self.watch.changed())
             self.assertTrue(self.watch.changed())
         self.assertFalse(self.watch.changed())

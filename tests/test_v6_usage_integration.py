@@ -24,9 +24,9 @@ class UsageIntegrationTests(unittest.TestCase):
         shutil.copytree(Path(__file__).resolve().parents[1]/'examples/v6/simple', self.base)
         self.config = self.base/'config.yml'
         budgets = self.base/'budgets.yml'
-        plans = yaml.safe_load(budgets.read_text())
+        plans = yaml.safe_load(budgets.read_text(encoding='utf-8'))
         plans['months']['2026-10'] = {'completeness_confirmed': True}
-        budgets.write_text(yaml.safe_dump(plans, allow_unicode=True))
+        budgets.write_text(yaml.safe_dump(plans, allow_unicode=True), encoding='utf-8')
         self.before = {p:p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
 
     def cli(self, *args):
