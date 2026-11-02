@@ -9,12 +9,73 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
+import time
+from contextvars import ContextVar
 import unicodedata
 from uuid import uuid4
 from collections.abc import Callable
 
 from ..errors import BudgetError, require
 from ..exact import amount_text
+
+_INPUT_DELAY = ContextVar('tui_input_delay', default=300)
+
+
+def _run_query(stdscr, title, compute):
+    """Keep curses on its owning thread; join cancelled work before returning."""
+    from ..operation import operation
+    done, cancel = threading.Event(), threading.Event()
+    result, failure, stage = [], [], ['准备输入']
+    def work():
+        try:
+            with operation(cancel, lambda value: stage.__setitem__(0, value)):
+                result.append(compute())
+        except BaseException as exc:
+            failure.append(exc)
+        finally:
+            done.set()
+    worker = threading.Thread(target=work, name='budget-query')
+    start = time.monotonic()
+    worker.start()
+    # Fast verified reuse does not flash a progress page or consume a key.
+    if not done.wait(0.1):
+        # The browser owns this value: Python curses has no getdelay().
+        # Restore watch polling; non-watch browsers keep blocking input.
+        delay = _INPUT_DELAY.get()
+        if hasattr(stdscr, 'timeout'): stdscr.timeout(100)
+        try:
+            while not done.is_set():
+                _erase_screen(stdscr)
+                _put(stdscr, 0, title + ' · 正在核对', curses.A_REVERSE)
+                _put(stdscr, 1, ('正在取消；等待当前步骤结束' if cancel.is_set() else stage[0]))
+                _put(stdscr, 2, f'已等待 {time.monotonic()-start:.1f}s；旧数字已清除')
+                _put(stdscr, max(0, stdscr.getmaxyx()[0]-1), 'Esc/q 取消 · 不发布部分结果')
+                stdscr.refresh()
+                key = _read_key(stdscr)
+                if key in ('\x1b', 'q'):
+                    cancel.set()
+                done.wait(0.01)
+        except BaseException:
+            cancel.set()
+            raise
+        finally:
+            # No detached worker may overwrite a newer screen/cache result.
+            worker.join()
+            if hasattr(stdscr, 'timeout'): stdscr.timeout(delay)
+    else:
+        worker.join()
+    if failure:
+        raise failure[0]
+    return result[0]
+
+
+def _query_failure(browser, exc):
+    browser.clear()
+    for name in ('recompute_cache', 'diagnostic_cache'):
+        cache = getattr(browser, name, None)
+        if cache is not None: cache.clear()
+    browser.error = exc if isinstance(exc, BudgetError) else BudgetError('TUI_INPUT_ERROR', str(exc))
 
 
 def _width(character: str) -> int:
@@ -485,7 +546,9 @@ class ReportBrowser:
 
     def title(self) -> str:
         scope = ("工资周期 " if self.salary_cycle is not None else "累计用途 " if self.cumulative else "区间 ") if self.period else ""
-        if self.error:
+        if self.error and self.error.code == 'QUERY_CANCELLED':
+            state = '已取消（无可用月报）'
+        elif self.error:
             state = "计算失败（无可用月报）"
         elif self.outcome:
             label = (f"{self.outcome['from']} 至 {self.outcome['through']}" if self.period else
@@ -493,10 +556,15 @@ class ReportBrowser:
             state = f"{label} {self.outcome['status']}"
         else:
             state = "正在重算（旧结果已清除）"
-        return f"v6 {scope}{state} [{self.index + 1}/{len(self.configs)}]"
+        timing = (f' · {self.last_elapsed:.2f}s' + (' · 同输入已复核' if self.recompute_cache.last_hit else '')
+                  if hasattr(self, 'last_elapsed') else '')
+        return f"v6 {scope}{state} [{self.index + 1}/{len(self.configs)}]{timing}"
 
 
 HELP = [
+    'B：只读首次使用向导；T：逐月趋势／区间比较。比较值独立显示，待审月不填零。',
+    '重算期间显示当前步骤和等待时间，Esc/q 取消本次查询；取消后不保留旧数字或部分结果。',
+    'r：核对全部输入内容；未变时复用同一结果。R：重新执行审计。保存变更始终使旧结果失效。',
     'D：只读预检（静态／重放分层）；l：归属工作台；E：已审数字解释。',
     "u：累计用途余额，从 cutover 到当前月；先看期末用途可支付余额，不累加月末库存；可跨年。",
     "i：K 申赎流水；v：tracking 专题流水。按原币列示来源；watch 下保存后在流水内自动重算。",
@@ -592,8 +660,10 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         return
     display_config = getattr(browser, "display_config", browser.config)
     config_label = "/".join(display_config.parts[-3:])
-    _put(stdscr, 1, f"{browser.period_label()}；p 选择范围，c 返回月报" if browser.period else
-         f"配置：{config_label}（? 查看完整路径）")
+    mode = '发薪周期' if browser.period and browser.salary_cycle else '累计用途' if browser.cumulative else '区间' if browser.period else '月报'
+    page_name = '帮助' if browser.help else '详情' if browser.detail else {'reviews': '待审', 'transactions': '交易', 'report': '报告'}[browser.view]
+    _put(stdscr, 1, f"{mode} > {page_name} · " + (f"{browser.period_label()}；p 选择范围，Esc 返回月报" if browser.period else
+         f"配置：{config_label}（? 查看完整路径）"))
     page = height - 4
     total_reviews = len(browser.outcome.get("review_items", [])) if browser.outcome else 0
     items = browser.items()
@@ -604,7 +674,12 @@ def _draw_browser(stdscr, browser: ReportBrowser):
     listing = browser.outcome is not None and browser.view in {"reviews", "transactions"} and not (
         browser.error or browser.detail or browser.help)
     if browser.help:
-        lines = [f"当前配置完整路径：{browser.config}", *HELP]
+        context = ('Esc 返回月报；p 改区间；w 发薪周期；u 累计用途。' if browser.period else
+                   '↑↓ 选待审，Enter 查看来源；e 修改指引；l 归属。' if browser.view=='reviews' else
+                   'o 切正倒序；/ 按账户、用途、类别或来源筛选；Enter 逐腿详情。' if browser.view=='transactions' else
+                   'Enter/E 解释数字；B 首次使用向导；T 月度趋势。')
+        lines = [f'当前位置：{mode} > {page_name}', '当前页：'+context,
+                 f"当前配置完整路径：{display_config}", *HELP]
         if hasattr(browser, "user_config"):
             lines = ["两文件模式：只维护 config.yml、budgets.yml 和账本；所有决定来自账本与这两份 YAML，不保存独立审阅记录。",
                      "m 跳到任意 cutover 后月份；n 直接进入下一月；r 重读两份配置与账本，不用手工编译。",
@@ -704,8 +779,8 @@ def _draw_browser(stdscr, browser: ReportBrowser):
         styles.append((_COLORS.get("red", 0) if browser.error else style))
     for row, line in enumerate(lines[browser.offset:browser.offset + page], 3):
         _put(stdscr, row, line, styles[browser.offset + row - 3])
-    footer = ("Esc/c 月报 l 归属 E 解释 D 预检 u 累计 i K流水 v 专题 r 重算 ? 帮助" if browser.period else
-              "l 归属 E 解释 D 预检 u 累计 i K流水 v 专题 h 科目流水 r 重算 ? 帮助")
+    footer = ("Esc/c 月报 T 趋势 B 向导 l 归属 E 解释 D 预检 u 累计 r 重算 ? 帮助" if browser.period else
+              "T 趋势 B 向导 l 归属 E 解释 D 预检 u 累计 i K流水 v 专题 h 科目流水 r 重算 ? 帮助")
     if listing and browser.view == "reviews":
         footer = "↑↓ 选项 Enter 详情 l 归属 D 预检 e 修改指引 r 重算 / 筛选 ? 帮助 q 退出"
     elif listing and browser.view == "transactions":
@@ -894,7 +969,7 @@ def _history_message(stdscr, browser, title: str, result: dict, renderer: Callab
             watcher.accept()
         result, failure = None, None
         try:
-            result = refresh()
+            result = _run_query(stdscr, title, refresh)
         except (BudgetError, OSError, UnicodeError) as exc:
             failure = exc
         return display()
@@ -1052,7 +1127,7 @@ def _inspect_account(stdscr, browser: ReportBrowser, *, history=False):
                           '截止日 YYYY-MM-DD：', month_end(month).isoformat())
         if day is None:
             return
-        snapshot = query(config, day.strip())
+        snapshot = _run_query(stdscr, '日末用途查询', lambda: query(config, day.strip()))
         if snapshot['report'] is None or not history:
             _message(stdscr, '日末用途查询', render_text(snapshot).splitlines())
             return
@@ -1072,7 +1147,7 @@ def _inspect_account(stdscr, browser: ReportBrowser, *, history=False):
              '资产查 fund，负债查责任用途，收支查 budget；空白显示全部。'], '预算名称（可留空）：')
         if budget is None:
             return
-        result = query(config, day.strip(), account=value, purpose=budget.strip() or None)
+        result = _run_query(stdscr, '用途历史查询', lambda: query(config, day.strip(), account=value, purpose=budget.strip() or None))
         if result['report'] is not None:
             _history_message(stdscr, browser, '科目用途历史', result, render_text,
                              refresh=lambda: query(config, day.strip(), account=value, purpose=budget.strip() or None))
@@ -1184,7 +1259,11 @@ def _activity_message(stdscr, browser, kind):
     def reload():
         if watcher:
             watcher.accept()
-        browser.refresh()
+        browser.clear()
+        try:
+            _run_query(stdscr, '重新核对流水', browser.refresh)
+        except BudgetError as exc:
+            _query_failure(browser, exc)
         return display()
 
     title, lines = display()
@@ -1228,20 +1307,89 @@ def _diagnostics_message(stdscr, browser, kind):
         watcher = InputWatch([config])
 
     def reload():
-        browser.refresh()
+        if watcher: watcher.accept()
+        browser.clear()
         try:
-            result = {'doctor': doctor, 'attribution': attribution, 'explain': explain}[kind](config, month, **options)
+            def compute():
+                browser.refresh()
+                query = {'doctor': doctor, 'attribution': attribution, 'explain': explain}[kind]
+                return browser.diagnostic_cache.run(config, (kind, month, tuple(sorted(options.items()))),
+                                                    lambda: query(config, month, **options))
+            if not hasattr(browser, 'diagnostic_cache'):
+                from ..recompute import RecomputeCache
+                browser.diagnostic_cache = RecomputeCache(getattr(browser, 'source_cache', None))
+            result = _run_query(stdscr, '只读核对', compute)
             lines = render_text(result).splitlines()
         except (BudgetError, OSError, UnicodeError) as exc:
+            _query_failure(browser, exc)
             lines = ['本次查询失败；旧诊断与解释已清除。', str(exc)]
-        if watcher: watcher.accept()
         return {'doctor': '只读预检', 'attribution': '只读归属工作台', 'explain': '已审数字解释'}[kind], lines
 
     title, lines = reload()
     _message(stdscr, title, lines, refresh=reload, poll=watcher.changed if watcher else None)
 
 
+def _usage_message(stdscr, browser, kind):
+    if not hasattr(browser, 'user_config'):
+        _message(stdscr, '使用指引', ['请通过 config.yml 两文件入口使用；命令行 guide 也可只读分析账本。'])
+        return
+    from .usage_tools import onboarding, trend, render_onboarding, render_trend
+    config, month = browser.user_config, browser.selected_month
+    options = {}
+    if kind == 'trend':
+        from ..yamlstrict import load_yaml
+        cutover = load_yaml(config)['cutover'][:7]
+        first = _read_field(stdscr, '月度趋势 > 选择范围', ['只展示逐月已审原值；待审月留空、不以0代替。'], '起始 YYYY-MM：', cutover)
+        if first is None: return
+        last = _read_field(stdscr, '月度趋势 > 选择范围', ['期末库存逐月展示，不累加月末快照。'], '结束 YYYY-MM：', month)
+        if last is None: return
+        metric = _read_field(stdscr, '月度趋势 > 选择维度', ['purpose 用途余额；expense 消费分类；空值查看概览。'], '维度：')
+        if metric is None: return
+        if metric.strip() not in ('', 'purpose', 'expense'):
+            _message(stdscr, '未生成趋势', ['维度须为 purpose 或 expense，空值为概览。'])
+            return
+        name = None
+        if metric.strip():
+            name = _read_field(stdscr, '月度趋势 > 筛选', ['登记名称或ID；空值为全部。'], '用途／类别：')
+            if name is None: return
+        options = {'since': first.strip(), 'through': last.strip(),
+                   'owner': name.strip() or None if metric.strip()=='purpose' else None,
+                   'category': name.strip() or None if metric.strip()=='expense' else None}
+    from ..recompute import RecomputeCache
+    cache = RecomputeCache(getattr(browser, 'source_cache', None))
+    watcher = None
+    if getattr(browser, 'watch', False):
+        from .input_watch import InputWatch
+        watcher = InputWatch([config])
+    def reload():
+        if watcher: watcher.accept()
+        browser.clear()
+        try:
+            def compute():
+                browser.refresh()
+                return onboarding(config=config) if kind=='guide' else cache.run(
+                    config, (kind, month, tuple(sorted(options.items()))), lambda: trend(config, **options))
+            result = _run_query(stdscr, '首次使用向导' if kind=='guide' else '月度趋势',
+                                compute)
+            lines = (render_onboarding(result) if kind=='guide' else render_trend(result)).splitlines()
+        except (BudgetError, OSError, UnicodeError) as exc:
+            cache.clear()
+            _query_failure(browser, exc)
+            lines = ['本次查询未完成，旧数字已清除。', str(exc)]
+        return '首次使用 > 只读核对' if kind=='guide' else '查询 > 逐月趋势／比较', lines
+    title, lines = reload()
+    _message(stdscr, title, lines, refresh=reload, poll=watcher.changed if watcher else None)
+
+
 def _report_browser(stdscr, browser: ReportBrowser):
+    token = _INPUT_DELAY.set(300 if getattr(browser, 'watch', False) else -1)
+    try:
+        return _report_browser_impl(stdscr, browser)
+    finally:
+        _INPUT_DELAY.reset(token)
+
+
+def _report_browser_impl(stdscr, browser: ReportBrowser):
     try:
         curses.curs_set(0)
     except curses.error:
@@ -1260,7 +1408,10 @@ def _report_browser(stdscr, browser: ReportBrowser):
             watcher.accept()
         browser.clear()
         _draw_browser(stdscr, browser)
-        browser.refresh()
+        try:
+            _run_query(stdscr, '重新计算', browser.refresh)
+        except BudgetError as exc:
+            _query_failure(browser, exc)
 
     reload()
     redraw = True
@@ -1293,6 +1444,10 @@ def _report_browser(stdscr, browser: ReportBrowser):
                 return
         elif key == "r":
             reload()
+        elif key == 'R':
+            if hasattr(browser, 'recompute_cache'): browser.recompute_cache.clear()
+            if hasattr(browser, 'diagnostic_cache'): browser.diagnostic_cache.clear()
+            reload()
         elif key == "c":
             browser.toggle_period()
             reload()
@@ -1303,6 +1458,8 @@ def _report_browser(stdscr, browser: ReportBrowser):
             browser.show_all = not browser.show_all
         elif key in ('D', 'l', 'E'):
             _diagnostics_message(stdscr, browser, {'D': 'doctor', 'l': 'attribution', 'E': 'explain'}[key])
+        elif key in ('B', 'T'):
+            _usage_message(stdscr, browser, 'guide' if key=='B' else 'trend')
         elif key in ('i', 'v'):
             _activity_message(stdscr, browser, 'k' if key == 'i' else 'tracking')
         elif key == "p":

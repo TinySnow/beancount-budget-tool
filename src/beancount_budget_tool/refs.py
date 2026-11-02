@@ -17,6 +17,7 @@ from beancount.core import data
 from .errors import BudgetError, require
 from .financial import FinancialInput
 from .identity import canonical_key
+from .operation import checkpoint
 
 
 @dataclass(frozen=True)
@@ -132,7 +133,9 @@ class ReferenceIndex:
         transactions = [entry for entry in fin.entries if isinstance(entry, data.Transaction)]
         transactions.sort(key=lambda tx: (str(tx.meta.get("filename", "")), tx.meta.get("lineno", 0)))
         occurrence: Dict[Tuple[str, str], int] = {}
+        checkpoint('核对逐笔来源')
         for tx in transactions:
+            checkpoint()
             cached = fin.reference_cache.get(id(tx))
             if cached is not None:
                 txref, posting_refs = cached

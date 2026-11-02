@@ -19,6 +19,7 @@ from beancount.core import data
 from beancount.parser import parser
 
 from .errors import BudgetError, require
+from .operation import checkpoint
 
 
 @dataclass
@@ -36,6 +37,7 @@ def capture(root: Path, source_type) -> ParsedSnapshot:
     entries, errors, option_maps = [], [], []
     pending = deque([str(root)])
     while pending:
+        checkpoint('读取账本及 include')
         name = os.path.normpath(pending.popleft())
         if name in names:
             errors.append(loader.LoadError(data.new_metadata('<load>', 0),

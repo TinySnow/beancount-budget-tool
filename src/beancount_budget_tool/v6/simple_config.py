@@ -272,6 +272,8 @@ class Runtime:
 
 
 def build_runtime(config: Path, month: str | None = None, *, materialize: bool = True) -> Runtime:
+    from ..operation import checkpoint
+    checkpoint('编译月份配置 ' + (month or ''))
     config = config.resolve()
     inputs = {config: input_bytes(config)}
     doc, budgets, plans = _documents(config, inputs)

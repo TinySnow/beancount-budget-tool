@@ -20,6 +20,8 @@ COMMANDS = {
     "lint": ("beancount_budget_tool.v6.diagnostics", "仅静态检查，不重放余额"),
     "attribution": ("beancount_budget_tool.v6.diagnostics", "只读归属工作台与交易前用途证据"),
     "explain": ("beancount_budget_tool.v6.diagnostics", "解释已审现金、消费、用途余额与上限"),
+    "guide": ("beancount_budget_tool.v6.usage_cli", "只读首次使用向导，不自动写账本"),
+    "trend": ("beancount_budget_tool.v6.usage_cli", "逐月趋势与独立比较，待审月份不填零"),
 }
 
 
@@ -54,5 +56,9 @@ def main(argv=None) -> int:
         return 2
     command = args.pop(0) if args[0] in COMMANDS else "monthly"
     module = import_module(COMMANDS[command][0])
-    entry = getattr(module, command + "_main" if command in {"history", "snapshot", "doctor", "lint", "attribution", "explain"} else "main")
-    return entry(args) or 0
+    entry = getattr(module, command + "_main" if command in {"history", "snapshot", "doctor", "lint", "attribution", "explain", "guide", "trend"} else "main")
+    try:
+        return entry(args) or 0
+    except KeyboardInterrupt:
+        print('查询已取消；未输出部分结果。', file=sys.stderr)
+        return 130

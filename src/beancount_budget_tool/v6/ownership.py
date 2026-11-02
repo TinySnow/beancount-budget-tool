@@ -18,6 +18,7 @@ import re
 from beancount.core import data
 
 from ..errors import BudgetError, require
+from ..operation import checkpoint
 from ..exact import amount_text, exact, exact_text
 from ..financial import load_financial, shared_audit
 from ..yamlstrict import load_yaml, yaml_path_location, require_yaml
@@ -373,6 +374,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
         # Unknown opening ownership limits inference only from that coordinate;
         # explicit post-cutover labels on other coordinates remain valid.
         for entry in fin.entries:
+            checkpoint()
             if not isinstance(entry, data.Transaction) or entry.date < cutover:
                 continue
             rule_flow = native_rule_flow(fin, entry, liability_rules, cash_accounts) if liability_rules else None

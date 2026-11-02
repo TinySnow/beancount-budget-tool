@@ -94,6 +94,15 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         csv_evidence = run('attribution', '--config', mixed_config, '--format', 'csv')[0]
         assert 'DIAGNOSTIC_ONLY' in csv_evidence and 'H_OWNER_PENDING' in csv_evidence, csv_evidence
         mixed_ledger.write_text(valid_mixed, encoding='utf-8')
+        guide = document('guide', '--config', mixed_config)
+        assert guide['status'] == 'DIAGNOSTIC_ONLY' and guide['report'] is None, guide
+        ledger_guide = document('guide', '--ledger', mixed_ledger, '--month', '2026-09')
+        assert ledger_guide['report'] is None and ledger_guide['opening_coordinates'] is not None, ledger_guide
+        comparison = document('trend', '--config', mixed_config, '--since', '2026-09',
+                              '--through', '2026-10', '--owner', '生活费')
+        assert comparison['report'] is None and comparison['read_only'], comparison
+        assert comparison['months'][0]['report'] is not None, comparison
+        assert comparison['months'][1]['report'] is None and comparison['comparisons'] == [], comparison
         multicurrency = directory / "多币种收支"
         shutil.copytree(source / "multicurrency", multicurrency)
         multi_config = multicurrency / "config.yml"

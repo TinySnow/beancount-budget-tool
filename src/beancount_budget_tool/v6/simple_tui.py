@@ -3,6 +3,7 @@
 import curses
 from pathlib import Path
 import sys
+import time
 
 from ..errors import BudgetError, require
 from ..financial import FinancialSourceCache, financial_session
@@ -24,6 +25,8 @@ class SimpleReportBrowser(ReportBrowser):
         self.saved_cycle = None
         self.visited_months = {self.selected_month}
         self.source_cache = FinancialSourceCache()
+        from ..recompute import RecomputeCache
+        self.recompute_cache = RecomputeCache(self.source_cache)
         self.native_only = True
         super().__init__([config], audit_month_workflow, render_workflow_text)
         # Transaction details remain available just as in the normal browser.
@@ -40,6 +43,25 @@ class SimpleReportBrowser(ReportBrowser):
             runtime.close()
 
     def refresh(self):
+        started = time.perf_counter()
+        self.clear()
+        request = (self.selected_month, self.period, self.period_range,
+                   self.salary_cycle, self.saved_cycle, self.cumulative, True, True)
+        try:
+            def compute():
+                self._refresh_uncached()
+                if self.error:
+                    raise self.error
+                return self.outcome
+            result = self.recompute_cache.run(self.user_config, request, compute)
+            self._accept_outcome(result, self._scope_renderer())
+        except (BudgetError, OSError, UnicodeError) as exc:
+            self.clear()
+            self.error = exc if isinstance(exc, BudgetError) else BudgetError('SIMPLE_INPUT_ERROR', str(exc), str(self.user_config))
+        finally:
+            self.last_elapsed = time.perf_counter() - started
+
+    def _refresh_uncached(self):
         self.close()
         self.clear()
         self.range_runtimes = []

@@ -31,6 +31,7 @@ from .source_snapshot import ParsedSnapshot, capture as capture_snapshot, book a
 from .identity import identity_scope
 from .runtime_inputs import document_scope, input_bytes
 from .projection import freeze, readonly_projections, projection_cache
+from .operation import checkpoint
 
 PRICE = re.compile(r"(?<!@)@@?\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([A-Za-z][A-Za-z0-9_]*)")
 RESERVED_PUSHMETA = re.compile(r"^\s*pushmeta\s+(?:budget|fund|tracking|budget-order)\s*:", re.IGNORECASE)
@@ -365,6 +366,7 @@ def _session_input(root: Path) -> FinancialInput:
 
 def load_financial(root: Path) -> FinancialInput:
     """Read this report's source input; standalone calls always load afresh."""
+    checkpoint('读取账本来源')
     resolved = root.resolve()
     frozen = _FROZEN_FINANCIAL.get()
     if frozen is not None and frozen.root == resolved:
@@ -416,6 +418,9 @@ def shared_audit(audit):
 
     @wraps(audit)
     def run(*args, **kwargs):
+        checkpoint({'audit_ownership': '核对资金用途', 'audit_accounts': '核对账户库存',
+                    'audit_opening': '核对期初', 'audit_obligations': '核对负债责任',
+                    'audit_payable_cash': '核对可支付现金'}.get(audit.__name__, '核对资金证据'))
         frozen = _FROZEN_FINANCIAL.get()
         if frozen is None:
             return audit(*args, **kwargs)

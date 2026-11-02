@@ -148,6 +148,23 @@ beancount-budget-tool explain purpose --config budget/simple/config.yml --owner 
 
 `explain` 只拆已审月报的原值：可支付现金展示支付账户库存和责任／预留上下文，消费按原币与类别拆到源分录，用途余额把H、K和证券池分开。现金库存不等于最终可支付余额，其他用途不并入默认用途上限；收入不混入同名消费类别。月报未签发时不展示局部金额。TUI `D`、`l`、`E` 打开相同只读工具，月报 `Enter` 也可选数字解释；区间／周期先 `Esc` 返回月报，避免错用单月数值。
 
+### 首次使用、趋势与重算
+
+```bash
+beancount-budget-tool guide --ledger main.bean --month 2023-07
+beancount-budget-tool guide --config budget/simple/config.yml
+beancount-budget-tool trend --config budget/simple/config.yml --since 2023-07 --through 2023-09 --owner '电子产品'
+beancount-budget-tool trend --config budget/simple/config.yml --since 2023-07 --through 2023-09 --category '生活开销'
+```
+
+`guide` 只读检查账本／配置、账户与期初，列出已有声明、待补项和首月预览步骤，不猜 H/K 或用途、不创建文件。需要生成两份配置时，再显式运行已有 `configure --output 新目录`。TUI `B` 打开相同指引，`T` 选择趋势范围与用途／消费维度；账户、类别、用途和来源的检索仍可使用 `/`、`l` 及 `h`，筛选不改变完整待审或已签金额。
+
+趋势按月保留原始审计状态；未签发的月份金额留空，不当作零。只有相邻且均已签发的月份才给独立的变化量，各币种及 H/K/证券池分列；每月库存取期末，不把月末库存累加。Esc 返回原月报，顶部显示当前模式与位置，`?` 的开头说明当前页操作。
+
+`r` 每次仍校验账本全部来源、include 成员和两份 YAML 的实际内容；输入与查询范围完全相同时，可复用本进程上一份完整结果，顶部显示“同输入已复核”。`R` 强制重新执行审计，保存变更始终失效。缓存只在内存，不新增状态文件或跨输入复用认证。真实历史月样本的未变刷新约由 1 秒缩短到 0.1 秒；首次加载和保存后的完整计算仍需等待，具体取决于账本。
+
+耗时查询显示当前步骤与等待时间，旧数字先清除；Esc/q 取消本次查询，等待当前步骤安全结束后返回，不发布部分金额。watch 会合并连续保存；计算期间再次变更、错误或取消均不保留旧额度。
+
 一笔到账混有自己的收入和代收款时，负债腿不要写 `fund`。例如收到 480 元，其中自己的收入 240 元、另有 240 元待转交：
 
 ```beancount

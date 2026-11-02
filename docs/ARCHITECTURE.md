@@ -8,6 +8,7 @@
 | 稳定身份与事实表 | refs、identity、v6/facts | 外部claim不变；原始身份跨截止日共享，有界FactTable只暴露当前可见分录、日期和来源 |
 | 运行输入 | runtime_inputs、simple_config | 只读取账本与两份公开YAML，构造内存文档；不加载独立审阅状态 |
 | 查询会话 | query.QuerySession | 统一月报/区间入口，拥有输入文档、事实索引与投影图生命周期，结束前执行来源验证 |
+| 交互重查 | recompute.RecomputeCache、operation | 单调用方上一项公开结果的内存复用；内容/include/查询参数前后验证。查询在可取消工作线程执行，curses只在主线程绘制，取消后先join再返回 |
 | 投影图 | projection.ProjectionGraph、shared_audit | 按输入视图、参数及Path内容摘要复用纯审计；内部结果递归只读，出口恢复独立可变副本 |
 | 财务规则 | v6各域 | 账户、用途、类别、负债、投资、外币与周期分别证明；规则和校验没有被删减 |
 | 展示与写适配 | monthly_report、period_report、tui | 文本/JSON/CSV、来源与配置修改指引；不提供批准保存 |
