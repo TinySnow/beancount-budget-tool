@@ -120,15 +120,17 @@ class AccountQueryTests(unittest.TestCase):
 
     def test_tui_uses_public_config_and_returns_from_both_views(self):
         from types import SimpleNamespace
+        from test_v6_tui import FakeScreen
+        screen = FakeScreen(size=(24, 120))
         browser = SimpleNamespace(help=False,config=self.f.config,user_config=self.f.config,selected_month='2026-09')
         with patch.object(tui,'_read_field',side_effect=['2026-09-02']), patch.object(tui,'_message') as display:
-            tui._inspect_account(None,browser)
+            tui._inspect_account(screen,browser)
             self.assertIn('1200', '\n'.join(display.call_args.args[2]))
         with patch.object(tui,'_read_field',side_effect=['2026-09-02','Assets:Wealth','额外储蓄']), patch.object(tui,'_message') as display:
-            tui._inspect_account(None,browser,history=True)
+            tui._inspect_account(screen,browser,history=True)
             self.assertIn('第 14 行', '\n'.join(display.call_args.args[2]))
         with patch.object(tui,'_read_field',return_value=None), patch.object(tui,'_message') as display:
-            tui._inspect_account(None,browser)
+            tui._inspect_account(screen,browser)
             display.assert_not_called()
 
     def test_later_first_use_of_k_account_does_not_invalidate_earlier_day(self):

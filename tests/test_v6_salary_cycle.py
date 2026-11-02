@@ -282,8 +282,8 @@ class SalaryCycleTests(unittest.TestCase):
         with patch("beancount_budget_tool.v6.tui._read_field", side_effect=["2026-09-08", None]):
             _select_salary_cycle(screen, browser)
         self.assertFalse(browser.period)
+        screen.keys = iter(('w', 'q'))
         with patch("beancount_budget_tool.v6.tui._read_field", side_effect=["2026-09-08", "2026-10-02", "50", ""]), \
-                patch("beancount_budget_tool.v6.tui._read_key", side_effect=["w", "q"]), \
                 patch("beancount_budget_tool.v6.tui.curses.curs_set"):
             _report_browser(screen, browser)
         self.assertEqual(browser.outcome["report"]["cycle_budget"]["remaining"], "17")

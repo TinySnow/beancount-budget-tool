@@ -170,6 +170,8 @@ class CrossYearPurposeTests(unittest.TestCase):
         screen = FakeScreen(size=(20, 100))
         keys = iter((-1, -1, '\x1b'))
         def key():
+            if screen._timeout_ms == 100:
+                raise curses.error('no input during query')
             value = next(keys)
             doc = yaml.safe_load((self.base / 'budgets.yml').read_text(encoding='utf-8'))
             if doc['months']['2026-01']['completeness_confirmed']:

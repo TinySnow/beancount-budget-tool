@@ -78,6 +78,15 @@ def _query_failure(browser, exc):
     browser.error = exc if isinstance(exc, BudgetError) else BudgetError('TUI_INPUT_ERROR', str(exc))
 
 
+def _refresh_query(stdscr, browser):
+    """Use the same cancellable path for explicit scope changes and exports."""
+    browser.clear()
+    try:
+        _run_query(stdscr, '重新计算', browser.refresh)
+    except BudgetError as exc:
+        _query_failure(browser, exc)
+
+
 def _width(character: str) -> int:
     if unicodedata.combining(character):
         return 0
@@ -1021,7 +1030,7 @@ def _export_report(stdscr, browser: ReportBrowser):
                 "输出文件已存在，请选择新文件", str(path))
         browser.clear()
         _draw_browser(stdscr, browser)
-        browser.refresh()
+        _refresh_query(stdscr, browser)
         if browser.error:
             raise browser.error
         write_export(browser.outcome, getattr(browser, "display_config", browser.config), path, format, period=browser.period)
@@ -1042,7 +1051,7 @@ def _next_month(stdscr, browser: ReportBrowser):
     if hasattr(browser, 'advance_month'):
         browser.advance_month()
         _draw_browser(stdscr, browser)
-        browser.refresh()
+        _refresh_query(stdscr, browser)
     else:
         _message(stdscr, '使用两文件配置切月', ['请使用 config.yml；按 m／[／] 直接切月，不再创建下一月填写表。'])
 
@@ -1076,7 +1085,7 @@ def _jump_month(stdscr, browser: ReportBrowser):
             return
         browser.jump_month(value.strip())
         _draw_browser(stdscr, browser)
-        browser.refresh()
+        _refresh_query(stdscr, browser)
     except (BudgetError, OSError, UnicodeError) as exc:
         _message(stdscr, "无法跳到该月", [str(exc)])
 
@@ -1103,7 +1112,7 @@ def _select_period(stdscr, browser: ReportBrowser):
                 return
             browser.select_period(since.strip(), through.strip())
         _draw_browser(stdscr, browser)
-        browser.refresh()
+        _refresh_query(stdscr, browser)
     except (BudgetError, OSError, UnicodeError) as exc:
         _message(stdscr, "未切换查询范围", [str(exc), "请核对起止月份后再次按 p；当前结果不代表新范围。"])
 
@@ -1197,7 +1206,7 @@ def _select_salary_cycle(stdscr, browser: ReportBrowser):
                                 "发薪日 YYYY-MM-DD：", current)
             if value is not None:
                 browser.select_saved_cycle(value.strip())
-                browser.refresh()
+                _refresh_query(stdscr, browser)
             return
         from .input_compiler import config_metadata as _metadata
         month, _ = _metadata(browser.config)
@@ -1217,7 +1226,7 @@ def _select_salary_cycle(stdscr, browser: ReportBrowser):
             values.append(value.strip())
         browser.select_salary_cycle(values[0], values[1], values[2] or None, values[3] or None)
         _draw_browser(stdscr, browser)
-        browser.refresh()
+        _refresh_query(stdscr, browser)
     except (BudgetError, OSError, UnicodeError) as exc:
         _message(stdscr, "未切换工资周期", [str(exc), "请核对真实工资日、额度及周期末月份配置。"])
 
