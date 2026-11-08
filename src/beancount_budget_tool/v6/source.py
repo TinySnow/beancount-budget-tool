@@ -16,7 +16,7 @@ from beancount.core import data
 from ..errors import BudgetError, require
 from ..financial import load_financial, shared_audit
 from ..exact import exact
-from .inline_amounts import parse_inline_amounts
+from .inline_amounts import SEPARATOR, parse_inline_amounts
 
 
 @dataclass(frozen=True)
@@ -51,8 +51,9 @@ def _tag_text(value: object, key: str, source: str) -> str:
 
 def _check_tracking(value: object, source: str) -> None:
     raw = _tag_text(value, "tracking", source)
-    require("，" not in raw and all(part and part == part.strip() for part in raw.split(",")),
-            "TRACKING_INVALID", "tracking 只接受非空、半角逗号分隔的专题", source)
+    parts = SEPARATOR.split(raw)
+    require(all(part and part == part.strip() for part in parts),
+            "TRACKING_INVALID", "tracking 专题须非空、不得含空项；分隔符与 fund/budget 一致", source)
 
 
 @shared_audit

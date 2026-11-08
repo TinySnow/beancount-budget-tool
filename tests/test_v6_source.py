@@ -61,14 +61,20 @@ class SourceGateTests(unittest.TestCase):
         self.assertEqual(result.missing_inline_classification, 1)
         self.assertEqual(result.missing_inline_asset_intent, 1)
 
-    def test_tracking_fullwidth_delimiter_rejected(self):
+    def test_tracking_accepts_the_same_delimiters_as_fund_and_budget(self):
+        result = self.scan('2026-10-02 * "餐饮"\n'
+                           '  tracking: "活动，交通|旅行；大额"\n'
+                           '  Expenses:Food 10 CNY\n'
+                           '  Assets:Cash -10 CNY\n')
+        self.assertEqual(result.transactions, 1)
+
+    def test_tracking_rejects_empty_parts(self):
         with self.assertRaises(BudgetError) as caught:
             self.scan('2026-10-02 * "餐饮"\n'
-                      '  tracking: "活动，交通"\n'
+                      '  tracking: "活动,,交通"\n'
                       '  Expenses:Food 10 CNY\n'
                       '  Assets:Cash -10 CNY\n')
         self.assertEqual(caught.exception.code, "TRACKING_INVALID")
-
 
 if __name__ == "__main__":
     unittest.main()

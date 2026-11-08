@@ -13,12 +13,14 @@ from ..errors import require
 from ..exact import exact, exact_text
 from ..financial import load_financial
 from .facts import FactIndex
+from .inline_amounts import SEPARATOR
 from .source import scan_v6_source
 from .targets import _month
 
 
 def _topics(value: object) -> set[str]:
-    return set(value.split(",")) if isinstance(value, str) else set()
+    return ({part.strip() for part in SEPARATOR.split(value) if part.strip()}
+            if isinstance(value, str) else set())
 
 
 def audit_monthly_tracking(root: Path, cutover: date, month: str) -> dict:

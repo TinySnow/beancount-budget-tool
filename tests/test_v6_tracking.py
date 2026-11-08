@@ -62,5 +62,22 @@ class MonthlyTrackingTests(unittest.TestCase):
                              ("800", "760", "40", "960"))
 
 
+    def test_transaction_tracking_uses_the_shared_delimiter_set(self):
+        with TemporaryDirectory() as folder:
+            ledger = Path(folder) / "main.bean"
+            ledger.write_text(
+                'option "operating_currency" "CNY"\n'
+                '2026-10-01 open Assets:Bank\n'
+                '2026-10-01 open Expenses:Food\n'
+                '2026-10-02 * "separators"\n'
+                '  tracking: "A，B|C；D"\n'
+                '  Expenses:Food 10 CNY\n'
+                '  Assets:Bank -10 CNY\n', encoding="utf-8")
+            result = audit_monthly_tracking(ledger, date(2026, 10, 1), "2026-10")
+            self.assertEqual([row["topic"] for row in result["topics"]], ["A", "B", "C", "D"])
+            self.assertEqual(len(result["events"]), 4)
+            self.assertTrue(all(row["spent"] == "10" for row in result["topics"]))
+
+
 if __name__ == "__main__":
     unittest.main()
