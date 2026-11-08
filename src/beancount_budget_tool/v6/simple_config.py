@@ -278,6 +278,25 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
     inputs = {config: input_bytes(config)}
     doc, budgets, plans = _documents(config, inputs)
     month = _month(month or doc["month"])
+    declared_fund_names = set()
+
+    def register_fund(fund, keys):
+        require_yaml(type(fund) is str and bool(fund) and fund == fund.strip(),
+                     "SIMPLE_ACCOUNT_INVALID", "账户 fund 须为非空用途名", config, keys)
+        from .ownership import _owners
+        try:
+            _owners([{"id": "account_fund", "name": fund, "aliases": []}])
+        except BudgetError as exc:
+            raise BudgetError(exc.code, exc.message,
+                              yaml_path_location(config, keys)) from exc
+        declared_fund_names.add(fund)
+
+    for name, settings in doc.get("accounts", {}).items():
+        if isinstance(settings, dict) and "fund" in settings:
+            register_fund(settings["fund"], ("accounts", str(name), "fund"))
+    defaults_settings = doc.get("account_defaults", {})
+    if isinstance(defaults_settings, dict) and "fund" in defaults_settings:
+        register_fund(defaults_settings["fund"], ("account_defaults", "fund"))
     goals, locations = _layer(plans, month, budgets)
     from .salary_plan import read_cycles
     cycles = read_cycles(plans, budgets, default_category=doc.get("spendable_cap_category", doc["defaults"]["expense_category"]))
@@ -319,7 +338,8 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
                         labels = []
                     budget_purposes.update(part["name"] for part in labels or [] if part["name"] != "-")
     validate_rules(liability_rules, set(), config, public=True, liability_root=fin.options['name_liabilities'])
-    owners = set(filled["allocation_targets"]) | set(plans.get("purposes", [])) | budget_purposes
+    owners = (set(filled["allocation_targets"]) | set(plans.get("purposes", [])) |
+              budget_purposes | declared_fund_names)
     filled["allocation_targets"] = {name: goals["allocation_targets"].get(name, "not_assessed")
                                      for name in owners | set(goals["allocation_targets"])}
     declared_expenses = set(goals["expense_targets"]) | set(goals["expense_direct_targets"])
@@ -343,12 +363,32 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
             for posting in entry.postings:
                 known_commodities.setdefault(posting.account, set()).add(posting.units.currency)
     declared_accounts, account_locations = _grouped_accounts(doc, config, current_commodities)
+    current_asset_accounts = {row["account"] for row in filled["accounts"]}
+    asset_prefix = fin.options["name_assets"] + ":"
+    for name, settings in doc.get("accounts", {}).items():
+        if not isinstance(settings, dict) or "fund" not in settings:
+            continue
+        require_yaml(type(name) is str and name.startswith(asset_prefix), "SIMPLE_ACCOUNT_INVALID",
+                     "账户 fund 只能用于 H 资产账户", config, ("accounts", name, "fund"))
+        if name not in current_asset_accounts:
+            declared = declared_accounts.get(name, settings)
+            require_yaml(declared.get("semantics") == "H", "SIMPLE_ACCOUNT_INVALID",
+                         "未来账户的 fund 声明须是已声明 H 资产账户", config,
+                         ("accounts", name, "semantics"))
+    account_funds = {}
     for row in filled["accounts"]:
         name = row["account"]
         declared = declared_accounts.get(name, doc.get("account_defaults", {}))
-        require_yaml(type(declared) is dict and set(declared) <= {"semantics", "payment_scope", "opening"},
-                     "SIMPLE_ACCOUNT_INVALID", "账户只需 semantics、payment_scope 和必要的 opening", config, ("accounts", name))
+        require_yaml(type(declared) is dict and set(declared) <= {"semantics", "payment_scope", "opening", "fund"},
+                     "SIMPLE_ACCOUNT_INVALID", "账户只需 semantics、payment_scope、opening 和可选 fund", config, ("accounts", name))
         row["semantics"] = declared.get("semantics")
+        fund = declared.get("fund")
+        if fund is not None:
+            require_yaml(type(fund) is str and bool(fund) and fund == fund.strip(),
+                         "SIMPLE_ACCOUNT_INVALID", "账户 fund 须为非空用途名", config, ("accounts", name, "fund"))
+            require_yaml(row["semantics"] == "H", "SIMPLE_ACCOUNT_INVALID",
+                         "账户 fund 只能用于 H 账户", config, ("accounts", name, "fund"))
+            account_funds[name] = fund
         require_yaml(type(declared.get("payment_scope", {})) is dict, "SIMPLE_ACCOUNT_INVALID",
                      "payment_scope 须为币种到 payable／excluded／pending 的映射", config, ("accounts", name, "payment_scope"))
         # A single public config serves older months too. Declarations for
@@ -412,6 +452,10 @@ def build_runtime(config: Path, month: str | None = None, *, materialize: bool =
     ownership = generated["ownership"]
     ownership["owners"] = owner_rows
     ownership["defaults"] = {key: owner_map[value] for key, value in ownership["defaults"].items()}
+    ownership["account_funds"] = [
+        {"account": account, "owner_id": owner_names[fund],
+         "reason": f"{account} 账户级默认用途：{fund}"}
+        for account, fund in account_funds.items()]
     classifications = generated["classifications"]
     classifications["categories"] = categories
     classifications["defaults"] = {key: category_map[value] for key, value in classifications["defaults"].items()}

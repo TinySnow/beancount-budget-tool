@@ -188,6 +188,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
     redemption_refs = set()
     modes = {row["account"]: row["semantics"] for row in load_yaml(accounts)["accounts"]}
     claims = {_key(row["ref"]): row for row in owner_audit["ownership"]}
+    account_funds = {row["account"]: row["owner_id"] for row in owner_document.get("account_funds", [])}
     for entry in fin.entries:
         if not isinstance(entry, data.Transaction) or not first <= entry.date <= last or any(
                 posting.account in pool_accounts for posting in entry.postings):
@@ -206,7 +207,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
             allocations = {}
             if (kind == "h_income_transfer" and "defaults" in owner_document and
                     redemption["commodity"] == load_yaml(accounts)["report_currency"] and
-                    claims[_key(redemption["to_ref"])].get("origin") == "inline"):
+                    claims[_key(redemption["to_ref"])].get("origin") in ("inline", "account_default")):
                 # Match a separate income receipt followed by a same-purpose
                 # transfer: only new income, never existing principal, can be
                 # an inline allocation from the configured income purpose.
@@ -273,7 +274,7 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
             if native.kind == "income" and native.assets[0].units.currency == report_currency:
                 default = owner_document["defaults"]["income_owner_id"]
                 for posting, key in zip(native.assets, keys):
-                    if posting.account in pool_accounts or by_ref[key].get("origin") != "inline":
+                    if posting.account in pool_accounts or by_ref[key].get("origin") not in ("inline", "account_default"):
                         continue
                     for part in by_ref[key]["slices"]:
                         owner, units = part["owner_id"], Fraction(part["signed_units"])
@@ -318,6 +319,26 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
                    if not (row["kind"] in ("h_fx", "h_transfer") and
                            row.get("ref") is not None and
                            _key(row["ref"]) in pool_internal_keys)]
+    # A default supplies ownership, never an exemption from event proofs.
+    # Preserve earlier protocol decisions, including rejected redemption and
+    # bundle boundaries; only a remaining native asset exchange may use this.
+    if account_funds:
+        from .account_funds import native_account_exchange
+        for entry in fin.entries:
+            if not isinstance(entry, data.Transaction) or not first <= entry.date <= last or any(
+                    posting.account in pool_accounts for posting in entry.postings):
+                continue
+            exchange = native_account_exchange(fin, entry, facts, modes, account_funds,
+                                                claims, load_yaml(accounts)["report_currency"])
+            if exchange is None:
+                continue
+            refs = [facts.for_posting(posting).as_dict() for posting in exchange.assets]
+            if any(_key(ref) in used_h or _key(ref) in redemption_refs or _key(ref) in bundle_refs
+                   for ref in refs):
+                continue
+            event = exchange.evidence(entry, facts)
+            add("account_default_internal", event, refs, {},
+                source_refs=event["income_expense_refs"])
     # History is replayed above; this projection only needs this month's refs.
     month_sources = {}
     for entry in fin.entries:

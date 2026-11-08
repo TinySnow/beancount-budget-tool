@@ -240,6 +240,9 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
                          "不计个人收入、消费或正式划拨 G。")
     for event in record["purpose_events"]:
         protocol = event.get("protocol", {})
+        if event["kind"] == "account_default_internal":
+            lines.append(f"账户默认用途核对：{owner_names.get(protocol['owner_id'], '预算外')}，"
+                         "已核对同用途内的资产交换与交易前本金；本金搬移不计用途划拨，收入及费用保留原账务。")
         if event['kind'] == 'equity_receipt':
             lines.append(f"权益资金入账：{amount_text(protocol['signed_units'])} {protocol['commodity']}，"
                          "用途来自本条 fund；不计当期收入、消费或正式划拨 G，不反推历史余额。")

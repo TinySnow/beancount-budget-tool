@@ -176,10 +176,11 @@ def _ownership_inputs(root: Path, cutover: date, accounts: Path,
     transfer_orders = {}
     liability_rules = {}
     budget_owners = None
+    account_funds = {}
     if declarations is not None:
         document = load_yaml(declarations)
         required = {"schema", "cutover", "ledger_snapshot", "loader_version", "owners", "claims"}
-        unknown_fields = set(document) - required - {"defaults", "transfer_orders", "account_rules", "account_rule_assets", "budget_owners"} if type(document) is dict else set()
+        unknown_fields = set(document) - required - {"defaults", "transfer_orders", "account_rules", "account_rule_assets", "budget_owners", "account_funds"} if type(document) is dict else set()
         require_yaml(type(document) is dict and required <= set(document) and not unknown_fields,
             "OWNERSHIP_DECLARATION_INVALID", "归属声明字段不完整或含未知字段", declarations,
             (sorted(unknown_fields, key=str)[0],) if unknown_fields else ())
@@ -281,6 +282,25 @@ def _ownership_inputs(root: Path, cutover: date, accounts: Path,
             claims[key] = {**record, "origin": "external", "slices": parts,
                            "review_reason": row["reason"]}
 
+        fund_rows = document.get("account_funds", [])
+        require_yaml(type(fund_rows) is list, "OWNERSHIP_DECLARATION_INVALID",
+                     "account_funds 须为列表", declarations, ("account_funds",))
+        for index, row in enumerate(fund_rows):
+            source = yaml_path_location(declarations, ("account_funds", index))
+            require(type(row) is dict and set(row) == {"account", "owner_id", "reason"} and
+                    type(row["account"]) is str and type(row["owner_id"]) is str and
+                    type(row["reason"]) is str and bool(row["reason"].strip()),
+                    "OWNERSHIP_DECLARATION_INVALID", "账户级默认用途字段无效", source)
+            account, owner = row["account"], row["owner_id"]
+            require(account_audit["declared_semantics"].get(account) == "H",
+                    "OWNERSHIP_DECLARATION_INVALID",
+                    "账户级默认用途只能用于已声明 H 的资产账户", source)
+            require(owner in ids, "OWNERSHIP_DECLARATION_INVALID",
+                    "账户级默认用途必须引用已登记用途", source)
+            require(account not in account_funds, "OWNERSHIP_DECLARATION_INVALID",
+                    "同一账户不能重复声明默认用途", source)
+            account_funds[account] = owner
+
     compiled_by_key = {}
     for key in order:
         posting, record = h_candidates[key]
@@ -289,6 +309,15 @@ def _ownership_inputs(root: Path, cutover: date, accounts: Path,
             continue
         raw = (posting.meta or {}).get("fund")
         if raw is None:
+            owner = account_funds.get(posting.account)
+            if owner is not None:
+                compiled_by_key[key] = {
+                    **record, "origin": "account_default",
+                    "review_reason": f"{posting.account} 账户级默认用途：{owner_names[owner]}",
+                    "slices": [{"id": "acctdef_" + sha256(key.encode()).hexdigest()[:20],
+                                "owner_id": owner, "role": "hold",
+                                "signed_units": record["signed_units"]}],
+                }
             continue
         source = _source(posting.meta or {})
         parts = parse_inline_amounts(raw, exact(posting.units.number), source,
@@ -309,7 +338,7 @@ def _ownership_inputs(root: Path, cutover: date, accounts: Path,
             "names": names, "owner_names": owner_names,
             "defaults": defaults, "transfer_orders": transfer_orders,
             "liability_rules": liability_rules, "budget_owners": budget_owners,
-            "compiled": compiled_by_key}
+            "account_funds": account_funds, "compiled": compiled_by_key}
 
 
 @shared_audit
@@ -334,6 +363,7 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
     # Only the index changes during replay. Shared source-bound slices remain
     # read only; inferred rows and all capacity state belong to this call.
     compiled_by_key = dict(prepared["compiled"])
+    account_funds = prepared["account_funds"]
     responsibilities = None
     credit_income_receipts, h_bundles = [], []
     pending_reasons: dict[str, str] = {}
@@ -595,6 +625,37 @@ def audit_ownership(root: Path, cutover: date, accounts: Path,
             for key in leg_keys:
                 for part in compiled_by_key[key]["slices"]:
                     changes[coordinates[key]][part["owner_id"]] += Fraction(part["signed_units"])
+            from .account_funds import native_account_exchange
+            account_exchange = native_account_exchange(
+                fin, entry, facts, semantics, account_funds, compiled_by_key,
+                account_audit["report_currency"]) if account_funds else None
+            if account_exchange is not None:
+                fee_allowance = account_exchange.fees if account_exchange.fee_account is not None else Fraction(0)
+                for coordinate, deltas in sorted(changes.items()):
+                    if coordinate in unknown_coordinates:
+                        continue
+                    before = running.get(coordinate, {})
+                    after = {owner: before.get(owner, Fraction(0)) + delta
+                             for owner, delta in deltas.items()}
+                    # Consumption may leave the fee portion below zero; the
+                    # investment principal may never use another owner's cash
+                    # or borrow against a later sale in this same month.
+                    owner = account_exchange.owner_id
+                    deficit = max(Fraction(0), min(before.get(owner, Fraction(0)), Fraction(0)) -
+                                  min(after.get(owner, before.get(owner, Fraction(0))), Fraction(0)))
+                    if coordinate == (account_exchange.fee_account, account_exchange.currency,
+                                      f"{account_exchange.currency}/no-cost"):
+                        fee_cover = min(fee_allowance, deficit)
+                        fee_allowance -= fee_cover
+                        if fee_cover:
+                            after[owner] += fee_cover
+                    outgoing = next((posting for key, posting in leg_keys.items()
+                                     if coordinates[key] == coordinate and posting.units.number < 0), None)
+                    if outgoing is not None:
+                        _require_transfer_balance(coordinate, before, after, owner_names,
+                            _source(outgoing.meta or entry.meta),
+                            {"account": coordinate[0], "transaction_ref": facts.for_transaction(entry).as_dict(),
+                             "ledger_snapshot": fin.digest})
             if bundle_event is not None and bundle_event['status'] == 'CERTIFIED' and bundle.expense_total:
                 # Prove that all same-purpose transfers can be funded before
                 # consumption. Fees may cause a deficit; transfers may not.

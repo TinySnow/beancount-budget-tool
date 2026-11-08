@@ -94,6 +94,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                                                  "owner_ids": sorted(members)})
     modes = {row["account"]: row.get("semantics") for row in account_audit["accounts"]}
     claims = {_key(row["ref"]): row for row in owned["ownership"]}
+    account_funds = {row["account"]: row["owner_id"] for row in document.get("account_funds", [])}
     bundles = {_key(row['transaction_ref']): row for row in owned.get('h_bundles', []) if not set(row['asset_accounts']) & pool_accounts}
     mixed_receipts = {_key(row["asset_ref"]): row for row in owned.get("credit_income_receipts", [])}
     # Even without a declaration file, recognize supported shapes as data
@@ -153,6 +154,41 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
                     'source': sources[_key(ref)], 'proof': 'native_h_bundle_v1',
                     **({'source_accounts': members, 'basis': 'joint_source_no_account_allocation'} if len(members)>1 else {})})
             continue
+        if account_funds:
+            from .account_funds import native_account_exchange
+            exchange = native_account_exchange(fin, entry, facts, modes, account_funds,
+                                               claims, account_audit["report_currency"])
+            if exchange is not None:
+                if exchange.owner_id != owner or not exchange.fees:
+                    continue
+                cash = defaultdict(Fraction)
+                for posting in exchange.assets:
+                    if (posting.units.currency == exchange.currency and posting.cost is None and
+                            posting.price is None and fin.raw_price(posting)[0] == "none"):
+                        cash[posting.account] += exact(posting.units.number)
+                if all(amount >= 0 for amount in cash.values()):
+                    continue  # Fee netted from receipts is not a separate cash debit.
+                members = sorted(account for account, amount in cash.items() if amount < 0)
+                ref = facts.for_posting(next(posting for posting in exchange.assets
+                    if posting.account == members[0] and exact(posting.units.number) < 0)).as_dict()
+                if (any(amount > 0 for amount in cash.values()) or
+                        -sum(cash.values(), Fraction(0)) < exchange.fees):
+                    pending("DEFAULT_CASH_SPLIT_AMBIGUOUS", ref, members[0])
+                    continue
+                key = members[0] if len(members) == 1 else tuple(members)
+                by_currency[exchange.currency]["expenses_paid"] += exchange.fees
+                by_account[(exchange.currency, key)]["expenses_paid"] += exchange.fees
+                result["events"].append({"date": entry.date.isoformat(), "narration": entry.narration,
+                    "account": members[0] if len(members) == 1 else None,
+                    "commodity": exchange.currency, "owner_id": owner,
+                    "kind": "expenses_paid", "amount": exact_text(exchange.fees),
+                    "signed_owner_units": exact_text(-exchange.fees), "asset_ref": ref,
+                    "asset_refs": [facts.for_posting(posting).as_dict() for posting in exchange.assets],
+                    "counterpart_refs": [facts.for_posting(posting).as_dict() for posting in expense_legs],
+                    "source": sources[_key(ref)], "proof": "account_default_internal_v1",
+                    **({"source_accounts": members, "basis": "joint_source_no_account_allocation"}
+                       if len(members) > 1 else {})})
+                continue
         native = native_asset_flow(fin, entry, modes)
         receipt = native_payable_receipt(fin, entry, modes)
         if receipt is not None and facts.for_posting(receipt.cash).as_key() not in mixed_receipts:
@@ -168,7 +204,7 @@ def _audit(root, cutover, first, last, accounts, ownership, opening, obligations
             ref = facts.for_posting(posting).as_dict()
             claim = claims.get(_key(ref))
             if posting.account in nondefault_pool_accounts:
-                if claim is not None and claim["origin"] in {"inline", "external"} and any(
+                if claim is not None and claim["origin"] in {"inline", "external", "account_default"} and any(
                         part["owner_id"] == owner and Fraction(part["signed_units"]) != 0
                         for part in claim["slices"]):
                     pending("PURPOSE_POOL_PENDING", ref, posting.account,

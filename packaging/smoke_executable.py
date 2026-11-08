@@ -138,6 +138,81 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         mismatch = document("--config", income_config)
         assert mismatch["status"] == "NEEDS_REVIEW" and mismatch["report"] is None, mismatch
         assert any(row["reason_code"] == "H_REDEMPTION_PURPOSE_MISMATCH" for row in mismatch["review_items"]), mismatch
+        # An explicit account default covers recurring securities trades,
+        # while a separately tagged salary retains its existing allocation G.
+        account_fund_dir = directory / "账户默认用途"
+        account_fund_dir.mkdir()
+        account_fund_config = account_fund_dir / "config.yml"
+        account_fund_doc = {
+            "schema": 1, "ledger": "main.bean", "budgets": "budgets.yml",
+            "cutover": "2026-09-01", "month": "2026-09", "report_currency": "CNY",
+            "defaults": {"income_purpose": "自由资金", "expense_purpose": "生活费",
+                         "expense_category": "生活开销"},
+            "account_groups": {"H": {"excluded": ["Assets:Broker:Cash", "Assets:Broker:Sec"]}},
+            "accounts": {
+                "Assets:Broker:Cash": {"fund": "投资", "opening": {"CNY": {"投资": "1100"}}},
+                "Assets:Broker:Sec": {"fund": "投资"},
+            },
+        }
+        account_fund_config.write_text(yaml.safe_dump(account_fund_doc, allow_unicode=True), encoding="utf-8")
+        (account_fund_dir / "budgets.yml").write_text(yaml.safe_dump({
+            "schema": 1, "defaults": {"expense_targets": {"生活开销": "100"}},
+            "months": {"2026-09": {"completeness_confirmed": True}},
+        }, allow_unicode=True), encoding="utf-8")
+        account_fund_text = (
+            'option "operating_currency" "CNY"\n'
+            '2026-08-01 open Assets:Broker:Cash\n2026-08-01 open Assets:Broker:Sec\n'
+            '2026-08-01 open Income:Salary\n2026-08-01 open Income:Gain\n'
+            '2026-08-01 open Expenses:Fee\n2026-08-01 open Equity:Opening\n'
+            '2026-08-31 * "opening"\n  Assets:Broker:Cash 1100 CNY\n  Equity:Opening -1100 CNY\n'
+            '2026-09-02 * "buy"\n  Assets:Broker:Sec 100 SEC_ETF {1 CNY}\n'
+            '  Assets:Broker:Cash -100.10 CNY\n  Expenses:Fee 0.10 CNY\n'
+            '2026-09-03 * "sell"\n  Assets:Broker:Sec -100 SEC_ETF {1 CNY, 2026-09-02} @ 1.2 CNY\n'
+            '  Assets:Broker:Cash 120 CNY\n  Income:Gain -20 CNY\n'
+            '2026-09-04 * "salary"\n  Assets:Broker:Cash 10 CNY\n'
+            '    fund: "投资"\n  Income:Salary -10 CNY\n')
+        account_fund_ledger = account_fund_dir / "main.bean"
+        account_fund_ledger.write_text(account_fund_text, encoding="utf-8")
+        tagged_account_fund = document("--config", account_fund_config, "--transactions")
+        assert tagged_account_fund["status"] == "CERTIFIED_SCOPED", tagged_account_fund
+        account_report = tagged_account_fund["report"]
+        account_g = {account_report["owner_names"][row["owner_id"]]: Fraction(row["actual_g"])
+                     for row in account_report["purpose_progress"]["owners"]}
+        assert account_g["投资"] == 10 and account_g["自由资金"] == -10, account_g
+        account_fund_ledger.write_text(account_fund_text.replace('    fund: "投资"\n', ''), encoding="utf-8")
+        default_account_fund = document("--config", account_fund_config)
+        assert default_account_fund["status"] == "CERTIFIED_SCOPED", default_account_fund
+        default_report = default_account_fund["report"]
+        assert {default_report["owner_names"][row["owner_id"]]: Fraction(row["actual_g"])
+                for row in default_report["purpose_progress"]["owners"]} == account_g, default_report
+        net_receipt = account_fund_text.replace(
+            '  Income:Salary -10 CNY\n',
+            '  Income:Salary -20 CNY\n  Expenses:Fee 10 CNY\n')
+        account_fund_ledger.write_text(net_receipt, encoding="utf-8")
+        unsupported_receipt = document("--config", account_fund_config)
+        assert unsupported_receipt["report"] is None, unsupported_receipt
+        assert any(row["reason_code"] == "NAMED_H_EVENT_UNSUPPORTED"
+                   for row in unsupported_receipt["review_items"]), unsupported_receipt
+        account_fund_ledger.write_text(account_fund_text, encoding="utf-8")
+        account_fund_doc["accounts"]["Assets:Broker:Cash"]["opening"] = {"CNY": {"其他用途": "1100"}}
+        account_fund_config.write_text(yaml.safe_dump(account_fund_doc, allow_unicode=True), encoding="utf-8")
+        _, missing_account_principal = run("--config", account_fund_config, "--format", "json", code=2)
+        assert "H_OWNER_NEGATIVE" in missing_account_principal, missing_account_principal
+        account_fund_doc["account_groups"]["H"]["excluded"].append("Assets:FeeCash")
+        account_fund_doc["accounts"]["Assets:FeeCash"] = {
+            "fund": "投资", "opening": {"CNY": {"投资": "100"}}}
+        account_fund_doc["accounts"]["Assets:Broker:Cash"]["opening"] = {
+            "CNY": {"投资": "99.90", "其他用途": "1000.10"}}
+        account_fund_config.write_text(yaml.safe_dump(account_fund_doc, allow_unicode=True), encoding="utf-8")
+        multi_cash_text = account_fund_text.replace(
+            '2026-08-01 open Income:Salary', '2026-08-01 open Assets:FeeCash\n2026-08-01 open Income:Salary')
+        multi_cash_text = multi_cash_text.replace(
+            '  Equity:Opening -1100 CNY', '  Assets:FeeCash 100 CNY\n  Equity:Opening -1200 CNY')
+        multi_cash_text = multi_cash_text.replace(
+            '  Assets:Broker:Cash -100.10 CNY', '  Assets:Broker:Cash -100 CNY\n  Assets:FeeCash -0.10 CNY')
+        account_fund_ledger.write_text(multi_cash_text, encoding="utf-8")
+        _, misplaced_fee_credit = run("--config", account_fund_config, "--format", "json", code=2)
+        assert "H_OWNER_NEGATIVE" in misplaced_fee_credit, misplaced_fee_credit
         multicurrency = directory / "多币种收支"
         shutil.copytree(source / "multicurrency", multicurrency)
         multi_config = multicurrency / "config.yml"

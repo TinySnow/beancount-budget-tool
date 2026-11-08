@@ -355,7 +355,7 @@ def render_text(result, *, columns=76):
     lines = [f"只读归属工作台 · {result['from']} 至 {result['through']}", result['note'],
              f"重放：{result['replay_state']}；筛选前统计：{json.dumps(result['summary'], ensure_ascii=False)}"]
     names = result.get('owner_names', {})
-    origins = {'inline':'行内 fund', 'external':'外部精确认领', 'default':'既有默认规则',
+    origins = {'inline':'行内 fund', 'external':'外部精确认领', 'account_default':'账户级默认 fund', 'default':'既有默认规则',
                'protocol':'可证明协议／用途继承', 'pending':'归属待补'}
     for index, row in enumerate(result['rows'], 1):
         lines += ['', f"{index}. {row['date']} · {row['account']} · {row['signed_units']} {row['commodity']}",
