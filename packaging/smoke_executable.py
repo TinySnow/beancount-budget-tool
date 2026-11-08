@@ -193,6 +193,16 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert unsupported_receipt["report"] is None, unsupported_receipt
         assert any(row["reason_code"] == "NAMED_H_EVENT_UNSUPPORTED"
                    for row in unsupported_receipt["review_items"]), unsupported_receipt
+        sale_only = account_fund_text.split('2026-09-04 * "salary"')[0]
+        for extra_income in ('  Income:Gain -20 CNY\n  Income:Salary -10 CNY\n',
+                             '  Income:Gain -30 CNY\n'):
+            mixed_sale = sale_only.replace('Cash 120 CNY', 'Cash 130 CNY').replace(
+                '  Income:Gain -20 CNY\n', extra_income)
+            account_fund_ledger.write_text(mixed_sale, encoding="utf-8")
+            unsupported_sale = document("--config", account_fund_config)
+            assert unsupported_sale["report"] is None, unsupported_sale
+            assert any(row["reason_code"] == "NAMED_H_EVENT_UNSUPPORTED"
+                       for row in unsupported_sale["review_items"]), unsupported_sale
         account_fund_ledger.write_text(account_fund_text, encoding="utf-8")
         account_fund_doc["accounts"]["Assets:Broker:Cash"]["opening"] = {"CNY": {"其他用途": "1100"}}
         account_fund_config.write_text(yaml.safe_dump(account_fund_doc, allow_unicode=True), encoding="utf-8")

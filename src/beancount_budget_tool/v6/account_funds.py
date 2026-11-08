@@ -17,13 +17,17 @@ class AccountExchange:
     shape: str
     fees: Fraction
     fee_account: str | None
+    disposal_cost: Fraction | None = None
+    disposal_proceeds: Fraction | None = None
 
     def evidence(self, entry, facts) -> dict:
         return {
             "date": entry.date.isoformat(), "protocol": "account_default_internal_v1",
             "shape": self.shape, "owner_id": self.owner_id,
             "proof": {"has_cost_or_price": self.shape == "securities_cost_or_price",
-                      "currencies": sorted({posting.units.currency for posting in self.assets})},
+                      "currencies": sorted({posting.units.currency for posting in self.assets}),
+                      "disposal_cost": exact_text(self.disposal_cost) if self.disposal_cost is not None else None,
+                      "disposal_proceeds": exact_text(self.disposal_proceeds) if self.disposal_proceeds is not None else None},
             "accounts": sorted({posting.account for posting in self.assets}),
             "asset_refs": [facts.for_posting(posting).as_dict() for posting in self.assets],
             "income_expense_refs": [facts.for_posting(posting).as_dict()
@@ -78,9 +82,44 @@ def native_account_exchange(fin, entry, facts, modes, account_funds, claims,
             for posting in assets) or
             not costed and {posting.units.currency for posting in assets} != {currency}):
         return None
-    if (any(posting.account.split(":", 1)[0] == fin.options["name_income"] for posting in outside) and
-            not any(posting.cost is not None and exact(posting.units.number) < 0 for posting in assets)):
-        return None  # New income alongside a purchase is not proved disposal income.
+    incomes = tuple(posting for posting in outside
+                    if posting.account.split(":", 1)[0] == fin.options["name_income"])
+    disposal_cost = disposal_proceeds = None
+    if incomes:
+        # Booking balances at cost; that equation alone cannot distinguish
+        # disposal gains from a salary received alongside the sale. Prove the
+        # sole income independently from explicit execution prices and lots.
+        if len(incomes) != 1:
+            return None
+        disposal_cost = disposal_proceeds = Fraction(0)
+        quoted_totals = set()
+        sold = False
+        cash_receipt = Fraction(0)
+        for posting in assets:
+            units = exact(posting.units.number)
+            notation, quote, quote_currency = fin.raw_price(posting)
+            if (posting.cost is None and posting.price is None and notation == "none" and
+                    posting.units.currency == currency):
+                cash_receipt += units
+                continue
+            if (posting.cost is None or units >= 0 or notation not in ("@", "@@") or
+                    quote_currency != currency):
+                return None
+            sold = True
+            disposal_cost += -units * exact(posting.cost.number)
+            if notation == "@":
+                disposal_proceeds += -units * quote
+            else:
+                # Booking may split one @@ source posting across several lots.
+                # Its raw total is evidence once, never once per booked child.
+                source = (posting.meta["filename"], posting.meta["lineno"])
+                if source not in quoted_totals:
+                    disposal_proceeds += quote
+                    quoted_totals.add(source)
+        if (not sold or exact(incomes[0].units.number) != disposal_cost - disposal_proceeds or
+                cash_receipt != disposal_proceeds - sum(
+                    (exact(posting.units.number) for posting in fees), Fraction(0))):
+            return None
     owners = set()
     for posting in assets:
         claim = claims.get(facts.for_posting(posting).as_key())
@@ -100,4 +139,5 @@ def native_account_exchange(fin, entry, facts, modes, account_funds, claims,
     fee_account = outgoing[0] if len(outgoing) == 1 and not any(amount > 0 for amount in cash.values()) else None
     return AccountExchange(assets, outside, next(iter(owners)), currency,
                            "securities_cost_or_price" if costed else "same_currency_asset_exchange",
-                           sum((exact(posting.units.number) for posting in fees), Fraction(0)), fee_account)
+                           sum((exact(posting.units.number) for posting in fees), Fraction(0)), fee_account,
+                           disposal_cost, disposal_proceeds)

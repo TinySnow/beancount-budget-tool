@@ -338,6 +338,60 @@ class AccountDefaultFundTests(unittest.TestCase):
         self.assertIsNone(result["report"])
         self.assertIn("NAMED_H_EVENT_UNSUPPORTED", {row["reason_code"] for row in result["review_items"]})
 
+    def test_sale_cannot_swallow_salary_even_when_merged_into_one_income_posting(self):
+        self.audit()
+        for income in ("  Income:Gain -20 CNY\n  Income:Salary -10 CNY\n",
+                       "  Income:Gain -30 CNY\n"):
+            with self.subTest(income=income):
+                header = HEADER.replace("2026-08-01 open Income:Gain",
+                    "2026-08-01 open Income:Salary\n2026-08-01 open Income:Gain")
+                sell = SELL.replace("Cash 120 CNY", "Cash 130 CNY").replace(
+                    "  Income:Gain -20 CNY\n", income)
+                self.ledger.write_text(header + BUY + sell, encoding="utf-8")
+                result = audit_simple(self.config)
+                self.assertIsNone(result["report"])
+                self.assertIn("NAMED_H_EVENT_UNSUPPORTED",
+                              {row["reason_code"] for row in result["review_items"]})
+
+    def test_sale_income_requires_independent_execution_price(self):
+        self.audit()
+        self.ledger.write_text(HEADER + BUY + SELL.replace(" @ 1.2 CNY", ""), encoding="utf-8")
+        result = audit_simple(self.config)
+        self.assertIsNone(result["report"])
+        self.assertIn("NAMED_H_EVENT_UNSUPPORTED", {row["reason_code"] for row in result["review_items"]})
+
+    def test_disposal_proof_preserves_gains_losses_zero_and_total_prices(self):
+        from fractions import Fraction
+        self.audit()
+        for quote, proceeds, income in (("@ 1.2 CNY", "120", "-20"),
+                                       ("@ 0.9 CNY", "90", "10"),
+                                       ("@ 1 CNY", "100", "0"),
+                                       ("@@ 120 CNY", "120", "-20")):
+            with self.subTest(quote=quote):
+                sell = SELL.replace("@ 1.2 CNY", quote).replace(
+                    "Cash 120 CNY", f"Cash {proceeds} CNY").replace(
+                    "Income:Gain -20 CNY", f"Income:Gain {income} CNY")
+                self.ledger.write_text(HEADER + BUY + sell, encoding="utf-8")
+                result = audit_simple(self.config, include_transactions=True)
+                self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
+                events = [event for row in result["report"]["transactions"]["rows"]
+                          for event in row.get("purpose_events", [])
+                          if event.get("kind") == "account_default_internal"
+                          and event["protocol"]["proof"]["disposal_cost"] is not None]
+                self.assertEqual(len(events), 1)
+                self.assertEqual(Fraction(events[0]["protocol"]["proof"]["disposal_cost"]), 100)
+                self.assertEqual(Fraction(events[0]["protocol"]["proof"]["disposal_proceeds"]),
+                                 Fraction(proceeds))
+
+    def test_total_disposal_price_is_counted_once_when_booking_splits_lots(self):
+        self.audit()
+        buy = BUY.replace("100 SEC_ETF {1 CNY}", "50 SEC_ETF {1 CNY}\n  Assets:Galaxy:Sec 50 SEC_ETF {2 CNY}").replace("-100.10 CNY", "-150.10 CNY")
+        sell = SELL.replace("{1 CNY, 2026-09-02} @ 1.2 CNY", "{} @@ 180 CNY").replace(
+            "Cash 120 CNY", "Cash 180 CNY").replace("Income:Gain -20 CNY", "Income:Gain -30 CNY")
+        self.ledger.write_text(HEADER + buy + sell, encoding="utf-8")
+        result = audit_simple(self.config)
+        self.assertEqual(result["status"], "CERTIFIED_SCOPED", result["review_items"])
+
     def test_different_owners_in_a_security_trade_still_need_a_boundary_protocol(self):
         result = self.audit(BUY.replace('"buy"', '"different owners"')
             .replace("100 SEC_ETF", "1 SEC_ETF").replace("-100.10 CNY", "-1.01 CNY")
