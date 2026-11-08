@@ -201,7 +201,22 @@ def audit_monthly_purpose_flows(root: Path, cutover: date, month: str,
         refs = [redemption["from_ref"], redemption["to_ref"]]
         redemption_refs.update(_key(ref) for ref in refs)
         if redemption["status"] == "CERTIFIED":
-            add("h_redemption", redemption, refs, {}, source_refs=[
+            kind = ("h_income_transfer" if redemption["protocol"] == "native_h_income_transfer_v1"
+                    else "h_redemption")
+            allocations = {}
+            if (kind == "h_income_transfer" and "defaults" in owner_document and
+                    redemption["commodity"] == load_yaml(accounts)["report_currency"] and
+                    claims[_key(redemption["to_ref"])].get("origin") == "inline"):
+                # Match a separate income receipt followed by a same-purpose
+                # transfer: only new income, never existing principal, can be
+                # an inline allocation from the configured income purpose.
+                default = owner_document["defaults"]["income_owner_id"]
+                for owner, amount in redemption["income_by_owner"].items():
+                    if owner not in (default, "-"):
+                        units = Fraction(amount)
+                        allocations[owner] = allocations.get(owner, Fraction(0)) + units
+                        allocations[default] = allocations.get(default, Fraction(0)) - units
+            add(kind, redemption, refs, {owner: exact_text(value) for owner, value in allocations.items() if value}, source_refs=[
                 *([redemption["income_ref"]] if redemption["income_ref"] else []), *redemption["fee_refs"]])
         else:
             unresolved = [ref for ref in refs if _key(ref) not in claims or any(

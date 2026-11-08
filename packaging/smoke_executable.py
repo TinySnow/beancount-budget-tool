@@ -1,6 +1,7 @@
 """Exercise the frozen app from a Unicode directory outside the source checkout."""
 
 import argparse
+from fractions import Fraction
 import json
 import os
 from pathlib import Path
@@ -103,6 +104,40 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         assert comparison['report'] is None and comparison['read_only'], comparison
         assert comparison['months'][0]['report'] is not None, comparison
         assert comparison['months'][1]['report'] is None and comparison['comparisons'] == [], comparison
+        income_transfer = directory / "收入与本金转移"
+        shutil.copytree(source / "simple", income_transfer)
+        income_config = income_transfer / "config.yml"
+        config_doc = yaml.safe_load(income_config.read_text(encoding="utf-8"))
+        config_doc["accounts"] = {account: {"semantics": "H", "payment_scope": {"CNY": "payable"},
+            "opening": {"CNY": {"生活费": amount}}}
+            for account, amount in (("Assets:Cash", "100"), ("Assets:Digital", "0.28"))}
+        income_config.write_text(yaml.safe_dump(config_doc, allow_unicode=True), encoding="utf-8")
+        income_ledger = income_transfer / "main.bean"
+        income_text = ('option "operating_currency" "CNY"\n'
+            '2026-08-01 open Assets:Cash\n2026-08-01 open Assets:Digital\n'
+            '2026-08-01 open Equity:Opening\n2026-08-01 open Income:Salary\n'
+            '2026-08-31 * "opening"\n  Assets:Cash 100 CNY\n  Assets:Digital 0.28 CNY\n'
+            '  Equity:Opening -100.28 CNY\n2026-09-02 * "income and cash transfer"\n'
+            '  Assets:Cash 6526.50 CNY\n'
+            '    fund: "储蓄526.22，储蓄0.28，生活费2000，投资2000，电子产品900，旅游900，保险200"\n'
+            '  Assets:Digital -0.28 CNY\n    fund: "生活费"\n  Income:Salary -6526.22 CNY\n')
+        income_ledger.write_text(income_text, encoding="utf-8")
+        income_result = document("--config", income_config, "--transactions")
+        assert income_result["status"] == "CERTIFIED_SCOPED", income_result
+        income_report = income_result["report"]
+        income_tx = income_report["transactions"]["rows"][0]
+        assert [event["kind"] for event in income_tx["purpose_events"]] == ["h_income_transfer"], income_tx
+        proof = income_tx["purpose_events"][0]["protocol"]
+        names = income_report["owner_names"]
+        named_income = {names[owner]: Fraction(amount) for owner, amount in proof["income_by_owner"].items()}
+        assert named_income["生活费"] == Fraction("1999.72"), named_income
+        assert sum(named_income.values()) == Fraction("6526.22"), named_income
+        assert {names[owner]: Fraction(amount) for owner, amount in income_tx["net_allocations"].items()}["生活费"] == Fraction("1999.72"), income_tx
+        assert income_report["actual_spendable"]["actual_spendable"] == "2100", income_report
+        income_ledger.write_text(income_text.replace("储蓄526.22", "储蓄2525.95").replace("生活费2000", "生活费0.27"), encoding="utf-8")
+        mismatch = document("--config", income_config)
+        assert mismatch["status"] == "NEEDS_REVIEW" and mismatch["report"] is None, mismatch
+        assert any(row["reason_code"] == "H_REDEMPTION_PURPOSE_MISMATCH" for row in mismatch["review_items"]), mismatch
         multicurrency = directory / "多币种收支"
         shutil.copytree(source / "multicurrency", multicurrency)
         multi_config = multicurrency / "config.yml"

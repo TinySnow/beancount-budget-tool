@@ -29,11 +29,11 @@ NUMBER = re.compile(r"-?(?:\d+(?:\.\d+)?|\d+/[1-9]\d*)\Z")
 
 
 def compile_h_redemption(fin, entry, facts, modes, claims):
-    """An exact H/H principal-income equation preserves named purposes, G=0.
+    """Prove a complete H/H principal-income equation without remapping principal.
 
     Both H legs need their own source-bound ownership. Same-name differences
-    express net gain/fees, following the existing redemption convention;
-    changing the purpose set needs a separate explicit virtual allocation.
+    retain the existing redemption convention. New receipt purposes require
+    independently proved positive income after preserving every principal.
     """
     native = native_book_redemption(fin, entry, modes, source_mode="H")
     if native is None:
@@ -59,6 +59,23 @@ def compile_h_redemption(fin, entry, facts, modes, claims):
         return result
     principal, receipt = vector(source, -1), vector(cash, 1)
     if set(principal) != set(receipt):
+        # A positive income receipt may introduce new purposes while moving
+        # existing H inventory in the same transaction. Preserve every source
+        # purpose's full principal first; only the nonnegative residual can be
+        # new income. This proves a group equation, not an income-account-name
+        # guess or a pairing between individual inline slices.
+        owners = sorted(set(principal) | set(receipt))
+        income = {owner: receipt.get(owner, Fraction(0)) - principal.get(owner, Fraction(0))
+                  for owner in owners}
+        if (native.gain > 0 and not native.fees and all(amount >= 0 for amount in income.values()) and
+                sum(income.values(), Fraction(0)) == native.gain):
+            return {**event, "protocol": "native_h_income_transfer_v1",
+                    "status": "CERTIFIED", "reason_code": None,
+                    "income_by_owner": {owner: exact_text(amount) for owner, amount in income.items() if amount},
+                    "slices": [{"owner_id": owner,
+                                "principal_native": exact_text(principal.get(owner, Fraction(0))),
+                                "receipt_native": exact_text(receipt.get(owner, Fraction(0)))}
+                               for owner in owners]}
         return {**event, "reason_code": "H_REDEMPTION_PURPOSE_MISMATCH"}
     return {**event, "status": "CERTIFIED", "reason_code": None,
             "net_purpose_changes": {owner: exact_text(receipt[owner] - principal[owner]) for owner in sorted(principal)},

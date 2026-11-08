@@ -251,6 +251,16 @@ def render_transaction(record: dict, owner_names: dict, *, for_search: bool = Fa
             for owner, value in protocol['purpose_residuals'].items():
                 lines.append(f"  {owner_names.get(owner, '预算外')}：资产净变动 {amount_text(value)} {protocol['commodity']}")
             lines.append('正式用途净划拨单独按已审用途向量计算；消费／退款不当作 G。')
+        if event["kind"] == "h_income_transfer":
+            currency = protocol["commodity"]
+            lines.append(f"收入与本金转移核对：实收 {amount_text(protocol['receipt_native'])} {currency}＝"
+                         f"原有本金 {amount_text(protocol['principal_native'])}＋收入 "
+                         f"{amount_text(protocol['income_native'])}；本金保留原用途，不计正式净划拨；新增收入沿既有用途划拨规则。")
+            for part in protocol["slices"]:
+                owner = part["owner_id"]
+                lines.append(f"  {owner_names.get(owner, '预算外')}：转入本金 {amount_text(part['principal_native'])}，"
+                             f"新增收入 {amount_text(protocol['income_by_owner'].get(owner, '0'))}，"
+                             f"实收 {amount_text(part['receipt_native'])} {currency}。")
         if event["kind"] == "h_redemption":
             currency = protocol["commodity"]
             lines.append(f"H 赎回核对：实收 {amount_text(protocol['receipt_native'])} {currency}＝"
