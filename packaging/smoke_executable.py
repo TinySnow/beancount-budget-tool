@@ -504,6 +504,28 @@ def check(executable: Path, *, onedir: bool = False) -> None:
         ordered = document("--config", "order-config.yml", "--transactions")
         assert ordered["status"] == "CERTIFIED_SCOPED", ordered
         assert [row["narration"] for row in ordered["report"]["transactions"]["rows"]] == ["opening", "recharge", "payment"]
+        # A booked securities sale does not block an unrelated cash order.
+        # The ledger-only guide exercises the same loader without inventing
+        # budget semantics for a securities account in this isolated fixture.
+        cost_main = directory / "order-cost-main.bean"
+        cost_main.write_text(
+            'option "operating_currency" "CNY"\n2026-09-01 open Assets:Wallet\n'
+            '2026-09-01 open Assets:BrokerCash\n2026-09-01 open Assets:Fund\n'
+            '2026-09-01 open Income:Pay\n2026-09-01 open Expenses:Food\n'
+            '2026-09-01 * "opening"\n  Assets:Wallet 46.32 CNY\n'
+            '  Assets:BrokerCash 100 CNY\n  Income:Pay -146.32 CNY\n'
+            '2026-09-01 * "buy"\n  Assets:Fund 10 FUND {10 CNY}\n  Assets:BrokerCash -100 CNY\n'
+            'include "order-payment.bean"\ninclude "order-cost-sale.bean"\n'
+            'include "order-recharge.bean"\n', encoding="utf-8")
+        cost_sale = ('\n' * 20 + '2026-09-02 * "sell"\n'
+                     '  Assets:Fund -1 FUND {10 CNY} @ 10 CNY\n  Assets:BrokerCash 10 CNY\n')
+        cost_sale_path = directory / "order-cost-sale.bean"
+        cost_sale_path.write_text(cost_sale, encoding="utf-8")
+        cost_guide = document("guide", "--ledger", cost_main, "--month", "2026-09")
+        assert cost_guide["status"] == "DIAGNOSTIC_ONLY" and cost_guide["report"] is None, cost_guide
+        cost_sale_path.write_text(cost_sale.replace("Assets:BrokerCash 10", "Assets:Wallet 10"), encoding="utf-8")
+        _, cost_error = run("guide", "--ledger", cost_main, "--month", "2026-09", "--format", "json", code=2)
+        assert "TRANSACTION_ORDER_UNSUPPORTED" in cost_error, cost_error
         plans_path = directory / "budgets.yml"
         plans = yaml.safe_load(plans_path.read_text(encoding="utf-8"))
         pending = document("--month", "2026-10")

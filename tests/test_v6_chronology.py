@@ -148,15 +148,171 @@ class CashChronologyTests(unittest.TestCase):
         financial = load_financial(self.root)
         txs=self.txs(financial)[-2:]
         marker, payment = txs
-        for protected in (payment._replace(flag='P'), payment._replace(postings=[
-                payment.postings[0]._replace(cost=object()), payment.postings[1]])):
-            with self.subTest(flag=protected.flag):
+        shared_cost = payment._replace(postings=[
+            payment.postings[0]._replace(cost=object()), payment.postings[1]])
+        disjoint_cost = payment._replace(postings=[
+            payment.postings[0]._replace(account="Assets:Fund", cost=object()),
+            payment.postings[1]._replace(account="Assets:BrokerCash")])
+        for label, protected in (("shared_cost", shared_cost),
+                                 ("disjoint_pad", disjoint_cost._replace(flag="P"))):
+            with self.subTest(label=label):
                 with self.assertRaises(BudgetError) as caught:
                     order_entries([protected, marker])
                 self.assertEqual(caught.exception.code,'TRANSACTION_ORDER_UNSUPPORTED')
-                protected=protected._replace(meta={**protected.meta,'budget-order':Decimal(-2)})
+        with self.assertRaises(BudgetError):
+            marked = shared_cost._replace(meta={**shared_cost.meta,'budget-order':Decimal(-2)})
+            order_entries([marked,marker])
+
+    def test_disjoint_cost_transaction_can_be_crossed_by_declared_order(self):
+        self.mark()
+        financial = load_financial(self.root)
+        marker, payment = self.txs(financial)[-2:]
+        disjoint_cost = payment._replace(postings=[
+            payment.postings[0]._replace(account="Assets:Fund", cost=object()),
+            payment.postings[1]._replace(account="Assets:BrokerCash")])
+        ordered = order_entries([disjoint_cost, marker])
+        self.assertEqual([entry.narration for entry in ordered], ["recharge", "payment"])
+
+    def test_cost_transaction_sharing_cash_account_still_blocks_crossing(self):
+        self.mark()
+        financial = load_financial(self.root)
+        marker, payment = self.txs(financial)[-2:]
+        shared_cash = payment._replace(postings=[
+            payment.postings[0]._replace(account="Assets:Fund", cost=object()),
+            payment.postings[1]._replace(account="Assets:Bank")])
+        with self.assertRaises(BudgetError) as caught:
+            order_entries([shared_cash, marker])
+        self.assertEqual(caught.exception.code, "TRANSACTION_ORDER_UNSUPPORTED")
+
+    def _txn(self, payment, narration, *, order=None, postings=None, flag="*"):
+        meta = dict(payment.meta)
+        if order is not None:
+            meta["budget-order"] = Decimal(order)
+        return payment._replace(narration=narration, meta=meta,
+                                postings=postings or payment.postings, flag=flag)
+
+    def test_relative_order_flip_detects_shared_cost_after_positions_shift(self):
+        self.mark()
+        financial = load_financial(self.root)
+        _, payment = self.txs(financial)[-2:]
+        cost = self._txn(payment, "B", postings=[
+            payment.postings[0]._replace(account="Assets:Shared", cost=object()),
+            payment.postings[1]._replace(account="Assets:B2")])
+        shared = self._txn(payment, "X", order=-1, postings=[
+            payment.postings[0]._replace(account="Assets:Shared"),
+            payment.postings[1]._replace(account="Assets:X2")])
+        u = self._txn(payment, "U", order=-3, postings=[
+            payment.postings[0]._replace(account="Assets:OtherU"),
+            payment.postings[1]._replace(account="Assets:U2")])
+        v = self._txn(payment, "V", order=-2, postings=[
+            payment.postings[0]._replace(account="Assets:OtherV"),
+            payment.postings[1]._replace(account="Assets:V2")])
+        with self.assertRaises(BudgetError) as caught:
+            order_entries([u, cost, v, shared])
+        self.assertEqual(caught.exception.code, "TRANSACTION_ORDER_UNSUPPORTED")
+
+    def test_relative_order_flip_allows_disjoint_cost_after_positions_shift(self):
+        self.mark()
+        financial = load_financial(self.root)
+        _, payment = self.txs(financial)[-2:]
+        cost = self._txn(payment, "cost", postings=[
+            payment.postings[0]._replace(account="Assets:Fund", cost=object()),
+            payment.postings[1]._replace(account="Assets:BrokerCash")])
+        disjoint = self._txn(payment, "disjoint", order=-1, postings=[
+            payment.postings[0]._replace(account="Assets:Alpha"),
+            payment.postings[1]._replace(account="Assets:Beta")])
+        u = self._txn(payment, "u", order=-3)
+        v = self._txn(payment, "v", order=-2)
+        ordered = order_entries([u, cost, v, disjoint])
+        self.assertEqual([entry.narration for entry in ordered], ["u", "v", "disjoint", "cost"])
+
+    def test_indirectly_shifted_cost_does_not_block_itself(self):
+        self.mark()
+        financial = load_financial(self.root)
+        _, payment = self.txs(financial)[-2:]
+        cost = self._txn(payment, "cost", postings=[
+            payment.postings[0]._replace(account="Assets:Fund", cost=object()),
+            payment.postings[1]._replace(account="Assets:BrokerCash")])
+        u = self._txn(payment, "u", order=-3)
+        v = self._txn(payment, "v", order=-2)
+        ordered = order_entries([u, cost, v])
+        self.assertEqual([entry.narration for entry in ordered], ["u", "v", "cost"])
+
+    def test_relative_flip_is_checked_in_both_directions(self):
+        self.mark()
+        financial = load_financial(self.root)
+        _, payment = self.txs(financial)[-2:]
+        cost = self._txn(payment, "cost", postings=[
+            payment.postings[0]._replace(account="Assets:Fund", cost=object()),
+            payment.postings[1]._replace(account="Assets:BrokerCash")])
+        shared = self._txn(payment, "shared", order=-1, postings=[
+            payment.postings[0]._replace(account="Assets:Fund"),
+            payment.postings[1]._replace(account="Assets:Other")])
+        for marker_order in (-1, 1):
+            with self.subTest(marker_order=marker_order):
+                marker = self._txn(payment, "marker", order=marker_order,
+                                   postings=shared.postings)
+                original = [cost, marker] if marker_order == -1 else [marker, cost]
                 with self.assertRaises(BudgetError):
-                    order_entries([protected,marker])
+                    order_entries(original)
+
+    def test_multiple_markers_and_barriers_use_pairwise_flips(self):
+        self.mark()
+        financial = load_financial(self.root)
+        _, payment = self.txs(financial)[-2:]
+        b1 = self._txn(payment, "b1", postings=[
+            payment.postings[0]._replace(account="Assets:Alpha", cost=object()),
+            payment.postings[1]._replace(account="Assets:Beta")])
+        b2 = self._txn(payment, "b2", postings=[
+            payment.postings[0]._replace(account="Assets:Fund", cost=object()),
+            payment.postings[1]._replace(account="Assets:BrokerCash")])
+        x = self._txn(payment, "x", order=-1, postings=[
+            payment.postings[0]._replace(account="Assets:Fund"),
+            payment.postings[1]._replace(account="Assets:Other")])
+        u = self._txn(payment, "u", order=-4)
+        v = self._txn(payment, "v", order=-3)
+        with self.assertRaises(BudgetError) as caught:
+            order_entries([u, b1, v, b2, x])
+        self.assertEqual(caught.exception.code, "TRANSACTION_ORDER_UNSUPPORTED")
+
+    def test_barrier_can_cross_an_entry_whose_absolute_index_stays(self):
+        self.mark()
+        financial = load_financial(self.root)
+        _, payment = self.txs(financial)[-2:]
+        cost = self._txn(payment, "B", postings=[
+            payment.postings[0]._replace(account="Assets:Shared", cost=object()),
+            payment.postings[1]._replace(account="Assets:B2")])
+        shared = self._txn(payment, "X", order=1, postings=[
+            payment.postings[0]._replace(account="Assets:Shared"),
+            payment.postings[1]._replace(account="Assets:X2")])
+        u = self._txn(payment, "U", order=2, postings=[
+            payment.postings[0]._replace(account="Assets:OtherU"),
+            payment.postings[1]._replace(account="Assets:U2")])
+        v = self._txn(payment, "V", order=3, postings=[
+            payment.postings[0]._replace(account="Assets:OtherV"),
+            payment.postings[1]._replace(account="Assets:V2")])
+        with self.assertRaises(BudgetError) as caught:
+            order_entries([u, shared, cost, v])
+        self.assertEqual(caught.exception.code, "TRANSACTION_ORDER_UNSUPPORTED")
+
+    def test_barrier_can_cross_an_unchanged_index_when_resources_are_disjoint(self):
+        self.mark()
+        financial = load_financial(self.root)
+        _, payment = self.txs(financial)[-2:]
+        cost = self._txn(payment, "B", postings=[
+            payment.postings[0]._replace(account="Assets:Shared", cost=object()),
+            payment.postings[1]._replace(account="Assets:B2")])
+        disjoint = self._txn(payment, "X", order=1, postings=[
+            payment.postings[0]._replace(account="Assets:OtherX"),
+            payment.postings[1]._replace(account="Assets:X2")])
+        u = self._txn(payment, "U", order=2, postings=[
+            payment.postings[0]._replace(account="Assets:OtherU"),
+            payment.postings[1]._replace(account="Assets:U2")])
+        v = self._txn(payment, "V", order=3, postings=[
+            payment.postings[0]._replace(account="Assets:OtherV"),
+            payment.postings[1]._replace(account="Assets:V2")])
+        ordered = order_entries([u, disjoint, cost, v])
+        self.assertEqual([entry.narration for entry in ordered], ["B", "X", "U", "V"])
 
     def test_tui_recompute_reads_new_order_after_failure(self):
         browser=SimpleReportBrowser(self.config)

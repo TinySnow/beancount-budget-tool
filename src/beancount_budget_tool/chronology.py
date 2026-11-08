@@ -2,8 +2,10 @@
 
 Beancount uses source line numbers across included files. An inline
 budget-order overrides that incidental order for cash replay only. Booked
-amounts and lots stay intact; crossing a cost transaction or generated pad is
-rejected rather than changing booking or initialization semantics.
+amounts and lots stay intact. A cost transaction is a barrier only for a moved
+transaction that shares one of its (account, commodity) coordinates; disjoint
+cash flows may cross it. Generated pads remain absolute barriers because they
+initialize inventory regardless of account overlap.
 """
 
 from collections import defaultdict
@@ -47,16 +49,37 @@ def order_entries(entries):
             continue
         original = [entries[index] for index in indices]
         ordered = sorted(enumerate(original), key=lambda pair: priorities.get(id(pair[1]), Decimal(0)))
-        barriers = [position for position, entry in enumerate(original) if _protected(entry)]
+        old_positions = {id(entry): position for position, entry in enumerate(original)}
+        new_positions = {id(entry): position for position, (_, entry) in enumerate(ordered)}
+        barriers = [entry for entry in original if _protected(entry)]
         for position, (old_position, entry) in enumerate(ordered):
-            require(position == old_position or not any(min(position, old_position) <= barrier <= max(position, old_position)
-                                                       for barrier in barriers),
-                    "TRANSACTION_ORDER_UNSUPPORTED",
-                    "声明的同日顺序会跨越成本交易或自动 pad；请在源账本核对顺序，工具不重做成本 booking",
-                    f"{entry.meta.get('filename', '?')}:{entry.meta.get('lineno', '?')}")
+            for barrier in barriers:
+                if barrier is entry:
+                    continue
+                # Compare every non-self pair's relative order, not absolute
+                # positions: the entry's own index can stay put while the
+                # barrier moves across it, or vice versa.
+                was_before = old_position < old_positions[id(barrier)]
+                now_before = position < new_positions[id(barrier)]
+                if was_before != now_before:
+                    require(not _blocks(entry, barrier),
+                            "TRANSACTION_ORDER_UNSUPPORTED",
+                            "声明的同日顺序会跨越有交集的成本交易或自动 pad；请在源账本核对顺序，工具不重做成本 booking",
+                            f"{entry.meta.get('filename', '?')}:{entry.meta.get('lineno', '?')}")
             result[indices[position]] = entry
     return result
 
 
 def _protected(entry):
     return entry.flag == "P" or any(posting.cost is not None for posting in entry.postings)
+
+
+def _resources(entry):
+    return {(posting.account, posting.units.currency) for posting in entry.postings}
+
+
+def _blocks(moved, barrier):
+    """Generated pads are absolute; cost barriers only block shared resources."""
+    if barrier.flag == "P":
+        return True
+    return bool(_resources(moved) & _resources(barrier))

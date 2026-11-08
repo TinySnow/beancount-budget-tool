@@ -254,7 +254,8 @@ def audit_accounts(root: Path, cutover: date, declarations: Path | None = None) 
                                 before == 0 and after == -role[1].units,
                                 "H_NEGATIVE_INVENTORY",
                                 f"真实库存变为负数：{key[0]} {key[1]} {exact_text(after)}。"
-                                "若同日充值实际在先，可在充值交易头下写 budget-order: -1；同时核对真实余额", source)
+                                "若同日充值实际在先，可在充值交易头下写 budget-order: -1；"
+                                "同日有成本交易或自动 pad 时先核对顺序，不能跨共享账户／期初。同时核对真实余额", source)
                         pending_settlements[key] = role[1]
                         used_settlements.add(role[1].debit_posting_id)
                     else:
